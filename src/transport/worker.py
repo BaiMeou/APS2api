@@ -87,7 +87,8 @@ class WorkerManager:
             arch_suffix = "arm64"
         else:
             raise RuntimeError(f"不支持的架构: {arch}")
-
+        if system == "android":
+            return f"android-{arch_suffix}", "tar.gz"
         if system == "windows":
             return f"windows-{arch_suffix}", "zip"
         if system == "linux":
