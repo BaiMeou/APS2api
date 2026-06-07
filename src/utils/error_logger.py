@@ -1,4 +1,14 @@
+"""
+错误快照模块
 
+保存请求错误的完整上下文，便于调试和问题排查。
+
+特性:
+- 分层目录结构
+- 完整的请求/响应链路记录
+- 自动清理旧快照
+- 与主日志系统集成
+"""
 
 import json
 import shutil
@@ -8,17 +18,7 @@ from pathlib import Path
 
 
 class ErrorSnapshotManager:
-    """
-    错误快照管理器。
-    
-    当系统发生转换错误、上游 API 报错或空响应时，该组件负责将当时的现场环境
-    （原始请求、转换后的请求、上游响应、时间戳及元数据）保存到磁盘。
-    
-    主要功能：
-    1. 自动创建按日期组织的存储目录。
-    2. 提供快照持久化、列表查询及内容检索。
-    3. 自动清理机制：支持基于保留天数（max_age_days）和最大数量（max_snapshots）的旧快照清理。
-    """
+    """错误快照管理器"""
     
     def __init__(
         self,
@@ -41,7 +41,7 @@ class ErrorSnapshotManager:
         self.max_age_days = max_age_days
         self.compress_old = compress_old
         
-        
+        # 确保目录存在
         self.base_dir.mkdir(parents=True, exist_ok=True)
     
     def save_snapshot(
@@ -66,35 +66,35 @@ class ErrorSnapshotManager:
             快照目录路径，失败返回 None
         """
         try:
-            
+            # 创建时间戳目录
             timestamp = datetime.now()
             date_dir = timestamp.strftime("%Y-%m-%d")
             time_str = timestamp.strftime("%H%M%S_%f")
             
-            
+            # 目录结构: errors/2024-01-21/http_400_143052_123456/
             snapshot_name = f"{error_type}_{time_str}"
             snapshot_dir = self.base_dir / date_dir / snapshot_name
             snapshot_dir.mkdir(parents=True, exist_ok=True)
             
-            
+            # 1. 保存下游请求
             self._save_json(
                 snapshot_dir / "1_downstream_request.json",
                 downstream_payload
             )
             
-            
+            # 2. 保存上游请求
             self._save_json(
                 snapshot_dir / "2_upstream_request.json",
                 upstream_payload
             )
             
-            
+            # 3. 保存上游响应
             resp_ext = self._save_response(
                 snapshot_dir / "3_upstream_response",
                 upstream_response
             )
             
-            
+            # 4. 保存摘要
             summary: dict[str, Any] = {
                 "timestamp": timestamp.isoformat(),
                 "error_type": error_type,
@@ -109,7 +109,7 @@ class ErrorSnapshotManager:
             
             self._save_json(snapshot_dir / "summary.json", summary)
             
-            
+            # 清理旧快照
             self._cleanup_old_snapshots()
             
             return str(snapshot_dir)
@@ -135,46 +135,46 @@ class ErrorSnapshotManager:
             except json.JSONDecodeError:
                 pass
         
-        
+        # 保存为文本
         with open(path_base.with_suffix('.txt'), 'w', encoding='utf-8') as f:
             f.write(str(response))
         return ".txt"
     
     def _is_json(self, text: str) -> bool:
         """检查是否为 JSON 格式"""
+        # Pylance: text 已经是 str，不需要 isinstance 检查
+        # 但为了运行时健壮性，如果 text 可能为 None 或其他类型，可以保留，
+        # 但既然类型提示是 str，我们假设它就是 str。
+        # 如果调用者可能传 None，类型提示应该是 Optional[str]
         
-        
-        
-        
-        
-        
+        # 兼容性处理：如果 text 为空
         if not text:
             return False
             
-        
+        # 安全转换，防止传入了非字符串
         text_str = str(text).strip()
         return text_str.startswith('{') or text_str.startswith('[')
     
     def _cleanup_old_snapshots(self):
         """清理旧快照"""
         try:
-            
+            # 获取所有日期目录
             date_dirs = sorted(
                 [d for d in self.base_dir.iterdir() if d.is_dir()],
                 key=lambda x: x.name,
                 reverse=True
             )
             
-            
+            # 按日期清理
             cutoff_date = datetime.now() - timedelta(days=self.max_age_days)
             cutoff_str = cutoff_date.strftime("%Y-%m-%d")
             
             for date_dir in date_dirs:
                 if date_dir.name < cutoff_str:
-                    
+                    # 删除过期目录
                     shutil.rmtree(date_dir)
             
-            
+            # 按数量清理
             all_snapshots: list[dict[str, Any]] = []
             for date_dir in self.base_dir.iterdir():
                 if date_dir.is_dir():
@@ -192,8 +192,8 @@ class ErrorSnapshotManager:
                                 except Exception:
                                     pass
             
-            
-            
+            # 按时间排序，删除超出数量限制的
+            # 显式指定 key 函数的返回类型
             def sort_key(x: dict[str, Any]) -> str:
                 return str(x['timestamp'])
 
@@ -203,7 +203,7 @@ class ErrorSnapshotManager:
                 snapshot_path = cast(Path, snapshot['path'])
                 shutil.rmtree(snapshot_path)
             
-            
+            # 清理空的日期目录
             for date_dir in self.base_dir.iterdir():
                 if date_dir.is_dir() and not any(date_dir.iterdir()):
                     date_dir.rmdir()
@@ -292,7 +292,7 @@ class ErrorSnapshotManager:
         except Exception:
             return None
 
-
+# ==================== 全局实例 ====================
 _snapshot_manager: ErrorSnapshotManager | None = None
 
 
@@ -312,7 +312,7 @@ def _get_manager() -> ErrorSnapshotManager:
     return _snapshot_manager
 
 
-
+# ==================== 便捷函数 ====================
 def save_error_snapshot(
     downstream_payload: dict[str, Any],
     upstream_payload: dict[str, Any],

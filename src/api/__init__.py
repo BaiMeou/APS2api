@@ -1,4 +1,4 @@
-
+"""API接口模块"""
 
 from src.api.vertex_client import VertexAIClient
 from src.api.model_config import ModelConfigBuilder

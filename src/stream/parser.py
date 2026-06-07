@@ -1,4 +1,8 @@
+"""
+Vertex AI 响应解析工具函数
 
+负责解析上游 API 的响应数据，处理错误和元数据提取。
+"""
 
 import json
 from typing import Any, cast
@@ -7,6 +11,7 @@ from src.core.errors import (
     InternalError,
     parse_error_response,
 )
+from src.api.part_cleaner import clean_part, merge_content_blocks
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -17,7 +22,7 @@ def extract_path_index(result: dict[str, Any]) -> int:
     if not path or not isinstance(path, list):
         return -1
     try:
-        
+        # 索引通常是路径的最后一个整数元素
         path_list = cast(list[Any], path)
         for elem in reversed(path_list):
             if isinstance(elem, int):
@@ -37,7 +42,7 @@ def clean_json_string(raw_data: str) -> str:
     if not cleaned_data.startswith('['):
         cleaned_data = f'[{cleaned_data}]'
     elif not cleaned_data.endswith(']'):
-         
+         # 这是一个不完整的数组，尝试补全
          if '}]' not in cleaned_data:
             cleaned_data += ']'
     return cleaned_data
@@ -53,7 +58,7 @@ def process_candidate_metadata(candidate_data: dict[str, Any]) -> dict[str, Any]
     if 'finishMessage' in candidate_data:
         metadata['finish_message'] = candidate_data['finishMessage']
     
-    
+    # 提取实际存在的元数据字段
     if candidate_data.get('safetyRatings'):
         metadata['safety_ratings'] = candidate_data['safetyRatings']
         
@@ -72,7 +77,7 @@ def process_candidate_metadata(candidate_data: dict[str, Any]) -> dict[str, Any]
     if 'logprobsResult' in candidate_data:
         metadata['logprobs_result'] = candidate_data['logprobsResult']
     
-    
+    # index 字段通常存在
     if candidate_data.get('index') is not None:
         metadata['candidate_index'] = candidate_data['index']
         
@@ -81,19 +86,19 @@ def process_candidate_metadata(candidate_data: dict[str, Any]) -> dict[str, Any]
 def _extract_error_message(item: dict[str, Any]) -> str | None:
     """从单个响应项中提取错误信息（如果有）"""
     
-    
+    # 1. 检查顶层 error 对象 (标准 Google Cloud 错误)
     error_obj = item.get('error')
     if error_obj:
         if isinstance(error_obj, dict):
-            
+            # 显式转换为 Dict 以满足类型检查
             safe_error_obj = cast(dict[str, Any], error_obj)
             return str(safe_error_obj.get('message', str(safe_error_obj)))
         return str(error_obj)
 
-    
+    # 2. 检查顶层 errors 列表 (GraphQL 风格或批处理错误)
     errors = item.get('errors')
     if errors and isinstance(errors, list):
-        
+        # 显式转换
         safe_errors = cast(list[Any], errors)
         if safe_errors:
             first_error = safe_errors[0]
@@ -104,117 +109,38 @@ def _extract_error_message(item: dict[str, Any]) -> str | None:
             
     return None
 
-def _clean_part_fields(part: dict[str, Any]) -> dict[str, Any]:
-    """
-    清理 part 中的空字段，只保留有实际内容的字段（增强版）
-    
-    Args:
-        part: 原始 part 字典
-        
-    Returns:
-        清理后的 part 字典
-    """
-    cleaned_part: dict[str, Any] = {}
-    
-    
-    if 'text' in part and part['text'] is not None:
-        cleaned_part['text'] = part['text']
-        
-    
-    if 'thought' in part:
-        cleaned_part['thought'] = part['thought']
-    if 'thoughtSignature' in part:
-        cleaned_part['thoughtSignature'] = part['thoughtSignature']
-        
-    
-    func_call = part.get('functionCall')
-    if isinstance(func_call, dict):
-        fc_dict = cast(dict[str, Any], func_call)
-        name = fc_dict.get('name')
-        if isinstance(name, str) and name.strip():
-            
-            call_id = fc_dict.get('id') or fc_dict.get('toolCallId') or fc_dict.get('tool_call_id')
-            if not call_id:
-                import time
-                call_id = f"call_{name}_{int(time.time() % 10000)}"
-            
-            cleaned_part['functionCall'] = {
-                "id": call_id,
-                "name": name,
-                "args": fc_dict.get('args', {})
-            }
-            
-    
-    func_response = part.get('functionResponse')
-    if isinstance(func_response, dict):
-        name = func_response.get('name')
-        if isinstance(name, str) and name.strip():
-            cleaned_part['functionResponse'] = func_response
 
-    
-    inline_data = part.get('inlineData')
-    if isinstance(inline_data, dict):
-        if (isinstance(inline_data.get('data'), str) and inline_data['data'].strip() and
-            isinstance(inline_data.get('mimeType'), str) and inline_data['mimeType'].strip()):
-            cleaned_part['inlineData'] = inline_data
 
-    
-    file_data = part.get('fileData')
-    if isinstance(file_data, dict):
-        if (isinstance(file_data.get('fileUri'), str) and file_data['fileUri'].strip() and
-            isinstance(file_data.get('mimeType'), str) and file_data['mimeType'].strip()):
-            cleaned_part['fileData'] = file_data
-            
-    return cleaned_part
+def clean_streaming_chunk(chunk: dict[str, Any]) -> dict[str, Any]:
+    import copy
+    chunk = copy.deepcopy(chunk)
+    if "candidates" not in chunk:
+        return chunk
 
-def _merge_content_blocks(parts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """
-    合并思考块和非思考块的文本内容，同时保持原始顺序
-    
-    Args:
-        parts: 原始的 parts 列表
-        
-    Returns:
-        合并后的 parts 列表
-    """
-    
-    cleaned_parts = [_clean_part_fields(part) for part in parts]
-    
-    cleaned_parts = [part for part in cleaned_parts if part]
-    
-    if not cleaned_parts:
-        return []
-
-    merged_parts: list[dict[str, Any]] = []
-    
-    for part in cleaned_parts:
-        
-        if not merged_parts:
-            merged_parts.append(part.copy())
+    for candidate in chunk.get("candidates", []):
+        if not isinstance(candidate, dict):
             continue
-            
-        last_part = merged_parts[-1]
-        
-        
-        can_merge = False
-        if 'text' in part and 'text' in last_part:
-            
-            if part.get('thought', False) == last_part.get('thought', False):
-                
-                
-                other_fields = {'functionCall', 'functionResponse', 'inlineData', 'fileData'}
-                if not (set(part.keys()) & other_fields) and not (set(last_part.keys()) & other_fields):
-                    can_merge = True
-        
-        if can_merge:
-            last_part['text'] = str(last_part['text']) + str(part['text'])
-            
-            if part.get('thought', False) and 'thoughtSignature' in part:
-                last_part['thoughtSignature'] = part['thoughtSignature']
-        else:
-            merged_parts.append(part.copy())
-            
-    return merged_parts
+        content = candidate.get("content")
+        if not isinstance(content, dict):
+            continue
+        content["role"] = "model"
+        parts = content.get("parts")
+        if not isinstance(parts, list):
+            continue
+
+        cleaned_parts: list[dict[str, Any]] = []
+        for part in parts:
+            if not isinstance(part, dict):
+                cleaned_parts.append(part)
+                continue
+
+            cleaned = clean_part(part)
+            if cleaned:
+                cleaned_parts.append(cleaned)
+
+        content["parts"] = cleaned_parts
+
+    return chunk
 
 def parse_upstream_data(raw_data: str) -> dict[str, Any]:
     """
@@ -253,7 +179,7 @@ def parse_upstream_data(raw_data: str) -> dict[str, Any]:
         if not isinstance(data_list, list):
             data_list = [data_list]
         
-        
+        # 显式转换为 List[Any]
         safe_data_list = cast(list[Any], data_list)
 
         for item in safe_data_list:
@@ -262,25 +188,25 @@ def parse_upstream_data(raw_data: str) -> dict[str, Any]:
             
             item_dict = cast(dict[str, Any], item)
             
-            
+            # 1. 优先通过统一解析逻辑检查 item 中的错误 (处理 errors 数组)
             parsed_error = parse_error_response(item_dict)
             if parsed_error:
-                
+                # 如果是 "Failed to verify action"，我们忽略它，因为这可能是匿名的第一个预期错误
                 if "Failed to verify action" in parsed_error.message:
                     logger.debug(f"忽略预期的认证错误: {parsed_error.message}")
                 else:
                     state["has_error"] = True
                     state["error_message"] = parsed_error.message
                     state["error_obj"] = parsed_error
-                
+                # 继续解析以尝试提取更多上下文
             
-            
+            # 2. 检查顶层错误 (作为兜底)
             error_msg = _extract_error_message(item_dict)
             if error_msg and not state["has_error"]:
                 state["has_error"] = True
                 state["error_message"] = error_msg
             
-            
+            # 3. 处理 results 列表
             results = item_dict.get('results', [])
             if not isinstance(results, list):
                 continue
@@ -291,17 +217,17 @@ def parse_upstream_data(raw_data: str) -> dict[str, Any]:
                 if isinstance(r, dict):
                     typed_results.append(cast(dict[str, Any], r))
 
-            
+            # 3. 检查 results 中的错误 (使用统一解析逻辑)
             parsed_error = parse_error_response(typed_results)
             if parsed_error:
                 state["has_error"] = True
                 state["error_message"] = parsed_error.message
                 state["error_obj"] = parsed_error
             
-            
+            # 4. 提取数据 parts
             for result in typed_results:
-                
-                
+                # 如果有 data=null 且有 errors，这已经被上面的 parsed_error 捕获
+                # 我们跳过这个 result 的 data 处理，避免 NoneType 错误
                 if result.get('data') is None and 'errors' in result:
                     continue
 
@@ -317,31 +243,30 @@ def parse_upstream_data(raw_data: str) -> dict[str, Any]:
     except VertexError:
         raise
     except Exception as e:
-        
+        # 捕获其他未预期的解析错误
         logger.error(f"解析过程发生未知错误: {e}")
         state["has_error"] = True
         state["error_message"] = f"Parse error: {str(e)}"
     
-    
+    # 组装 parts - 先按原有逻辑收集所有parts
     parts_by_path = cast(dict[int, Any], state['parts_by_path'])
     ordered_parts: list[dict[str, Any]] = [parts_by_path[k] for k in sorted(parts_by_path.keys())]
     unindexed_parts = cast(list[Any], state['unindexed_parts'])
     ordered_parts.extend(unindexed_parts)
     
-    
-    final_parts = _merge_content_blocks(ordered_parts)
+    final_parts = merge_content_blocks(ordered_parts)
     
     result: dict[str, Any] = {
         "parts": final_parts
     }
-    
+    # 将 state 中除了临时存储结构外的所有字段合并到 result
     excluded_keys = ['parts_by_path', 'unindexed_parts']
     result.update({k: v for k, v in state.items() if k not in excluded_keys})
     return result
 
 def _update_state_from_data(state: dict[str, Any], data: dict[str, Any], path_index: int):
     """从数据对象更新解析状态（仅提取实际存在的字段）"""
-    
+    # 只提取实际存在的顶层元数据
     if data.get('promptFeedback'):
         state['prompt_feedback'] = data['promptFeedback']
     if 'usageMetadata' in data:
@@ -355,16 +280,16 @@ def _update_state_from_data(state: dict[str, Any], data: dict[str, Any], path_in
     if 'modelStatus' in data:
         state['model_status'] = data['modelStatus']
             
-    
+    # 处理 candidates
     candidates = data.get('candidates', [])
     for candidate in candidates:
-        
+        # 提取 candidate 元数据 (包括 finish_reason)
         meta = process_candidate_metadata(candidate)
         for k, v in meta.items():
             if v is not None and v != [] and v != {}:
                 state[k] = v
 
-        
+        # 提取 content parts
         content = candidate.get('content', {})
         parts = content.get('parts', [])
         for part in parts:

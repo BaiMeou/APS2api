@@ -1,4 +1,9 @@
+"""
+统一错误处理模块
 
+提供层次化的错误类体系，兼容 Gemini API 格式。
+支持基于 gRPC 状态码和状态字符串的错误解析。
+"""
 
 import json
 from typing import Any
@@ -6,25 +11,25 @@ from enum import Enum
 
 class ErrorStatus(str, Enum):
     """Vertex AI API 错误状态码 (基于 gRPC 标准)"""
-    OK = "OK"                                   
-    CANCELLED = "CANCELLED"                     
-    UNKNOWN = "UNKNOWN"                         
-    INVALID_ARGUMENT = "INVALID_ARGUMENT"       
-    DEADLINE_EXCEEDED = "DEADLINE_EXCEEDED"     
-    NOT_FOUND = "NOT_FOUND"                     
-    ALREADY_EXISTS = "ALREADY_EXISTS"           
-    PERMISSION_DENIED = "PERMISSION_DENIED"     
-    RESOURCE_EXHAUSTED = "RESOURCE_EXHAUSTED"   
-    FAILED_PRECONDITION = "FAILED_PRECONDITION" 
-    ABORTED = "ABORTED"                         
-    OUT_OF_RANGE = "OUT_OF_RANGE"               
-    UNIMPLEMENTED = "UNIMPLEMENTED"             
-    INTERNAL = "INTERNAL"                       
-    UNAVAILABLE = "UNAVAILABLE"                 
-    DATA_LOSS = "DATA_LOSS"                     
-    UNAUTHENTICATED = "UNAUTHENTICATED"         
+    OK = "OK"                                   # 0
+    CANCELLED = "CANCELLED"                     # 1
+    UNKNOWN = "UNKNOWN"                         # 2
+    INVALID_ARGUMENT = "INVALID_ARGUMENT"       # 3 (400)
+    DEADLINE_EXCEEDED = "DEADLINE_EXCEEDED"     # 4 (504)
+    NOT_FOUND = "NOT_FOUND"                     # 5 (404)
+    ALREADY_EXISTS = "ALREADY_EXISTS"           # 6 (409)
+    PERMISSION_DENIED = "PERMISSION_DENIED"     # 7 (403)
+    RESOURCE_EXHAUSTED = "RESOURCE_EXHAUSTED"   # 8 (429)
+    FAILED_PRECONDITION = "FAILED_PRECONDITION" # 9 (400)
+    ABORTED = "ABORTED"                         # 10 (409)
+    OUT_OF_RANGE = "OUT_OF_RANGE"               # 11 (400)
+    UNIMPLEMENTED = "UNIMPLEMENTED"             # 12 (501)
+    INTERNAL = "INTERNAL"                       # 13 (500)
+    UNAVAILABLE = "UNAVAILABLE"                 # 14 (503)
+    DATA_LOSS = "DATA_LOSS"                     # 15 (500)
+    UNAUTHENTICATED = "UNAUTHENTICATED"         # 16 (401)
 
-
+# gRPC 状态到 HTTP 状态码的映射
 GRPC_TO_HTTP: dict[ErrorStatus, int] = {
     ErrorStatus.OK: 200,
     ErrorStatus.CANCELLED: 499,
@@ -46,12 +51,7 @@ GRPC_TO_HTTP: dict[ErrorStatus, int] = {
 }
 
 class VertexError(Exception):
-    """
-    Vertex AI 代理错误基类。
-    
-    该类实现了将上游异常（如 gRPC 状态码）映射为标准 HTTP 状态码，
-    并提供了便捷的方法将错误转换为 Gemini API 兼容的 JSON 或 SSE 响应格式。
-    """
+    """Vertex AI 代理错误基类"""
     
     def __init__(
         self,
@@ -63,7 +63,7 @@ class VertexError(Exception):
     ):
         self.message = message
         
-        
+        # 规范化 status
         if isinstance(status, ErrorStatus):
             self.status = status.value
         elif isinstance(status, str):
@@ -74,7 +74,7 @@ class VertexError(Exception):
         else:
             self.status = ErrorStatus.UNKNOWN.value
             
-        
+        # 规范化 code (HTTP 状态码)
         if code is not None:
             self.code = code
         else:
@@ -106,10 +106,10 @@ class VertexError(Exception):
     @property
     def is_retryable(self) -> bool:
         """判断此错误是否可重试"""
-        
+        # 408, 429, 5xx 通常可重试
         if self.code in {408, 429, 500, 502, 503, 504}:
             return True
-        
+        # 认证错误在我们的场景中（Token过期）也是可重试的
         if isinstance(self, AuthenticationError):
             return True
         return False
@@ -178,14 +178,14 @@ def raise_for_status(
     """
     根据 HTTP 状态码或 gRPC 状态字符串创建对应的错误实例
     """
-    
+    # 统一转换 code 为 int，如果失败（如传入了字符串状态）则保持
     try:
         norm_code = int(code)
     except (ValueError, TypeError):
         norm_code = code
 
-    
-    
+    # 优先根据 gRPC 状态码或状态字符串判断
+    # code 为 8 或 429 时代表 RESOURCE_EXHAUSTED
     if status == ErrorStatus.RESOURCE_EXHAUSTED or norm_code == 8 or norm_code == 429:
         return RateLimitError(message, details, upstream_response=upstream_response)
     if status == ErrorStatus.UNAUTHENTICATED or norm_code == 16 or norm_code == 401:
@@ -199,7 +199,7 @@ def raise_for_status(
     if status == ErrorStatus.UNAVAILABLE or norm_code == 14 or norm_code == 503:
         return UnavailableError(message, details, upstream_response=upstream_response)
 
-    
+    # 降级到通用的 HTTP 范围判断
     if isinstance(norm_code, int):
         if 400 <= norm_code < 500:
             return ClientError(message, norm_code, status, details, upstream_response)
@@ -217,7 +217,7 @@ def parse_error_response(response_data: str | dict[str, Any] | list[Any]) -> Ver
         except json.JSONDecodeError:
             return None
 
-    
+    # 处理数组格式 (GraphQL 风格)
     if isinstance(response_data, list):
         for item in response_data:
             err = parse_error_response(item)
@@ -227,7 +227,7 @@ def parse_error_response(response_data: str | dict[str, Any] | list[Any]) -> Ver
     if not isinstance(response_data, dict):
         return None
 
-    
+    # 1. 检查嵌套的 error 字段 (标准 Google API)
     if 'error' in response_data:
         err_obj = response_data['error']
         if isinstance(err_obj, dict):
@@ -239,13 +239,13 @@ def parse_error_response(response_data: str | dict[str, Any] | list[Any]) -> Ver
                 upstream_response=json.dumps(response_data)
             )
 
-    
+    # 2. 检查 GraphQL 风格的 errors 数组
     if 'errors' in response_data:
         errors = response_data['errors']
         if isinstance(errors, list) and len(errors) > 0:
             first_err = errors[0]
             if isinstance(first_err, dict):
-                
+                # 优先从 extensions.status 中获取 code 和 message
                 ext_status = first_err.get('extensions', {}).get('status', {})
                 code = ext_status.get('code') or first_err.get('code', 500)
                 status = ext_status.get('status') or first_err.get('status')
@@ -259,7 +259,7 @@ def parse_error_response(response_data: str | dict[str, Any] | list[Any]) -> Ver
                     upstream_response=json.dumps(response_data)
                 )
 
-    
+    # 3. 检查扁平格式
     if 'code' in response_data or 'status' in response_data or 'message' in response_data:
         return raise_for_status(
             code=response_data.get('code', 500),

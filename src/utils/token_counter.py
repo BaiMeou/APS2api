@@ -1,4 +1,8 @@
+"""
+Token 计数工具模块
 
+使用 Google Vertex AI CountTokens API 进行精确的 token 计数
+"""
 
 import json
 from typing import Any, cast
@@ -10,18 +14,12 @@ from src.api.model_config import ModelConfigBuilder
 logger = get_logger(__name__)
 
 class TokenCounter:
-    """
-    Token 计数器。
-    
-    利用 Google Vertex AI 的 CountTokens API 接口，实现精准的 Token 数量统计。
-    由于代理的上游接口有时不返回使用统计（usageMetadata），该工具类用于在响应结束后
-    手动发起一次 CountTokens 请求，以补全消耗统计信息。
-    """
+    """Token 计数器 - 使用 Google Vertex AI CountTokens API"""
     
     def __init__(self, network: NetworkClient | None = None) -> None:
         self.config = load_config()
         self.vertex_ai_anonymous_base_api = "https://cloudconsole-pa.clients6.google.com"
-        self._api_key = "AIzaSyCI-zsRP85UVOi0DjtiCwWBwQ1djDy741g"
+        self._api_key = self.config.get("vertex_api_key", "AIzaSyCI-zsRP85UVOi0DjtiCwWBwQ1djDy741g")
         self.network = network or NetworkClient()
         self.model_builder = ModelConfigBuilder()
         
@@ -50,7 +48,7 @@ class TokenCounter:
                             if "fileData" in part:
                                 new_part["fileData"] = part["fileData"]
 
-                            
+                            # 转换为文本
                             if "functionCall" in part:
                                 func_call = part["functionCall"]
                                 text_rep = f"Function Call: {func_call.get('name', 'unknown')}"
@@ -76,7 +74,7 @@ class TokenCounter:
                             new_content["parts"] = [{"text": " "}]
                     cleaned.append(new_content)
 
-                
+                # 合并连续角色
                 merged = []
                 for c in cleaned:
                     if not merged:
@@ -111,26 +109,26 @@ class TokenCounter:
         
         full_contents = list(safe_prompt_contents)
         if response_parts:
-            
+            # Deep copy to avoid modifying original safe_prompt_contents if extended
             import copy
             full_contents = copy.deepcopy(safe_prompt_contents)
             
-            
-            
+            # response_parts should be correctly formatted. Make sure role is set to "model"
+            # It might just be raw text dicts right now.
             model_reply = clean_contents_fn([{"parts": response_parts, "role": "model"}])
             
             if model_reply:
-                
-                
+                # model_reply might have been transformed to have user as well? No, clean_contents ensures it's clean.
+                # Actually clean_contents ensures if first role is model it inserts user. We need to prevent that here for appending.
                 pass
             
-            
+            # Let's write a simple append logic
             if full_contents and full_contents[-1].get("role") == "model":
                 full_contents[-1]["parts"].extend(response_parts)
             else:
                 full_contents.append({"role": "model", "parts": response_parts})
             
-            
+            # Clean again to ensure all rules apply (like no empty parts, function calls formatted correctly)
             full_contents = clean_contents_fn(full_contents)
         
         total_token_count = await self._count_tokens_with_session(full_contents, model)
@@ -160,7 +158,7 @@ class TokenCounter:
                 if not recaptcha_token:
                     return 0
                 
-                
+                # 移除 models/ 前缀以匹配示例
                 if target_model.startswith("models/"):
                     target_model = target_model[7:]
 
@@ -174,7 +172,7 @@ class TokenCounter:
                             "timezone": "Asia/Shanghai"
                         }
                     },
-                    "querySignature": "2/mENOSldfC+HZM+tGhVuJLrl8M6gEyK3HRjUKuA5AM58=",
+                    "querySignature": self.config.get("count_tokens_query_signature", "2/mENOSldfC+HZM+tGhVuJLrl8M6gEyK3HRjUKuA5AM58="),
                     "operationName": "CountTokens",
                     "variables": {
                         "contents": contents,
@@ -186,8 +184,12 @@ class TokenCounter:
                 }
                 
                 headers = {
-                    "referer": "https://console.cloud.google.com/",
-                    "Content-Type": "application/json",
+                    "accept": "*/*",
+                    "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
+                    "content-type": "application/json",
+                    "origin": "https://console.cloud.google.com",
+                    "referer": "https://console.cloud.google.com/vertex-ai/studio/multimodal",
+                    "x-goog-authuser": "0",
                 }
                 
                 logger.debug_json("CountTokens 请求体", payload)
@@ -228,7 +230,7 @@ class TokenCounter:
     async def count_tokens_remote(self, contents: list[dict[str, Any]], model: str = "gemini-2.5-flash") -> int:
         return await self._count_tokens_with_session(contents, model)
 
-
+# 全局实例
 _token_counter = TokenCounter()
 
 async def calculate_usage_metadata(

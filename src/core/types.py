@@ -6,14 +6,34 @@ if TYPE_CHECKING:
     pass
 
 class AppConfig(BaseModel):
-    """全局应用配置模型，定义了 config.json 中的所有字段及其默认值。"""
     port_api: int = 2156
     max_retries: int = 2
     error_dir: str = "errors"
     debug: bool = False
     log_dir: str = "logs"
-    anti_tracking: bool = False
-    drop_max_tokens: bool = True
+    admin_password: str = ""  # 管理面板密码，留空则首次启动自动生成并打印到日志
+    proxy_url: str = ""  # 出站代理 URL，优先级低于 PROXY_URL 环境变量
+    subscription_url: str = ""  # 上次填入的机场订阅地址（用于面板自动回填）
+    subscriptions: list[dict[str, Any]] = []  # 多订阅列表，由管理面板维护
+    active_node_uri: str = ""  # 当前激活的节点 URI（容器重启后会自动恢复）
+    active_node_name: str = ""  # 当前激活节点的显示名
+    node_pool: list[dict[str, Any]] = []  # 节点轮换池
+    node_pool_index: int = 0  # 当前轮换池索引
+    anti429_enabled: bool = False  # 随机数防429开关
+    anti429_target: str = "system"  # 插入位置：system 或 user
+    force_no_stream: bool = False  # 强制关闭流式输出（客户端 stream=true 也会被转成非流式）
+    parallel_pool_enabled: bool = True  # 节点池并行请求开关：开启后同时尝试多个节点，谁先成功就用谁
+    parallel_pool_size: int = 4  # 并行请求池大小，自用场景默认宽松一些
+    parallel_pool_max_size: int = 12  # 防止误配置过大导致资源耗尽
+    parallel_worker_base_port: int = 12080  # 并行临时 worker 起始端口，用于 vmess/vless/trojan 等订阅节点
+    parallel_worker_port_span: int = 2000  # 并行临时 worker 可申请的端口范围大小
+    business_session_concurrency_limit: int = 0  # 活动业务会话最大数量，0 表示不限
+    parallel_node_top_k: int = 80  # 每次从健康评分最高的一批节点里加权随机选择，避免固定顺序踩坑
+    parallel_pool_max_rounds: int = 0  # 滚动请求池最大候选轮次，0 表示不限轮次
+    parallel_pool_deadline_seconds: float = 0  # 滚动请求池等待首包总超时，0 表示不限时
+    vertex_api_key: str = "AIzaSyCI-zsRP85UVOi0DjtiCwWBwQ1djDy741g"  # Vertex AI 匿名接口 API key
+    stream_query_signature: str = "2/l8eCsMMY49imcDQ/lwwXyL8cYtTjxZBF2dNqy69LodY="  # 流式 GraphQL query signature
+    count_tokens_query_signature: str = "2/mENOSldfC+HZM+tGhVuJLrl8M6gEyK3HRjUKuA5AM58="  # CountTokens GraphQL query signature
 
     model_config = ConfigDict(extra="ignore")
 
@@ -21,7 +41,7 @@ class APIKeyInfo(BaseModel):
     name: str
     is_active: bool
 
-
+# JSON Schema 相关类型
 class JSONSchemaProperty(BaseModel):
     type: str
     description: str | None = None
@@ -54,6 +74,12 @@ class GenerationConfig(BaseModel):
     speechConfig: dict[str, str | int | float] | None = Field(None, alias="speechConfig")
     audioTimestamp: bool | None = Field(None, alias="audioTimestamp")
     enableEnhancedCivicAnswers: bool | None = Field(None, alias="enableEnhancedCivicAnswers")
+    responseModalities: list[str] | None = Field(None, alias="responseModalities")
+    imageConfig: dict[str, Any] | None = Field(None, alias="imageConfig")
+    mediaResolution: str | None = Field(None, alias="mediaResolution")
+    thinkingConfig: dict[str, Any] | None = Field(None, alias="thinkingConfig")
+    logprobs: int | None = None
+    routingConfig: dict[str, Any] | None = Field(None, alias="routingConfig")
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
@@ -61,7 +87,7 @@ class SafetySetting(BaseModel):
     category: str
     threshold: str
 
-
+# Gemini API 相关类型定义
 class FunctionCall(BaseModel):
     name: str
     args: dict[str, Any]
@@ -92,6 +118,10 @@ class ContentPart(BaseModel):
     functionResponse: FunctionResponse | None = Field(None, alias="functionResponse")
     inlineData: InlineData | None = Field(None, alias="inlineData")
     fileData: FileData | None = Field(None, alias="fileData")
+    executableCode: dict[str, Any] | None = Field(None, alias="executableCode")
+    codeExecutionResult: dict[str, Any] | None = Field(None, alias="codeExecutionResult")
+    videoMetadata: dict[str, Any] | None = Field(None, alias="videoMetadata")
+    mediaResolution: str | None = Field(None, alias="mediaResolution")
     thought: str | bool | None = None
     thoughtSignature: str | None = Field(None, alias="thoughtSignature")
     
@@ -111,13 +141,19 @@ class FunctionDeclaration(BaseModel):
     model_config = ConfigDict(extra="allow")
 
 class Tool(BaseModel):
-    functionDeclarations: list[FunctionDeclaration] = Field(alias="functionDeclarations")
+    functionDeclarations: list[FunctionDeclaration] | None = Field(None, alias="functionDeclarations")
+    googleSearch: dict[str, Any] | None = Field(None, alias="googleSearch")
+    googleSearchRetrieval: dict[str, Any] | None = Field(None, alias="googleSearchRetrieval")
+    codeExecution: dict[str, Any] | None = Field(None, alias="codeExecution")
+    retrieval: dict[str, Any] | None = None
+    urlContext: dict[str, Any] | None = Field(None, alias="urlContext")
     
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
 class FunctionCallingConfig(BaseModel):
     mode: str | None = None
     allowedFunctionNames: list[str] | None = Field(None, alias="allowedFunctionNames")
+    disable: bool | None = None
     
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
@@ -221,20 +257,18 @@ class GeminiResponse(BaseModel):
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
 class GeminiPayload(BaseModel):
-    """
-    客户端发来的原始 Gemini API 请求载荷。
-    支持 contents, tools, safetySettings, generationConfig 等标准字段。
-    """
     contents: list[Content]
     tools: list[Tool] | None = None
     toolConfig: ToolConfig | None = Field(None, alias="toolConfig")
     systemInstruction: SystemInstruction | None = Field(None, alias="systemInstruction")
     safetySettings: list[SafetySetting] | None = Field(None, alias="safetySettings")
     generationConfig: GenerationConfig | None = Field(None, alias="generationConfig")
+    cachedContent: str | None = Field(None, alias="cachedContent")
+    labels: dict[str, str] | None = None
     
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
-
+# 流处理相关类型
 class StreamState(BaseModel):
     finish_reason: str | None = None
     safety_ratings: list[dict[str, Any]] = Field(default_factory=list)
@@ -255,7 +289,7 @@ class StreamState(BaseModel):
     
     model_config = ConfigDict(extra="allow")
 
-
+# Vertex AI 内部请求格式
 class VertexVariables(BaseModel):
     model: str
     contents: list[Content]
@@ -276,7 +310,7 @@ class VertexRequest(BaseModel):
     
     model_config = ConfigDict(extra="allow", populate_by_name=True)
 
-
+# 请求上下文类型
 class RequestContext(BaseModel):
     downstream_payload: GeminiPayload
     upstream_payload: VertexRequest

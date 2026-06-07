@@ -1,4 +1,8 @@
+"""
+流式响应处理器（简化版）
 
+实现"假流式"：收集所有上游数据后，解析并聚合为一个包含完整上下文（思考过程+最终内容）的响应，一次性发送给下游。
+"""
 
 import json
 import time
@@ -18,25 +22,24 @@ from src.utils.token_counter import calculate_usage_metadata
 from .parser import parse_upstream_data
 
 
-
+# 初始化日志
 logger = get_logger(__name__)
 
 
 class StreamProcessor:
     """
-    流式响应处理器。
+    简化的流式响应处理器 (v3 - 假流式 + 思考过程)
     
     职责:
-    1. 收集和聚合上游分块返回的流式数据。
-    2. 使用 parser 解析并转换聚合后的数据结构。
-    3. 将转换后的结果重新包装成 Gemini 标准的 SSE (Server-Sent Events) 格式返回给客户端。
-    4. 在没有上游 Token 使用统计时，调用本地计数器估算 Token。
+    1. 收集上游所有流式数据
+    2. 使用 parser 解析聚合后的数据
+    3. 构建 Gemini 格式的 SSE 响应
     """
     
     def __init__(self):
         logger.debug("初始化流处理器")
         
-        
+        # 状态追踪
         self._actual_content_sent = False
         self._request_context: dict[str, Any] = {}
     
@@ -86,7 +89,7 @@ class StreamProcessor:
                 "role": "model"
             }
         
-        
+        # 只添加实际存在的字段
         if safety_ratings:
             candidate["safetyRatings"] = safety_ratings
         if citation_metadata:
@@ -100,11 +103,11 @@ class StreamProcessor:
         if logprobs_result:
             candidate["logprobsResult"] = logprobs_result
             
-        
+        # 根据 doc.md，确保 candidate 其他字段正确
         
         chunk: dict[str, Any] = {"candidates": [candidate]}
         
-        
+        # 按照 doc.md 定义
         if prompt_feedback:
             chunk["promptFeedback"] = prompt_feedback
         if usage_metadata:
@@ -123,23 +126,18 @@ class StreamProcessor:
     async def process_stream(
         self,
         response_iterator: collections.abc.AsyncIterator[str],
-        model: str = "vertex-ai-proxy"
+        model: str = "vertex-ai-proxy",
+        stream_mode: str = "fake"
     ) -> collections.abc.AsyncGenerator[str, None]:
         """
-        处理和包装来自上游的流式响应数据。
-        由于后端接口有时返回完整 JSON 而非标准 SSE，该处理器实现了“聚合再分发”的模式。
-        
-        处理步骤：
-        1. 数据收集：从响应迭代器中读出所有分块（raw_chunks）。
-        2. 结果解析：调用 parse_upstream_data 解析聚合后的原始文本。
-           - 处理错误情况：识别权限错误、限流错误或空响应。
-           - 捕获异常快照：如果发生 API 错误，将现场保存到错误目录。
-        3. Token 补全：如果上游未返回使用详情，利用 TokenCounter 手动计算 prompt 和 candidates 的 token 数。
-        4. SSE 组装：将解析出的内容及元数据（安全评级、引用信息等）包装成标准的 data: {...}\n\n 格式。
-        5. 产生结果：yield 最终的 JSON 字符串。
+        处理流式响应（假流式 v3 / 真流式模式）。
         """
-        
-        
+        if stream_mode == "real":
+            async for sse_event in self._process_stream_real(response_iterator, model=model):
+                yield sse_event
+            return
+        # 移除重复日志，只在开始时记录一次
+        # logger.info(f"开始处理流式响应: 模型={model}")
         start_time = time.time()
         raw_chunks: list[str] = []
         
@@ -153,7 +151,7 @@ class StreamProcessor:
             logger.debug(f"收集完成，共 {chunk_count} 个数据块")
             raw_data = '\n'.join(raw_chunks)
             
-            
+            # 记录完整的原始上游响应
             try:
                 parsed_data = json.loads(raw_data)
                 logger.debug_json("完整原始上游响应", parsed_data)
@@ -162,7 +160,7 @@ class StreamProcessor:
             
             if not raw_data:
                 logger.error("上游返回空数据")
-                
+                # 触发错误备份
                 from src.utils.error_logger import save_error_snapshot
                 save_error_snapshot(
                     downstream_payload=self._request_context.get('downstream_payload', {}),
@@ -172,28 +170,28 @@ class StreamProcessor:
                 )
                 raise EmptyResponseError("Upstream returned no data")
 
-            
+            # 使用独立解析函数
             result = parse_upstream_data(raw_data)
             
-            
+            # 关键修复：在这里处理解析出的上游错误
             if result["has_error"] and not result["parts"]:
                 error_msg = result["error_message"]
                 error_obj = result.get("error_obj")
                 
-                
+                # 排除特定的、不需要备份的错误
                 is_auth_error = "Failed to verify action" in error_msg or "The caller does not have permission" in error_msg
                 is_rate_limit = isinstance(error_obj, RateLimitError) or "resource has been exhausted" in error_msg.lower() or "quota" in error_msg.lower()
                 
                 if not is_auth_error and not is_rate_limit:
                     logger.error(f"API 错误且无内容: {error_msg}")
                     
-                    
+                    # 确定错误类型用于备份目录名
                     error_type = "api_error"
                     if error_obj:
-                        
+                        # 如果有解析出的错误对象，使用其类名或 code
                         error_type = f"upstream_{error_obj.code}_{type(error_obj).__name__}"
                     
-                    
+                    # 触发错误备份
                     from src.utils.error_logger import save_error_snapshot
                     save_error_snapshot(
                         downstream_payload=self._request_context.get('downstream_payload', {}),
@@ -202,11 +200,11 @@ class StreamProcessor:
                         error_type=error_type
                     )
                 
-                
+                # 如果 parser 已经解析出了错误对象，直接抛出
                 if error_obj:
                     raise error_obj
 
-                
+                # 降级处理：基于上游错误消息抛出错误
                 error_msg_lower = error_msg.lower()
                 if "not found" in error_msg_lower:
                     raise NotFoundError(message=error_msg)
@@ -224,19 +222,10 @@ class StreamProcessor:
             
             finish_reason = result.get("finish_reason") or "STOP"
             
-            if not result["parts"] and not result["has_error"]:
-                if finish_reason != "STOP":
-                    logger.warning(f"上游非 STOP 原因停止且无内容: {finish_reason}")
-                    from src.utils.error_logger import save_error_snapshot
-                    save_error_snapshot(
-                        downstream_payload=self._request_context.get('downstream_payload', {}),
-                        upstream_payload=self._request_context.get('upstream_payload', {}),
-                        upstream_response=raw_data,
-                        error_type=f"finish_{finish_reason.lower()}"
-                    )
-                elif not result.get("prompt_feedback"):
+            if not result["parts"] and finish_reason == "STOP" and not result["has_error"]:
+                 if not result.get("prompt_feedback"):
                     logger.error("上游返回空响应 (无 parts 且 finish_reason=STOP)")
-                    
+                    # 触发错误备份
                     from src.utils.error_logger import save_error_snapshot
                     save_error_snapshot(
                         downstream_payload=self._request_context.get('downstream_payload', {}),
@@ -244,23 +233,23 @@ class StreamProcessor:
                         upstream_response=raw_data,
                         error_type="stop_no_content"
                     )
-                    
+                    # 快照将由 VertexAIClient 统一保存
                     raise EmptyResponseError("Upstream returned empty response (STOP with no content/metadata)")
             
-            
+            # 计算 usage metadata
             usage_metadata = result.get("usage_metadata", {})
             if not usage_metadata and self._request_context:
                 try:
                     downstream_payload = self._request_context.get('downstream_payload', {})
                     
-                    
+                    # 从请求上下文中提取输入内容
                     prompt_contents: list[dict[str, Any]] = []
                     if 'gemini_payload' in downstream_payload:
                         gemini_payload = downstream_payload['gemini_payload']
                         if isinstance(gemini_payload, dict) and 'contents' in gemini_payload:
                             prompt_contents = cast(list[dict[str, Any]], gemini_payload['contents'])
                     
-                    
+                    # 计算 token 使用情况
                     usage_metadata = await calculate_usage_metadata(
                         prompt_contents=prompt_contents,
                         response_parts=result["parts"],
@@ -309,7 +298,7 @@ class StreamProcessor:
             raise
         except Exception as e:
             logger.error(f"流处理未知错误: {e}")
-            
+            # 触发内部错误备份
             from src.utils.error_logger import save_error_snapshot
             save_error_snapshot(
                 downstream_payload=self._request_context.get('downstream_payload', {}),
@@ -318,6 +307,43 @@ class StreamProcessor:
                 error_type="internal_exception"
             )
             raise InternalError(message=f"Unknown stream processing error: {e}")
+
+    async def _process_stream_real(
+        self,
+        response_iterator: collections.abc.AsyncIterator[str],
+        model: str = "vertex-ai-proxy"
+    ) -> collections.abc.AsyncGenerator[str, None]:
+        """
+        真流式模式：逐 chunk 清洗 parts 后直接输出，不做聚合。
+        适用于 Gemini 原生路由。
+        """
+        import json as _json
+        from src.stream.parser import clean_streaming_chunk
+        
+        async for raw_chunk in response_iterator:
+            if not raw_chunk.strip():
+                continue
+            
+            chunk_data = raw_chunk.strip()
+            
+            # 若 chunk 是 SSE 格式 data: {...}，提取 JSON 主体
+            if chunk_data.startswith("data:"):
+                chunk_data = chunk_data[5:].strip()
+            
+            if not chunk_data:
+                continue
+            
+            try:
+                obj = _json.loads(chunk_data)
+                if isinstance(obj, dict):
+                    cleaned = clean_streaming_chunk(obj)
+                    cleaned_str = _json.dumps(cleaned, ensure_ascii=False, separators=(',', ':'))
+                    yield "data: " + cleaned_str + "\n\n"
+                else:
+                    yield "data: " + chunk_data + "\n\n"
+            except _json.JSONDecodeError:
+                # JSON 解析失败，原样转发
+                yield raw_chunk
 
 
 def get_stream_processor() -> StreamProcessor:

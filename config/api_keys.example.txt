@@ -1,0 +1,2 @@
+# 格式: name:key:description （由管理面板维护）
+# 示例：my_key:sk-your-api-key-here:Default Key

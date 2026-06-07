@@ -1,32 +1,36 @@
-
+"""Vertex AI Proxy 入口"""
 import asyncio
+from pathlib import Path
+
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
+
+if load_dotenv is not None:
+    load_dotenv(dotenv_path=Path(__file__).parent / ".env", override=False)
+
 import uvicorn
 
 from src.core import (
     load_config,
+    merge_default_config_file,
     PORT_API,
 )
 from src.api import VertexAIClient, create_app
 from src.core.auth import api_key_manager
 from src.utils.logger import get_logger, configure_logging, set_request_id
 
-
+# 初始化日志系统
 logger = get_logger(__name__)
 
 async def main() -> None:
-    """
-    启动并运行 Vertex AI Proxy 服务器。
-    
-    流程：
-    1. 加载全局配置。
-    2. 初始化 API 密钥管理器（加载有效的客户端密钥）。
-    3. 创建 VertexAIClient 客户端用于上游交互。
-    4. 构建 FastAPI 应用并挂载路由。
-    5. 使用 Uvicorn 启动异步服务器。
-    6. 捕获中断信号并安全清理资源。
-    """
-    
+    """启动服务器"""
+    # 设置请求ID用于日志追踪
     set_request_id("startup")
+
+    # Docker 挂载卷里可能是旧 config.json；启动时补齐新版本新增配置项，保留用户已有值。
+    merge_default_config_file()
     
     config = load_config()
     debug_mode = config.get("debug", False)
@@ -37,9 +41,25 @@ async def main() -> None:
     logger.info(f"🔧 调试模式: {'开启' if debug_mode else '关闭'}")
     logger.info(f"🌐 API 端口: {PORT_API}")
 
-    
+    # 初始化API密钥管理器
     logger.debug("初始化 API 密钥管理器")
     api_key_manager.load_keys()
+
+    # 初始化管理员密码（首次启动会生成并打印到日志）
+    from src.api.admin import ensure_admin_password
+    ensure_admin_password()
+
+    # 如果上次保存了节点，自动恢复 worker
+    from src.transport.worker import worker
+    from src.transport.codec import needs_worker
+    _saved_uri = config.get("active_node_uri", "").strip()
+    _saved_name = config.get("active_node_name", "")
+    if _saved_uri and needs_worker(_saved_uri):
+        try:
+            proxy_url = worker.start_with_uri(_saved_uri, name=_saved_name)
+            logger.success(f"✅ 已自动恢复上次的代理节点: {_saved_name or _saved_uri[:40]} → {proxy_url}")
+        except Exception as e:
+            logger.warning(f"⚠ 自动恢复代理节点失败: {e}")
     
     logger.debug("创建 Vertex AI 客户端")
     vertex_client = VertexAIClient()
@@ -53,7 +73,7 @@ async def main() -> None:
         host="0.0.0.0", 
         port=PORT_API, 
         log_level="info",
-        log_config=None  
+        log_config=None  # 禁用 uvicorn 的默认日志配置，避免覆盖我们的 root logger
     )
     server = uvicorn.Server(uvicorn_config)
     
@@ -74,10 +94,18 @@ async def main() -> None:
         logger.debug("关闭 Vertex AI 客户端")
         await vertex_client.close()
 
+        # 关闭 worker 子进程
+        try:
+            from src.transport.worker import worker
+            worker.stop()
+        except Exception:
+            pass
+
         logger.success("✅ 资源清理完成，服务已安全关闭")
 
 def main_sync() -> None:
-    from src.core.config import load_config
+    from src.core.config import load_config, merge_default_config_file
+    merge_default_config_file()
     config = load_config()
     configure_logging(debug=config.get("debug", False), log_dir=config.get("log_dir", "logs"))
     try:

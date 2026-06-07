@@ -34,25 +34,5 @@
   "parallel_pool_max_rounds": 0,
   "parallel_pool_max_rounds_说明": "滚动请求池候选队列耗尽后的最大重新选择轮次，0 表示不限轮次，直到首包成功或客户端断开",
   "parallel_pool_deadline_seconds": 0,
-  "parallel_pool_deadline_seconds_说明": "单次请求等待首包的总超时时间，0 表示不限时",
-  "admin_password": "sXaV2nJUTlI0",
-  "proxy_url": "",
-  "subscription_url": "https://3x25t.no-mad-sub.one/link/9Lo9HtjMFsNpi5GA?clash=3&extend=1",
-  "subscriptions": [
-    {
-      "id": "sub_aff3106dbcd3",
-      "name": "3x25t.no-mad-sub.one",
-      "url": "https://3x25t.no-mad-sub.one/link/9Lo9HtjMFsNpi5GA?clash=3&extend=1",
-      "enabled": true,
-      "node_count": 46,
-      "updated_at": 1780825781
-    }
-  ],
-  "active_node_uri": "",
-  "active_node_name": "",
-  "node_pool": [],
-  "node_pool_index": 0,
-  "vertex_api_key": "AIzaSyCI-zsRP85UVOi0DjtiCwWBwQ1djDy741g",
-  "stream_query_signature": "2/l8eCsMMY49imcDQ/lwwXyL8cYtTjxZBF2dNqy69LodY=",
-  "count_tokens_query_signature": "2/mENOSldfC+HZM+tGhVuJLrl8M6gEyK3HRjUKuA5AM58="
+  "parallel_pool_deadline_seconds_说明": "单次请求等待首包的总超时时间，0 表示不限时"
 }

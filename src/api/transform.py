@@ -1,36 +1,38 @@
+"""请求和响应转换工具模块
 
+负责：
+1. 将 Gemini 格式的 Payload 转换为 Vertex AI 内部格式
+2. 将流式响应聚合成完整的非流式响应
+"""
 
 import json
 import time
-import random
 from typing import Any, cast
 
-from src.core.config import load_config
 from src.core.errors import (
     VertexError,
     InternalError,
     parse_error_response,
 )
 from src.api.model_config import ModelConfigBuilder
+from src.api.part_cleaner import (
+    _FcNameTracker,
+    clean_part,
+    encode_thought_signature,
+    handle_base64_in_contents,
+)
+from src.core.config import load_config
 from src.utils.logger import get_logger
 from src.utils.string_utils import snake_to_camel, camel_to_snake
 
 logger = get_logger(__name__)
 
+
 class RequestTransformer:
-    """
-    请求参数转换器，负责将标准 Gemini API 格式的请求体转换为 Vertex AI 匿名接口所需的 GraphQL 格式。
-    
-    核心功能：
-    1. 结构对齐：处理 contents, tools, safetySettings 等字段。
-    2. 格式修复：自动处理 base64 填充、合并连续相同角色的对话块。
-    3. 特殊逻辑：注入“防标记”混淆文本，处理 systemInstruction 向后兼容。
-    4. Schema 转换：将 JSON Schema 转换为 Vertex 内部的 Key-Value 数组格式。
-    """
+    """请求参数转换器"""
     
     def __init__(self, model_builder: ModelConfigBuilder):
         self.model_builder = model_builder
-        self.config = load_config()
 
     def build_vertex_payload(
         self,
@@ -40,22 +42,10 @@ class RequestTransformer:
         kwargs: dict[str, Any]
     ) -> dict[str, Any]:
         """
-        核心逻辑：将 Gemini 格式的请求体（由用户或下游发送）组装成 Vertex AI 匿名 GraphQL 接口接受的 payload。
+        构建 Vertex AI 请求 Payload
         
-        参数:
-            model: 目标模型 ID。
-            gemini_payload: 符合 Gemini API 标准的原始请求内容（contents, tools 等）。
-            original_body: 用于提供 querySignature 和 operationName 的原始结构。
-            kwargs: 额外的生成配置参数。
-            
-        流程：
-        1. 初始化 variables，映射后端模型名称。
-        2. 使用 Pydantic (GeminiPayload) 验证并清理输入字段，确保符合标准结构。
-        3. 注入防标记文本（Anti-Tracking），防止请求被上游标记。
-        4. 处理 contents：包括修复 Base64 格式、合并连续角色、过滤空内容等复杂处理。
-        5. 工具处理：标准化 tools 格式，并将 JSON Schema 递归转换为后端特定的 native 格式。
-        6. 生成配置：合并全局配置与用户配置。
-        7. 组装最终的 GraphQL body 结构。
+        Returns:
+            new_body
         """
         original_vars: Any = original_body.get('variables', {})
         new_variables: dict[str, Any]
@@ -66,14 +56,14 @@ class RequestTransformer:
         else:
              new_variables = {}
 
+        gemini_payload = self._normalize_gemini_payload(gemini_payload)
+
         target_model = self.model_builder.parse_model_name(model)
         new_variables['model'] = target_model
 
-        
-        supported_fields =[
-            'contents', 'tools', 'toolConfig', 'systemInstruction',
-            'safetySettings', 'generationConfig'
-        ]
+        # 支持的字段列表（统一使用 camelCase 格式）。尽量覆盖 Gemini generateContent
+        # 可透传到 Vertex AI Studio 匿名 GraphQL variables 的字段。
+        supported_fields = self._supported_variable_fields()
         
         try:
             from src.core.types import GeminiPayload
@@ -85,70 +75,61 @@ class RequestTransformer:
                      new_variables[field] = dumped_payload[field]
         except Exception as e:
             logger.debug(f"Pydantic 验证失败，使用基础转换: {e}")
-            
+            # 尝试直接从 gemini_payload 透传字段，支持 snake_case 和 camelCase
             for field in supported_fields:
-                
+                # 优先使用 camelCase 版本
                 if field in gemini_payload:
                     new_variables[field] = gemini_payload[field]
                 else:
-                    
+                    # 尝试 snake_case 版本
                     snake_field = camel_to_snake(field)
                     if snake_field in gemini_payload:
                         new_variables[field] = gemini_payload[snake_field]
 
-        
-        if self.config.get("anti_tracking", False):
-            self._inject_anti_tracking(new_variables)
-
-        
+        # 处理 systemInstruction：如果没有 user content，则转换为 user message
         self._handle_system_instruction(new_variables)
 
-        
+        # 特殊处理：contents 格式转换
         if 'contents' in new_variables:
-            converted_contents = self._handle_inline_data_case(new_variables['contents'])
-            converted_contents = self._handle_base64_in_contents(converted_contents)
-            
-            converted_contents = self._merge_contiguous_roles(converted_contents)
-            
+            converted_contents = self._normalize_contents(new_variables['contents'])
+            converted_contents = self._handle_inline_data_case(converted_contents)
+            converted_contents = self._normalize_contents(converted_contents)
+            converted_contents = handle_base64_in_contents(converted_contents)
             converted_contents = self._filter_empty_contents(converted_contents)
-            
-            converted_contents = self._handle_thought_signature(converted_contents)
+            converted_contents = encode_thought_signature(converted_contents)
             new_variables['contents'] = converted_contents
         
-        
+        # 特殊处理：tools 格式转换
         if 'tools' in new_variables:
             normalized_tools = self._normalize_tools_format(new_variables['tools'])
             if normalized_tools:
                 new_variables['tools'] = normalized_tools
             else:
-                
+                # 如果转换结果为空列表，确保移除 tools 字段，同时移除 toolConfig 避免 API 报错
                 del new_variables['tools']
                 if 'toolConfig' in new_variables:
                     del new_variables['toolConfig']
         
-        
+        # 特殊处理：toolConfig 格式转换
         if 'toolConfig' in new_variables:
             new_variables['toolConfig'] = self._convert_tools_format(new_variables['toolConfig'])
 
-        
+        # 特殊处理 generationConfig (使用 ModelConfigBuilder 进行格式转换)
         gen_config = self.model_builder.build_generation_config(
             gen_config={},
             gemini_payload=gemini_payload,
             **kwargs
         )
         if gen_config:
-            
-            if 'logitBias' in gen_config and isinstance(gen_config['logitBias'], dict):
-                bias_dict = gen_config.pop('logitBias')
-                gen_config['logitBias'] = [{"key": str(k), "value": v} for k, v in bias_dict.items()]
-
-            
-            if 'responseSchema' in gen_config and isinstance(gen_config['responseSchema'], dict):
-                gen_config['responseSchema'] = self._to_native_schema(gen_config['responseSchema'])
-                
             new_variables['generationConfig'] = gen_config
+
+        cfg = load_config()
+        if cfg.get("drop_max_tokens", True) and 'generationConfig' in new_variables:
+            new_variables['generationConfig'].pop('maxOutputTokens', None)
+            if not new_variables['generationConfig']:
+                del new_variables['generationConfig']
             
-        
+        # 特殊处理 safetySettings (如果未提供，则使用默认的宽松设置)
         if 'safetySettings' not in new_variables and 'safety_settings' not in gemini_payload:
             new_variables['safetySettings'] = self.model_builder.build_safety_settings()
 
@@ -157,186 +138,306 @@ class RequestTransformer:
             "operationName": original_body.get('operationName'),
             "variables": new_variables
         }
-        
+
+        # 调试用：打印最终 contents 结构，确认 thought 与 thoughtSignature 已正确填充
+        if new_variables.get('contents'):
+            logger.info(f"[Vertex Payload Contents] (model={model}): {json.dumps(new_variables.get('contents'), ensure_ascii=False, default=str)[:2000]}")
+
         return new_body
 
-    def _inject_anti_tracking(self, new_variables: dict[str, Any]) -> None:
-        """注入防标记内容到系统指令最上方"""
-        letters = "abcdefghijklmnopq"
-        def r_let() -> str: return random.choice(letters)
-        def r_num() -> str: return str(random.randint(1, 999999))
-        
-        parts =[
-            r_let(), r_num(), r_let(), r_let(), r_num(), r_let(), r_let(),
-            r_num(), r_num(), r_let(), r_let(), r_num(), r_let(), r_let(),
-            r_num(), r_let(), r_num(), r_let(), r_num(), r_num(), r_let(),
-            r_let(), r_num(), r_num(), r_let(), r_let(), r_num(), r_let(), r_let(), r_num(), r_let(), r_let(),
-            r_num(), r_num(), r_let(), r_let(), r_num(), r_let(), r_let(),
-            r_num(), r_let(), r_num(), r_let(), r_num(), r_num(), r_let(),
-            r_let(), r_num(), r_num(), r_let(), r_let(), r_num(), r_let(), r_let(), r_num(), r_let(), r_let(),
-            r_num(), r_num(), r_let(), r_let(), r_num(), r_let(), r_let(),
-            r_num(), r_let(), r_num(), r_let(), r_num(), r_num(), r_let(),
-            r_let(), r_num(), r_num(), r_let(), r_let(), r_num(), r_let(), r_let(), r_num(), r_let(), r_let(),
-            r_num(), r_num(), r_let(), r_let(), r_num(), r_let(), r_let(),
-            r_num(), r_let(), r_num(), r_let(), r_num(), r_num(), r_let(),
-            r_let(), r_num(), r_num(), r_let(), r_let(), r_num(), r_let(), r_let(), r_num(), r_let(), r_let(),
-            r_num(), r_num(), r_let(), r_let(), r_num(), r_let(), r_let(),
-            r_num(), r_let(), r_num(), r_let(), r_num(), r_num(), r_let(),
-            r_let(), r_num(), r_num(), r_let()
+    def _supported_variable_fields(self) -> list[str]:
+        """Gemini 下游请求可透传到上游 variables 的字段。"""
+        return [
+            'contents', 'tools', 'toolConfig', 'systemInstruction',
+            'safetySettings', 'generationConfig', 'cachedContent', 'labels',
+            # Gemini/Vertex 常见高级字段；上游不支持时会由上游返回明确错误，
+            # 这里不主动丢弃，以最大化暴露上游能力。
+            'modelArmorConfig', 'cachedContentName', 'requestOptions',
+            'session', 'context', 'examples', 'instances', 'parameters',
         ]
-        random_str = "".join(parts)
-        anti_tracking_prefix = f"<|no-trans|>meaningless test: {random_str}\n\n[遵循如下指令]\n\n"
-        
-        sys_inst = new_variables.get('systemInstruction')
-        if sys_inst:
-            if isinstance(sys_inst, dict) and 'parts' in sys_inst and isinstance(sys_inst['parts'], list):
-                parts_list = cast(list[Any], sys_inst['parts'])
-                if len(parts_list) > 0 and isinstance(parts_list[0], dict) and 'text' in parts_list[0]:
-                    parts_list[0]['text'] = anti_tracking_prefix + str(parts_list[0]['text'])
-                else:
-                    parts_list.insert(0, {'text': anti_tracking_prefix})
-            elif isinstance(sys_inst, str):
-                new_variables['systemInstruction'] = {'parts': [{'text': anti_tracking_prefix + sys_inst}]}
+
+    def _normalize_gemini_payload(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """兼容 REST、SDK 和部分 OpenAI-like 客户端传来的 Gemini 请求形态。"""
+        normalized = payload.copy()
+        if 'contents' in normalized:
+            normalized['contents'] = self._normalize_contents(normalized['contents'])
+        elif 'prompt' in normalized:
+            normalized['contents'] = [{"role": "user", "parts": [{"text": str(normalized['prompt'])}]}]
+        return normalized
+
+    def _normalize_contents(self, contents: Any) -> Any:
+        if contents is None:
+            return []
+        if isinstance(contents, str):
+            return [{"role": "user", "parts": [{"text": contents}]}]
+        if isinstance(contents, dict):
+            return [self._normalize_content(contents)]
+        if isinstance(contents, list):
+            normalized: list[Any] = []
+            pending_text_parts: list[dict[str, Any]] = []
+            for item in cast(list[Any], contents):
+                if isinstance(item, str):
+                    pending_text_parts.append({"text": item})
+                elif isinstance(item, dict):
+                    if pending_text_parts:
+                        normalized.append({"role": "user", "parts": pending_text_parts})
+                        pending_text_parts = []
+                    normalized.append(self._normalize_content(cast(dict[str, Any], item)))
+            if pending_text_parts:
+                normalized.append({"role": "user", "parts": pending_text_parts})
+            return normalized
+        return contents
+
+    def _normalize_content(self, content: dict[str, Any]) -> dict[str, Any]:
+        normalized = content.copy()
+        if 'content' in normalized and 'parts' not in normalized:
+            normalized['parts'] = self._normalize_parts(normalized.get('content'))
+            normalized.pop('content', None)
+        elif 'parts' in normalized:
+            normalized['parts'] = self._normalize_parts(normalized.get('parts'))
+        elif 'text' in normalized:
+            normalized['parts'] = [{"text": str(normalized.pop('text'))}]
         else:
-            new_variables['systemInstruction'] = {
-                'parts': [{'text': anti_tracking_prefix}]
-            }
+            normalized.setdefault('parts', [])
+
+        role = normalized.get('role')
+        if role == 'assistant':
+            normalized['role'] = 'model'
+        elif role == 'tool':
+            normalized['role'] = 'function'
+        elif not role:
+            normalized['role'] = 'user'
+        return normalized
+
+    def _normalize_parts(self, parts: Any) -> list[dict[str, Any]]:
+        if parts is None:
+            return []
+        if isinstance(parts, str):
+            return [{"text": parts}]
+        if isinstance(parts, dict):
+            return [self._normalize_part(parts)]
+        if isinstance(parts, list):
+            normalized: list[dict[str, Any]] = []
+            for part in cast(list[Any], parts):
+                if isinstance(part, str):
+                    normalized.append({"text": part})
+                elif isinstance(part, dict):
+                    normalized_part = self._normalize_part(cast(dict[str, Any], part))
+                    if normalized_part:
+                        normalized.append(normalized_part)
+            return normalized
+        return [{"text": str(parts)}]
+
+    def _normalize_part(self, part: dict[str, Any]) -> dict[str, Any]:
+        part_type = part.get('type')
+        if part_type in {'text', 'input_text'}:
+            return {"text": str(part.get('text', ''))}
+        if part_type in {'image_url', 'input_image'}:
+            url_obj = part.get('image_url') or part.get('input_image') or {}
+            url = url_obj.get('url') if isinstance(url_obj, dict) else url_obj
+            if isinstance(url, str) and url.startswith('data:'):
+                mime, data = self._parse_data_uri(url)
+                if mime and data:
+                    return {"inlineData": {"mimeType": mime, "data": data}}
+            if isinstance(url, str) and url.startswith(('http://', 'https://', 'gs://')):
+                return {"fileData": {"mimeType": self._guess_mime_from_uri(url), "fileUri": url}}
+        if part_type in {'media', 'file', 'file_data'}:
+            file_uri = part.get('fileUri') or part.get('file_uri') or part.get('uri') or part.get('url')
+            mime_type = part.get('mimeType') or part.get('mime_type') or self._guess_mime_from_uri(str(file_uri or ''))
+            if file_uri:
+                return {"fileData": {"mimeType": str(mime_type), "fileUri": str(file_uri)}}
+        if part_type in {'inline_data', 'inlineData'}:
+            inline = part.get('inlineData') or part.get('inline_data') or part
+            if isinstance(inline, dict):
+                data = inline.get('data')
+                mime_type = inline.get('mimeType') or inline.get('mime_type') or part.get('mimeType') or part.get('mime_type')
+                if data and mime_type:
+                    return {"inlineData": {"mimeType": str(mime_type), "data": str(data)}}
+
+        normalized: dict[str, Any] = {}
+        for k, v in part.items():
+            if k == 'type':
+                continue
+            normalized[snake_to_camel(k)] = v
+        return normalized
+
+    def _parse_data_uri(self, uri: str) -> tuple[str, str]:
+        try:
+            header, data = uri.split(',', 1)
+            mime = header.split(':', 1)[1].split(';', 1)[0]
+            return mime, data
+        except (ValueError, IndexError):
+            return "", ""
+
+    def _guess_mime_from_uri(self, uri: str) -> str:
+        lower = uri.lower().split('?', 1)[0].split('#', 1)[0]
+        if lower.endswith(('.jpg', '.jpeg')):
+            return 'image/jpeg'
+        if lower.endswith('.webp'):
+            return 'image/webp'
+        if lower.endswith('.gif'):
+            return 'image/gif'
+        if lower.endswith('.png'):
+            return 'image/png'
+        if lower.endswith('.mp4'):
+            return 'video/mp4'
+        if lower.endswith('.mov'):
+            return 'video/quicktime'
+        if lower.endswith('.webm'):
+            return 'video/webm'
+        if lower.endswith('.mp3'):
+            return 'audio/mpeg'
+        if lower.endswith('.wav'):
+            return 'audio/wav'
+        if lower.endswith('.ogg'):
+            return 'audio/ogg'
+        if lower.endswith('.pdf'):
+            return 'application/pdf'
+        if lower.endswith('.txt'):
+            return 'text/plain'
+        return 'image/png'
 
     def _convert_tools_format(self, data: Any) -> Any:
-        """
-        根据逆向出的 CLq 注册表，精准处理工具格式。
-        - JsonObject (args, response) 保持原样。
-        - Map/Schema (parameters) 执行 Key/Value 数组转换。
-        """
+        """专门处理工具格式转换，统一转换为 camelCase"""
         if isinstance(data, dict):
             new_dict: dict[str, Any] = {}
             data_dict: dict[str, Any] = cast(dict[str, Any], data)
             for k, v in data_dict.items():
-                camel_key = snake_to_camel(k)
-                
-                
-                if camel_key in ["parameters", "parametersJsonSchema", "parameters_json_schema"]:
-                    if isinstance(v, dict):
-                        new_dict["parameters"] = self._to_native_schema(cast(dict[str, Any], v))
+                # 转换 function_declarations 为 functionDeclarations
+                if k in ['function_declarations', 'functionDeclarations']:
+                    new_dict['functionDeclarations'] = self._convert_tools_format(v)
+                elif k in ['google_search', 'googleSearch']:
+                    new_dict['googleSearch'] = self._convert_tools_format(v) if isinstance(v, (dict, list)) else v
+                elif k in ['google_search_retrieval', 'googleSearchRetrieval']:
+                    new_dict['googleSearchRetrieval'] = self._convert_tools_format(v) if isinstance(v, (dict, list)) else v
+                elif k in ['code_execution', 'codeExecution']:
+                    new_dict['codeExecution'] = self._convert_tools_format(v) if isinstance(v, (dict, list)) else v
+                elif k in ['url_context', 'urlContext']:
+                    new_dict['urlContext'] = self._convert_tools_format(v) if isinstance(v, (dict, list)) else v
+                elif k == "parametersJsonSchema" and isinstance(v, dict):
+                    # parametersJsonSchema 需要特殊处理，确保 properties 和 required 字段一致
+                    new_dict[k] = self._convert_parameters_schema(cast(dict[str, Any], v))
+                elif k == "parameters" and isinstance(v, dict):
+                    # Schema 对象需要特殊处理
+                    converted_v = v.copy() if isinstance(v, dict) else v
+                    new_dict[k] = self._to_native_schema(converted_v)
+                elif k == "name" and not v:  # Vertex AI Function name cannot be empty
                     continue
-
-                
-                if camel_key in ["args", "response"]:
-                    new_dict[camel_key] = v
-                    continue
-
-                
-                if isinstance(v, (dict, list)):
-                    new_dict[camel_key] = self._convert_tools_format(v)
                 else:
-                    new_dict[camel_key] = v
+                    # 对于其他字段，转换为 camelCase（除了特殊字段）
+                    camel_key = snake_to_camel(k) if '_' in k else k
+                    new_dict[camel_key] = self._convert_tools_format(v) if isinstance(v, (dict, list)) else v
             return new_dict
         elif isinstance(data, list):
             return [self._convert_tools_format(item) for item in cast(list[Any], data)]
         else:
             return data
 
-    def _to_native_schema(self, schema: Any) -> Any:
+    def _convert_parameters_schema(self, schema: dict[str, Any]) -> dict[str, Any]:
         """
-        全递归 Schema 转换器 (根据最新逆向代码修正)
-        处理数值转字符串、类型大写化、处理数组型 Type 以及字段清理。
+        转换 parametersJsonSchema，确保 properties 和 required 字段中的参数名一致
+        统一使用 snake_case 格式，避免 camelCase 和 snake_case 混用导致的不匹配
         """
-        if not isinstance(schema, dict):
-            return schema
+        new_schema: dict[str, Any] = schema.copy()
+        unsupported_keys = {
+            '$schema', '$id', '$defs', 'definitions', 'additionalProperties',
+            'patternProperties', 'unevaluatedProperties', 'dependentSchemas',
+            'if', 'then', 'else', 'allOf', 'anyOf', 'oneOf', 'not',
+            'examples', 'default', 'nullable'
+        }
+        for key in unsupported_keys:
+            new_schema.pop(key, None)
 
-        native_schema = schema.copy()
-
+        if isinstance(new_schema.get('type'), list):
+            non_null_types = [item for item in cast(list[Any], new_schema['type']) if item != 'null']
+            new_schema['type'] = non_null_types[0] if non_null_types else 'string'
         
-        if 'type' in native_schema:
-            t_raw = native_schema['type']
-            target_type = "STRING" 
-
+        # 处理 properties 字段：将 camelCase 转换为 snake_case
+        if 'properties' in new_schema and isinstance(new_schema['properties'], dict):
+            old_properties: dict[str, Any] = cast(dict[str, Any], new_schema['properties'])
+            new_properties: dict[str, Any] = {}
             
-            if isinstance(t_raw, list):
-                valid_types = [str(x).upper() for x in t_raw if str(x).lower() != "null"]
-                if valid_types:
-                    target_type = valid_types[0]
-            elif isinstance(t_raw, str):
-                target_type = t_raw.upper()
-
-            
-            if target_type in ["INTEGER", "NUMBER", "BOOLEAN", "ARRAY", "OBJECT", "STRING"]:
-                native_schema['type'] = target_type
-            else:
-                native_schema['type'] = "STRING" 
-
-        
-        
-        numeric_constraints = [
-            'minItems', 'maxItems', 
-            'minProperties', 'maxProperties', 
-            'minLength', 'maxLength'
-        ]
-        for field in numeric_constraints:
-            if field in native_schema and native_schema[field] is not None:
-                native_schema[field] = str(native_schema[field])
-
-        
-        if 'properties' in native_schema and isinstance(native_schema['properties'], dict):
-            props_dict = native_schema.pop('properties')
-            native_schema['properties'] = [
-                {"key": str(k), "value": self._to_native_schema(v)}
-                for k, v in props_dict.items()
-            ]
-
-        
-        if 'defs' in native_schema and isinstance(native_schema['defs'], dict):
-            defs_dict = native_schema.pop('defs')
-            native_schema['defs'] = [
-                {"key": str(k), "value": self._to_native_schema(v)}
-                for k, v in defs_dict.items()
-            ]
-
-        
-        if 'items' in native_schema and isinstance(native_schema['items'], dict):
-            native_schema['items'] = self._to_native_schema(native_schema['items'])
-
-        for list_key in ['anyOf', 'oneOf', 'allOf']:
-            if list_key in native_schema and isinstance(native_schema[list_key], list):
-                native_schema[list_key] = [self._to_native_schema(item) for item in native_schema[list_key]]
-
-        
-        native_schema.pop('additionalPropertiesSchema', None)
-        native_schema.pop('prefixItems', None)
-        
-        native_schema.pop('additionalProperties', None) 
-
-        return native_schema
-
-    def _merge_contiguous_roles(self, contents: Any) -> Any:
-        """合并连续的相同角色的 content 块"""
-        if not isinstance(contents, list):
-            return contents
-
-        merged_contents: list[Any] = []
-        for content in cast(list[Any], contents):
-            if not isinstance(content, dict):
-                merged_contents.append(content)
-                continue
-
-            content_dict = cast(dict[str, Any], content)
-            role = content_dict.get('role')
-            
-            if merged_contents and isinstance(merged_contents[-1], dict) and merged_contents[-1].get('role') == role and role is not None:
-                last_content = merged_contents[-1]
-                last_parts = last_content.get('parts', [])
-                curr_parts = content_dict.get('parts', [])
+            for prop_name, prop_def in old_properties.items():
+                # 将 camelCase 转换为 snake_case
+                snake_name = camel_to_snake(str(prop_name))
+                new_properties[snake_name] = prop_def
                 
-                if isinstance(last_parts, list) and isinstance(curr_parts, list):
-                    new_content = last_content.copy()
-                    new_content['parts'] = list(last_parts) + list(curr_parts)
-                    merged_contents[-1] = new_content
+                # 递归处理嵌套的 schema
+                if isinstance(prop_def, dict):
+                    new_properties[snake_name] = self._convert_parameters_schema(cast(dict[str, Any], prop_def))
+            
+            new_schema['properties'] = new_properties
+        
+        # 处理 required 字段：确保使用 snake_case（通常已经是正确的）
+        if 'required' in new_schema and isinstance(new_schema['required'], list):
+            # required 字段通常已经是 snake_case，但为了保险起见，也进行转换
+            new_required: list[Any] = []
+            for req_name in cast(list[Any], new_schema['required']):
+                if isinstance(req_name, str):
+                    snake_name = camel_to_snake(req_name)
+                    new_required.append(snake_name)
                 else:
-                    merged_contents.append(content_dict)
-            else:
-                merged_contents.append(content_dict)
+                    new_required.append(req_name)
+            new_schema['required'] = new_required
+        
+        # 处理其他可能包含 schema 的字段
+        for key, value in list(new_schema.items()):
+            if key not in ['properties', 'required'] and isinstance(value, dict):
+                new_schema[key] = self._convert_parameters_schema(cast(dict[str, Any], value))
+        
+        return new_schema
+
+    def _to_native_schema(self, standard_schema: dict[str, Any]) -> dict[str, Any]:
+        """
+        将标准 JSON Schema 转换为 Vertex AI 原生 Map-style Schema
+        
+        Args:
+            standard_schema: 标准 JSON Schema 对象
+            
+        Returns:
+            Vertex AI 原生 Schema
+        """
+        
+        native_schema = standard_schema.copy()
+        unsupported_keys = {
+            '$schema', '$id', '$defs', 'definitions', 'additionalProperties',
+            'patternProperties', 'unevaluatedProperties', 'dependentSchemas',
+            'if', 'then', 'else', 'allOf', 'anyOf', 'oneOf', 'not',
+            'examples', 'default', 'nullable'
+        }
+        for key in unsupported_keys:
+            native_schema.pop(key, None)
+        
+        # Vertex AI 要求类型必须是大写 (例如: STRING, OBJECT, INTEGER)
+        if 'type' in native_schema and isinstance(native_schema['type'], list):
+            non_null_types = [item for item in cast(list[Any], native_schema['type']) if item != 'null']
+            native_schema['type'] = non_null_types[0] if non_null_types else 'string'
+
+        if 'type' in native_schema and isinstance(native_schema['type'], str):
+            native_schema['type'] = native_schema['type'].upper()
+            
+        if 'properties' in native_schema and isinstance(native_schema['properties'], dict):
+            native_props: list[dict[str, str | dict[str, Any]]] = []
+            props_dict = cast(dict[str, Any], native_schema['properties'])
+            for key, value in props_dict.items():
+                # 递归处理嵌套对象
+                if isinstance(value, dict):
+                    converted_value = self._to_native_schema(cast(dict[str, Any], value))
+                else:
+                    converted_value = {}
                 
-        return merged_contents
+                native_props.append({
+                    "key": str(key),
+                    "value": converted_value
+                })
+            native_schema['properties'] = native_props
+        
+        # 处理数组项
+        if 'items' in native_schema and isinstance(native_schema['items'], dict):
+            items_dict = cast(dict[str, Any], native_schema['items'])
+            native_schema['items'] = self._to_native_schema(items_dict)
+            
+        return native_schema
     
     def _handle_system_instruction(self, new_variables: dict[str, Any]) -> None:
         """处理 systemInstruction：如果没有 user content，则转换为 user message"""
@@ -344,10 +445,10 @@ class RequestTransformer:
         if not system_instruction_content:
             return
             
-        contents = new_variables.get('contents',[])
+        contents = new_variables.get('contents', [])
         
-        
-        contents_list: list[Any] = cast(list[Any], contents) if isinstance(contents, list) else[]
+        # 检查是否已有 user 角色
+        contents_list: list[Any] = cast(list[Any], contents) if isinstance(contents, list) else []
         has_user_role = any(
             isinstance(content, dict) and cast(dict[str, Any], content).get('role') == 'user'
             for content in contents_list
@@ -356,18 +457,18 @@ class RequestTransformer:
         if has_user_role:
             return
             
-        
+        # 提取文本内容
         text_from_system = self._extract_text_from_instruction(system_instruction_content)
         if not text_from_system:
             return
             
-        
+        # 转换为 user message
         user_message = {
             'role': 'user',
             'parts': [{'text': text_from_system}]
         }
         
-        
+        # 显式转换 contents 为 list[Any] 以修复 pylance 报错
         new_contents: list[Any] = list(contents_list)
         new_contents.insert(0, user_message)
         new_variables['contents'] = new_contents
@@ -379,9 +480,9 @@ class RequestTransformer:
             return instruction
         elif isinstance(instruction, dict):
             instruction_dict = cast(dict[str, Any], instruction)
-            parts = instruction_dict.get('parts',[])
+            parts = instruction_dict.get('parts', [])
             if isinstance(parts, list):
-                text_parts =[]
+                text_parts = []
                 for part in parts:
                     if isinstance(part, dict) and 'text' in part:
                         text_parts.append(str(part['text']))
@@ -391,38 +492,43 @@ class RequestTransformer:
     def _normalize_tools_format(self, tools: Any) -> list[dict[str, Any]]:
         """标准化 tools 格式为 Vertex AI 期望的格式 (List[Tool])"""
         converted_tools: Any = self._convert_tools_format(tools)
+        tool_keys = {
+            'functionDeclarations', 'googleSearch', 'googleSearchRetrieval',
+            'codeExecution', 'retrieval', 'urlContext'
+        }
         
         if isinstance(converted_tools, dict):
-            
-            if 'functionDeclarations' in converted_tools:
-                return[cast(dict[str, Any], converted_tools)]
-            
+            # 如果是字典，且包含 functionDeclarations，将其包裹在列表中
+            if any(key in converted_tools for key in tool_keys):
+                return [cast(dict[str, Any], converted_tools)]
+            # 如果是单个 FunctionDeclaration，包裹成 Tool 再包裹在列表中
             if 'name' in converted_tools:
-                return [{"functionDeclarations":[cast(dict[str, Any], converted_tools)]}]
-            return[]
+                return [{"functionDeclarations": [cast(dict[str, Any], converted_tools)]}]
+            return []
             
         if not isinstance(converted_tools, list) or len(cast(list[Any], converted_tools)) == 0:
-            return[]
+            return []
             
         converted_tools_list: list[Any] = cast(list[Any], converted_tools)
-        first_item: Any = converted_tools_list[0]
-        if not isinstance(first_item, dict):
-            return[]
-            
-        
-        if 'name' in first_item and 'functionDeclarations' not in first_item:
-            return [{"functionDeclarations": cast(list[dict[str, Any]], converted_tools_list)}]
-            
-        
-        
-        if 'functionDeclarations' in first_item:
-            return cast(list[dict[str, Any]], converted_tools_list)
-            
-        return[]
+        normalized_tools: list[dict[str, Any]] = []
+        function_decls: list[dict[str, Any]] = []
+        for item in converted_tools_list:
+            if not isinstance(item, dict):
+                continue
+            item_dict = cast(dict[str, Any], item)
+            if any(key in item_dict for key in tool_keys):
+                normalized_tools.append(item_dict)
+            elif item_dict.get('name'):
+                function_decls.append(item_dict)
+
+        if function_decls:
+            normalized_tools.insert(0, {"functionDeclarations": function_decls})
+
+        return normalized_tools
 
     def _handle_inline_data_case(self, contents: Any) -> Any:
         """
-        递归处理内容，保护工具调用参数名并对齐 ID 字段
+        递归处理 contents，确保 inlineData/mimeType 字段名正确 (适配各种客户端传参)
         """
         if isinstance(contents, list):
             return [self._handle_inline_data_case(item) for item in cast(list[Any], contents)]
@@ -437,66 +543,10 @@ class RequestTransformer:
                         camel_ik = snake_to_camel(ik)
                         new_inline_data[camel_ik] = iv
                     new_dict['inlineData'] = new_inline_data
-                elif camel_k == 'functionCall' and isinstance(v, dict):
-                    v_dict = cast(dict[str, Any], v)
-                    new_fc = {}
-                    
-                    fid = v_dict.get('id') or v_dict.get('tool_call_id') or v_dict.get('toolCallId')
-                    if fid: new_fc['id'] = fid
-                    for ik, iv in v_dict.items():
-                        cik = snake_to_camel(ik)
-                        if cik == 'args': new_fc[cik] = iv 
-                        elif cik not in ['id', 'toolCallId']: new_fc[cik] = self._handle_inline_data_case(iv)
-                    new_dict['functionCall'] = new_fc
-                elif camel_k == 'functionResponse' and isinstance(v, dict):
-                    v_dict = cast(dict[str, Any], v)
-                    new_fr = {}
-                    fid = v_dict.get('id') or v_dict.get('tool_call_id') or v_dict.get('toolCallId')
-                    if fid: new_fr['id'] = fid
-                    for ik, iv in v_dict.items():
-                        cik = snake_to_camel(ik)
-                        if cik == 'response': new_fr[cik] = iv 
-                        elif cik not in ['id', 'toolCallId']: new_fr[cik] = self._handle_inline_data_case(iv)
-                    new_dict['functionResponse'] = new_fr
                 else:
                     new_dict[camel_k] = self._handle_inline_data_case(v)
             return new_dict
         return contents
-        
-    def _handle_base64_in_contents(self, contents: Any) -> Any:
-        """
-        递归处理 contents 中的 base64 数据。
-        将 URL-safe Base64 转换为标准 Base64 并补全 padding。
-        """
-        try:
-            if isinstance(contents, list):
-                res_list: list[Any] =[self._handle_base64_in_contents(item) for item in cast(list[Any], contents)]
-                return cast(Any, res_list)
-            if isinstance(contents, dict):
-                new_dict: dict[str, Any] = {}
-                for k, v in cast(dict[str, Any], contents).items():
-                    if k == 'inlineData' and isinstance(v, dict):
-                        v_dict = cast(dict[str, Any], v)
-                        if 'data' in v_dict and isinstance(v_dict['data'], str):
-                            try:
-                                b64_data: str = v_dict['data']
-                                b64_data = b64_data.replace('-', '+').replace('_', '/')
-                                padding = len(b64_data) % 4
-                                if padding:
-                                    b64_data += '=' * (4 - padding)
-                                
-                                new_inline_data = v_dict.copy()
-                                new_inline_data['data'] = b64_data
-                                new_dict[k] = new_inline_data
-                                continue
-                            except Exception:
-                                pass
-                    new_dict[k] = self._handle_base64_in_contents(v)
-                return cast(Any, new_dict)
-            return contents
-        except Exception as e:
-            logger.warning(f"Base64 内容处理失败: {e}")
-            return cast(Any, contents)
 
     def _filter_empty_contents(self, contents: Any) -> Any:
         """
@@ -505,237 +555,73 @@ class RequestTransformer:
         """
         if not isinstance(contents, list):
             return contents
-
+        
         filtered_contents: list[Any] = []
         contents_list: list[Any] = cast(list[Any], contents)
-
         
-        last_model_function_calls: list[str] = []
-        
-        call_id_map: dict[str, str] = {} 
-        
-        response_index_in_content = 0
-
+        # 收集所有 functionCall 的名称，用于修复 functionResponse
+        function_call_names: list[str] = []
         for content in contents_list:
-            if not isinstance(content, dict):
-                continue
-            content_dict = cast(dict[str, Any], content)
-            role = content_dict.get('role')
-            parts = content_dict.get('parts', [])
-
-            if role == 'model':
-                
-                last_model_function_calls = []
+            if isinstance(content, dict):
+                content_dict = cast(dict[str, Any], content)
+                parts = content_dict.get('parts', [])
                 if isinstance(parts, list):
                     for part in cast(list[Any], parts):
                         if isinstance(part, dict):
-                            func_call = part.get('functionCall')
-                            if isinstance(func_call, dict) and func_call.get('name'):
-                                name = str(func_call['name'])
-                                fid = func_call.get('id')
-                                last_model_function_calls.append(name)
-                                if fid:
-                                    call_id_map[str(fid)] = name
-            
-            elif role == 'function':
-                
-                response_index_in_content = 0
-
-            if isinstance(parts, list) and len(cast(list[Any], parts)) > 0:
-                parts_list: list[Any] = cast(list[Any], parts)
-                valid_parts: list[Any] = []
-                for part in parts_list:
-                    if isinstance(part, dict):
-                        part_dict = cast(dict[str, Any], part)
-
-                        
-                        is_func_response = 'functionResponse' in part_dict
-                        
-                        
-                        
-                        cleaned_part = self._clean_part_metadata(
-                            part_dict, 
-                            last_model_function_calls,
-                            response_index_in_content if is_func_response else -1,
-                            call_id_map
-                        )
-                        
-                        if is_func_response:
-                            response_index_in_content += 1
+                            part_dict = cast(dict[str, Any], part)
+                            func_call = part_dict.get('functionCall')
+                            if isinstance(func_call, dict):
+                                func_call_dict = cast(dict[str, Any], func_call)
+                                name = func_call_dict.get('name')
+                                if name and isinstance(name, str):
+                                    function_call_names.append(name)
+        
+        # 追踪已使用的 functionCall 名称（按顺序），用于修复 functionResponse
+        fc_tracker = _FcNameTracker(function_call_names)
+        
+        for content in contents_list:
+            if isinstance(content, dict):
+                content_dict: dict[str, Any] = cast(dict[str, Any], content)
+                parts = content_dict.get('parts', [])
+                # 只保留有 parts 且 parts 不为空的 content
+                if isinstance(parts, list) and len(cast(list[Any], parts)) > 0:
+                    parts_list: list[Any] = cast(list[Any], parts)
+                    # 过滤并验证 parts 中的有效内容
+                    valid_parts: list[Any] = []
+                    for part in parts_list:
+                        if isinstance(part, dict):
+                            part_dict = cast(dict[str, Any], part)
                             
-                        if cleaned_part:
-                            valid_parts.append(cleaned_part)
-
-                if valid_parts:
-                    filtered_content = content_dict.copy()
-                    filtered_content['parts'] = valid_parts
-                    filtered_contents.append(filtered_content)
+                            cleaned_part = clean_part(part_dict, function_call_names, fc_tracker)
+                            if cleaned_part:
+                                valid_parts.append(cleaned_part)
+                    
+                    if valid_parts:
+                        # 更新 content 的 parts
+                        filtered_content = content_dict.copy()
+                        filtered_content['parts'] = valid_parts
+                        filtered_contents.append(filtered_content)
+                    else:
+                        logger.debug(f"过滤掉空的 content: role={content_dict.get('role', 'unknown')}")
                 else:
                     logger.debug(f"过滤掉空的 content: role={content_dict.get('role', 'unknown')}")
             else:
-                
-                if not isinstance(content, dict):
-                    filtered_contents.append(content)
-                else:
-                    logger.debug(f"过滤掉空的 content: role={content_dict.get('role', 'unknown')}")
-
+                # 非 Dict 类型的 content，保留
+                filtered_contents.append(content)
+        
         return filtered_contents
-
-    def _clean_part_metadata(
-        self, 
-        part_dict: dict[str, Any], 
-        function_call_names: list[str],
-        response_index: int = -1,
-        call_id_map: dict[str, str] | None = None
-    ) -> dict[str, Any] | None:
-        """
-        清理 part 中的空元数据字段，修复无效的 functionResponse
-        
-        Args:
-            part_dict: 原始 part 字典
-            function_call_names: 前序 model 消息中的函数调用名称列表
-            response_index: 当前 functionResponse 在消息中的位置索引
-            
-        Returns:
-            清理后的 part 字典，如果 part 无效则返回 None
-        """
-        cleaned_part: dict[str, Any] = {}
-        has_valid_content = False
-        
-        
-        if 'text' in part_dict:
-            text_value = part_dict['text']
-            if text_value is not None:
-                cleaned_part['text'] = text_value
-                has_valid_content = True
-        
-        
-        if 'thought' in part_dict:
-            cleaned_part['thought'] = part_dict['thought']
-        
-        
-        if 'thoughtSignature' in part_dict:
-            cleaned_part['thoughtSignature'] = part_dict['thoughtSignature']
-        
-        
-        if 'functionCall' in part_dict:
-            func_call = part_dict['functionCall']
-            if isinstance(func_call, dict):
-                func_call_dict = cast(dict[str, Any], func_call)
-                if func_call_dict.get('name'):  
-                    cleaned_part['functionCall'] = func_call
-                    has_valid_content = True
-        
-        
-        if 'functionResponse' in part_dict:
-            func_response = part_dict['functionResponse']
-            if isinstance(func_response, dict):
-                fixed_resp = cast(dict[str, Any], func_response).copy()
-                current_name = fixed_resp.get('name')
-                current_id = fixed_resp.get('id')
-                
-                
-                
-                if not current_name and current_id and call_id_map:
-                    current_name = call_id_map.get(str(current_id))
-                    if current_name:
-                        fixed_resp['name'] = current_name
-                
-                
-                if not current_name and 0 <= response_index < len(function_call_names):
-                    current_name = function_call_names[response_index]
-                    fixed_resp['name'] = current_name
-
-                
-                if current_name:
-                    cleaned_part['functionResponse'] = fixed_resp
-                    has_valid_content = True
-                else:
-                    logger.debug("丢弃缺失工具名且无法推断的 functionResponse")
-        
-        
-        if 'inlineData' in part_dict:
-            inline_data = part_dict['inlineData']
-            if isinstance(inline_data, dict):
-                inline_data_dict = cast(dict[str, Any], inline_data)
-                
-                if (inline_data_dict.get('data') and
-                    str(inline_data_dict['data']).strip() and
-                    inline_data_dict.get('mimeType') and
-                    str(inline_data_dict['mimeType']).strip()):
-                    cleaned_part['inlineData'] = inline_data
-                    has_valid_content = True
-        
-        
-        if 'fileData' in part_dict:
-            file_data = part_dict['fileData']
-            if isinstance(file_data, dict):
-                file_data_dict = cast(dict[str, Any], file_data)
-                
-                if (file_data_dict.get('fileUri') and
-                    str(file_data_dict['fileUri']).strip() and
-                    file_data_dict.get('mimeType') and
-                    str(file_data_dict['mimeType']).strip()):
-                    cleaned_part['fileData'] = file_data
-                    has_valid_content = True
-        
-        
-        if has_valid_content:
-            return cleaned_part
-        else:
-            logger.debug("过滤掉没有有效内容的 part")
-            return None
-
-    def _handle_thought_signature(self, contents: Any) -> Any:
-        """
-        处理 thoughtSignature 字段的 base64 编码
-        确保 thoughtSignature 字段正确编码为 base64 字符串
-        """
-        import base64
-        
-        if isinstance(contents, list):
-            return[self._handle_thought_signature(item) for item in cast(list[Any], contents)]
-        if isinstance(contents, dict):
-            new_dict: dict[str, Any] = {}
-            contents_dict: dict[str, Any] = cast(dict[str, Any], contents)
-            for k, v in contents_dict.items():
-                if k == 'parts' and isinstance(v, list):
-                    v_list: list[Any] = cast(list[Any], v)
-                    
-                    new_parts: list[Any] =[]
-                    for part in v_list:
-                        if isinstance(part, dict):
-                            new_part: dict[str, Any] = cast(dict[str, Any], part).copy()
-                            
-                            if 'thoughtSignature' in new_part:
-                                signature_value = new_part['thoughtSignature']
-                                if isinstance(signature_value, str):
-                                    
-                                    if signature_value == "skip_thought_signature_validator":
-                                        encoded_bytes = base64.b64encode(signature_value.encode('utf-8'))
-                                        new_part['thoughtSignature'] = encoded_bytes.decode('utf-8')
-                                    
-                                    
-                            new_parts.append(new_part)
-                        else:
-                            new_parts.append(part)
-                    new_dict[k] = new_parts
-                else:
-                    new_dict[k] = self._handle_thought_signature(v) if isinstance(v, (dict, list)) else v
-            return new_dict
-        return contents
 
     @staticmethod
     def prepare_headers(creds: dict[str, Any]) -> dict[str, str]:
         """准备请求头"""
-        
+        # 提取原始头信息
         headers = RequestTransformer._extract_headers_from_creds(creds)
         
-        
+        # 设置必要的头信息
         headers['content-type'] = 'application/json'
         
-        
-        problematic_headers =[
+        # 移除可能导致问题的头
+        problematic_headers = [
             'content-length', 'Content-Length', 'host', 'Host',
             'connection', 'Connection', 'accept-encoding'
         ]
@@ -759,6 +645,26 @@ class RequestTransformer:
         return {}
 
 
+def _is_safety_block(error: VertexError) -> bool:
+    """判断一个 VertexError 是否由安全拦截引起"""
+    msg = (error.message or "").lower()
+    status = (error.status or "").lower()
+    keywords = ("safety", "block_reason", "content_filter", "finish_reason_safety")
+    return any(k in msg or k in status for k in keywords)
+
+
+def _build_safety_result(error: VertexError) -> dict[str, Any]:
+    """构造 Gemini 标准格式的安全拦截响应"""
+    return {
+        "candidates": [],
+        "promptFeedback": {
+            "blockReason": error.status or "SAFETY",
+            "safetyRatings": [],
+            "blockReasonMessage": error.message,
+        },
+    }
+
+
 class ResponseAggregator:
     """响应聚合器"""
 
@@ -767,10 +673,10 @@ class ResponseAggregator:
         """
         聚合流式响应为非流式对象
         """
-        all_parts: list[dict[str, Any]] =[]
+        all_parts: list[dict[str, Any]] = []
         finish_reason: str | None = None
         finish_message: str | None = None
-        safety_ratings: list[dict[str, Any]] =[]
+        safety_ratings: list[dict[str, Any]] = []
         citation_metadata: dict[str, Any] = {}
         grounding_metadata: dict[str, Any] = {}
         token_count: int | None = None
@@ -787,64 +693,80 @@ class ResponseAggregator:
         
         try:
             async for chunk_str in stream_generator:
-                actual_json_str = chunk_str.strip()
-                if actual_json_str.startswith("data: "):
-                    actual_json_str = actual_json_str[6:]
+                if isinstance(chunk_str, dict):
+                    chunk = chunk_str
+                else:
+                    actual_json_str = chunk_str.strip()
+                    if actual_json_str.startswith("data: "):
+                        actual_json_str = actual_json_str[6:]
+                    
+                    if not actual_json_str:
+                        continue
+                    
+                    try:
+                        chunk = json.loads(actual_json_str)
+                    except json.JSONDecodeError as e:
+                        logger.debug(f"JSON 解析失败，跳过此块: {e}")
+                        continue
                 
-                if not actual_json_str:
-                    continue
+                # 检查 chunk 是否包含错误 (使用统一解析逻辑)
+                parsed_error = parse_error_response(chunk)
+                if parsed_error:
+                    raise parsed_error
                 
-                try:
-                    chunk = json.loads(actual_json_str)
+                # 提取顶层元数据
+                create_time = chunk.get('createTime') or create_time
+                model_version = chunk.get('modelVersion') or model_version
+                prompt_feedback = chunk.get('promptFeedback', {}) or prompt_feedback
+                response_id = chunk.get('responseId') or response_id
+                usage_metadata = chunk.get('usageMetadata', {}) or usage_metadata
+                model_status = chunk.get('modelStatus') or model_status
+                
+                candidates = chunk.get('candidates', [])
+                if candidates:
+                    candidate = candidates[0]
                     
+                    # 提取 parts
+                    content_obj = candidate.get('content', {})
+                    parts = content_obj.get('parts', [])
+                    if parts:
+                        all_parts.extend(parts)
                     
-                    parsed_error = parse_error_response(chunk)
-                    if parsed_error:
-                        raise parsed_error
+                    # 提取 candidate 元数据
+                    finish_reason = candidate.get('finishReason') or finish_reason
+                    finish_message = candidate.get('finishMessage') or finish_message
+                    safety_ratings = candidate.get('safetyRatings') or safety_ratings
+                    citation_metadata = candidate.get('citationMetadata') or citation_metadata
+                    grounding_metadata = candidate.get('groundingMetadata') or grounding_metadata
+                    if candidate.get('tokenCount') is not None:
+                        token_count = candidate['tokenCount']
+                    if candidate.get('avgLogprobs') is not None:
+                        avg_logprobs = candidate['avgLogprobs']
+                    if candidate.get('logprobsResult') is not None:
+                        logprobs_result = candidate['logprobsResult']
+                    if candidate.get('index') is not None:
+                        candidate_index = candidate['index']
                     
-                    
-                    create_time = chunk.get('createTime') or create_time
-                    model_version = chunk.get('modelVersion') or model_version
-                    prompt_feedback = chunk.get('promptFeedback', {}) or prompt_feedback
-                    response_id = chunk.get('responseId') or response_id
-                    usage_metadata = chunk.get('usageMetadata', {}) or usage_metadata
-                    model_status = chunk.get('modelStatus') or model_status
-                    
-                    candidates = chunk.get('candidates', [])
-                    if candidates:
-                        candidate = candidates[0]
-                        
-                        
-                        content_obj = candidate.get('content', {})
-                        parts = content_obj.get('parts',[])
-                        if parts:
-                            all_parts.extend(parts)
-                        
-                        
-                        finish_reason = candidate.get('finishReason') or finish_reason
-                        finish_message = candidate.get('finishMessage') or finish_message
-                        safety_ratings = candidate.get('safetyRatings') or safety_ratings
-                        citation_metadata = candidate.get('citationMetadata') or citation_metadata
-                        grounding_metadata = candidate.get('groundingMetadata') or grounding_metadata
-                        if candidate.get('tokenCount') is not None:
-                            token_count = candidate['tokenCount']
-                        if candidate.get('avgLogprobs') is not None:
-                            avg_logprobs = candidate['avgLogprobs']
-                        if candidate.get('logprobsResult') is not None:
-                            logprobs_result = candidate['logprobsResult']
-                        if candidate.get('index') is not None:
-                            candidate_index = candidate['index']
-                            
-                except json.JSONDecodeError as e:
-                    logger.debug(f"JSON 解析失败，跳过此块: {e}")
-                    continue
-                    
-        except VertexError:
+        except VertexError as ve:
+            # 检测安全拦截：上游返回 GraphQL 错误但实际上是安全过滤
+            if _is_safety_block(ve):
+                logger.warning(f"上游安全拦截: {ve.message}")
+                result = _build_safety_result(ve)
+                result["usageMetadata"] = usage_metadata if usage_metadata else {
+                    "promptTokenCount": 0,
+                    "candidatesTokenCount": 0,
+                    "totalTokenCount": 0,
+                }
+                return result
             raise
         except Exception as e:
             raise InternalError(message=f"Non-streaming request error: {e}")
         
-        
+        # 处理图片响应特例
+        inline_images = ResponseAggregator._extract_inline_images(all_parts)
+        if _raw_image_response and inline_images:
+            return {"created": int(time.time()), "data": [{"b64_json": data} for _, data in inline_images]}
+
         full_text_content = "".join(str(p['text']) for p in all_parts if 'text' in p)
 
         if full_text_content.startswith("![Generated Image](data:"):
@@ -856,49 +778,87 @@ class ResponseAggregator:
                     _, encoded = data_url.split(',', 1)
                     return {"created": int(time.time()), "data": [{"b64_json": encoded}]}
                 except Exception:
-                    return {"created": int(time.time()), "data":[]}
+                    return {"created": int(time.time()), "data": []}
             else:
                 return {"resultUrl": data_url}
         
+        # 构建最终响应
+        # 当 parts 为空时，检查是否有安全拦截
+        blocked = bool(prompt_feedback.get('blockReason'))
         
-        if not all_parts:
-            all_parts =[{"text": " "}]
-        
-        result_candidate: dict[str, Any] = {
-            "index": candidate_index
-        }
-        if finish_reason:
-            result_candidate["finishReason"] = finish_reason.upper()
+        if not all_parts and blocked:
+            # 上游安全拦截：返回空 candidates + promptFeedback.blockReason
+            result: dict[str, Any] = {"candidates": []}
+        else:
+            if not all_parts:
+                all_parts = []
             
-        result_candidate["content"] = {
-            "parts": all_parts,
-            "role": "model"
-        }
+            if not finish_reason:
+                finish_reason = "STOP"
+            
+            result_candidate: dict[str, Any] = {
+                "index": candidate_index
+            }
+            if finish_reason:
+                result_candidate["finishReason"] = finish_reason.upper()
+                
+            result_candidate["content"] = {
+                "parts": all_parts,
+                "role": "model"
+            }
+            
+            # safetyRatings 始终包含（官方 Gemini API 总是返回此字段）
+            if not safety_ratings:
+                safety_ratings = []
+            result_candidate["safetyRatings"] = safety_ratings
+            
+            # groundingAttributions 始终包含（官方 Gemini API 总是返回此字段）
+            result_candidate["groundingAttributions"] = []
+            
+            # 其他可选字段，只添加非空值
+            optional_candidate_fields: dict[str, Any] = {
+                "finishMessage": finish_message,
+                "citationMetadata": citation_metadata,
+                "groundingMetadata": grounding_metadata,
+                "tokenCount": token_count,
+                "avgLogprobs": avg_logprobs,
+                "logprobsResult": logprobs_result
+            }
+            
+            for key, value in optional_candidate_fields.items():
+                if value is not None and value != [] and value != {}:
+                    result_candidate[key] = value
+            
+            # 构建最终结果
+            result: dict[str, Any] = {"candidates": [result_candidate]}
         
+        # usageMetadata 始终包含（官方 Gemini API 总是返回此字段）
+        if not usage_metadata or usage_metadata == {}:
+            usage_metadata = {
+                "promptTokenCount": 0,
+                "candidatesTokenCount": 0,
+                "totalTokenCount": 0,
+                "promptTokensDetails": [{"modality": "TEXT", "tokenCount": 0}],
+                "candidatesTokensDetails": [{"modality": "TEXT", "tokenCount": 0}],
+            }
+        else:
+            # 补充详细 token 分解字段（如果上游没提供）
+            if "promptTokensDetails" not in usage_metadata and "promptTokenCount" in usage_metadata:
+                usage_metadata["promptTokensDetails"] = [{"modality": "TEXT", "tokenCount": usage_metadata["promptTokenCount"]}]
+            if "candidatesTokensDetails" not in usage_metadata and "candidatesTokenCount" in usage_metadata:
+                usage_metadata["candidatesTokensDetails"] = [{"modality": "TEXT", "tokenCount": usage_metadata["candidatesTokenCount"]}]
+        result["usageMetadata"] = usage_metadata
         
-        optional_candidate_fields: dict[str, Any] = {
-            "finishMessage": finish_message,
-            "safetyRatings": safety_ratings,
-            "citationMetadata": citation_metadata,
-            "groundingMetadata": grounding_metadata,
-            "tokenCount": token_count,
-            "avgLogprobs": avg_logprobs,
-            "logprobsResult": logprobs_result
-        }
+        # promptFeedback 始终包含（官方 Gemini API 总是返回此字段）
+        if not prompt_feedback or prompt_feedback == {}:
+            prompt_feedback = {"safetyRatings": []}
+        result["promptFeedback"] = prompt_feedback
         
-        for key, value in optional_candidate_fields.items():
-            if value is not None and value != [] and value != {}:
-                result_candidate[key] = value
-        
-        
-        result: dict[str, Any] = {"candidates":[result_candidate]}
-        
+        # 其他顶层可选字段
         optional_result_fields: dict[str, Any] = {
             "createTime": create_time,
             "modelVersion": model_version,
-            "promptFeedback": prompt_feedback,
             "responseId": response_id,
-            "usageMetadata": usage_metadata,
             "modelStatus": model_status
         }
         
@@ -907,3 +867,16 @@ class ResponseAggregator:
                 result[key] = value
         
         return result
+
+    @staticmethod
+    def _extract_inline_images(parts: list[dict[str, Any]]) -> list[tuple[str, str]]:
+        images: list[tuple[str, str]] = []
+        for part in parts:
+            inline_data = part.get('inlineData') or part.get('inline_data')
+            if not isinstance(inline_data, dict):
+                continue
+            mime_type = inline_data.get('mimeType') or inline_data.get('mime_type') or 'image/png'
+            data = inline_data.get('data')
+            if isinstance(data, str) and data.strip():
+                images.append((str(mime_type), data))
+        return images

@@ -1,7 +1,7 @@
-
+"""核心模块"""
 
 from .constants import *
-from .config import load_config
+from .config import load_config, merge_default_config_file
 from .errors import (
     VertexError,
     ClientError,
@@ -21,14 +21,15 @@ from .errors import (
 )
 
 __all__ = [
-    
+    # Constants
     'PORT_API',
     'MODELS_CONFIG_FILE',
     'STATS_FILE',
     'CONFIG_FILE',
-    
+    # Config
     'load_config',
-    
+    'merge_default_config_file',
+    # Errors
     'VertexError',
     'ClientError',
     'ServerError',

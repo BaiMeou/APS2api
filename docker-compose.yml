@@ -1,0 +1,61 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  Vertex AI Proxy — docker-compose.yml
+#
+#  快速启动:
+#    cp .env.example .env          # 按需填写 PROXY_URL
+#    docker compose up -d          # 后台启动
+#    docker compose logs -f        # 查看实时日志
+#
+#  访问面板:
+#    管理面板 (节点/订阅):   http://localhost:2156/admin
+#    配置管理 (参数/密钥):   http://localhost:2156/config-ui
+#
+#  OpenAI 兼容 API 端点:  http://localhost:2156/v1
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  vertex:
+    build:
+      context: .
+      target: runtime         # 使用多阶段构建的 runtime 层
+    image: vertex-proxy:latest
+    container_name: vertex-proxy
+    restart: unless-stopped
+
+    ports:
+      - "${PORT:-2156}:2156"  # 主机端口可通过环境变量覆盖
+
+    env_file:
+      - .env
+
+    environment:
+      - TZ=Asia/Shanghai      # 容器时区
+
+    volumes:
+      # 持久化 config 目录：面板里的所有修改重启后不丢失
+      - ./config:/app/config
+      # 可选：持久化日志
+      # - ./logs:/app/logs
+
+    # 健康检查（Dockerfile 里已定义，这里可覆盖）
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:2156/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+
+    # 资源限制（可按需调整）
+    # deploy:
+    #   resources:
+    #     limits:
+    #       memory: 512M
+    #       cpus: '1'
+
+    # 如果需要把本服务接入已有的 Docker 网络，取消下面注释
+    # networks:
+    #   - your-network
+
+# networks:
+#   your-network:
+#     external: true
