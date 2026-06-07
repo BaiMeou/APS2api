@@ -63,11 +63,7 @@ def clean_part(
 
     if 'text' in part:
         text_value = part['text']
-        if text_value is not None:
-            text_str = str(text_value)
-            if text_str == "":
-                from src.core.errors import EmptyResponseError
-                raise EmptyResponseError("Part text is empty")
+        if text_value is not None and str(text_value) != "":
             cleaned_part['text'] = text_value
             has_valid_content = True
 
@@ -284,7 +280,8 @@ def _clean_simple(part: dict[str, Any]) -> dict[str, Any] | None:
         content_part = ContentPart.model_validate(part)
         cleaned = content_part.model_dump(exclude_none=True, by_alias=True)
         if 'text' in cleaned and str(cleaned['text']) == "":
-            del cleaned['text']
+            from src.core.errors import EmptyResponseError
+            raise EmptyResponseError("Part text is empty")
         if 'functionCall' in cleaned:
             func_call = cast(dict[str, Any], cleaned['functionCall'])
             name = func_call.get('name')

@@ -136,6 +136,9 @@ def clean_streaming_chunk(chunk: dict[str, Any]) -> dict[str, Any]:
 
             cleaned = clean_part(part)
             if cleaned:
+                if 'text' in cleaned and cleaned['text'] == "":
+                    from src.core.errors import EmptyResponseError
+                    raise EmptyResponseError("Part text is empty")
                 cleaned_parts.append(cleaned)
 
         content["parts"] = cleaned_parts

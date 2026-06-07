@@ -189,6 +189,7 @@ class VertexAIClient:
     async def _process_streaming_object(self, obj: dict[str, Any]) -> AsyncGenerator[dict[str, Any], None]:
         """从单个上游 JSON 对象中提取增量 chunk"""
         results = obj.get("results", [])
+        logger.debug(f"完整上游响应: {obj}")
         logger.debug(f"_process_streaming_object: results 数量={len(results)}")
         for result in results:
             # 错误检测
@@ -408,8 +409,14 @@ class VertexAIClient:
 
                 try:
                     chunk_count = 0
+                    probe_model = "gemini-2.5-flash"
+                    probe_payload = {"contents": [{"parts": [{"text": "Hello"}]}]}
+                    
+                    current_model = probe_model if is_first_auth_attempt else model
+                    current_payload = probe_payload if is_first_auth_attempt else gemini_payload
+                    
                     async for chunk in self._execute_streaming_attempt(
-                        session, model, gemini_payload, recaptcha_token, kwargs,
+                        session, current_model, current_payload, recaptcha_token, kwargs,
                         is_first_auth_attempt=is_first_auth_attempt
                     ):
                         yield chunk
