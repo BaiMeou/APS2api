@@ -39,12 +39,16 @@ PORT=2156
 
 `PORT` 只影响 Docker 的宿主机端口映射。容器内应用默认仍监听 `2156`。
 
-###安卓部署
+### 安卓部署
 
 使用termux，安装proot-distro
 进入vertex目录
+
+```shell
 proot-distro build .
 proot-distro run vertex
+```
+
 即可运行
 
 ## 首次启动
