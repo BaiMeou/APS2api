@@ -22,6 +22,7 @@ class AppConfig(BaseModel):
     anti429_enabled: bool = False  # 随机数防429开关
     anti429_target: str = "system"  # 插入位置：system 或 user
     force_no_stream: bool = False  # 强制关闭流式输出（客户端 stream=true 也会被转成非流式）
+    safety_settings: dict[str, str] = Field(default_factory=dict)  # 自定义 safety threshold 配置
     parallel_pool_enabled: bool = True  # 节点池并行请求开关：开启后同时尝试多个节点，谁先成功就用谁
     parallel_pool_size: int = 4  # 并行请求池大小，自用场景默认宽松一些
     parallel_pool_max_size: int = 12  # 防止误配置过大导致资源耗尽

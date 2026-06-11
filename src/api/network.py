@@ -36,14 +36,24 @@ class NetworkClient:
 
     @property
     def proxy_url(self) -> Optional[str]:
-        """动态读取代理配置：环境变量 PROXY_URL 优先，其次 config.json 的 proxy_url"""
+        """动态读取代理配置：环境变量优先，其次手动配置，最后单节点 worker。"""
         env_v = os.environ.get("PROXY_URL")
         if env_v:
             return env_v
         try:
             cfg = load_config()
             v = cfg.get("proxy_url")
-            return v if v else None
+            if v:
+                return v
+            active_uri = str(cfg.get("active_node_uri") or "").strip()
+            if active_uri:
+                from src.transport.worker import worker
+
+                status = worker.status()
+                worker_proxy = status.get("proxy_url") if status.get("running") else ""
+                if worker_proxy:
+                    return str(worker_proxy)
+            return None
         except Exception:
             return None
 

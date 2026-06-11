@@ -28,7 +28,16 @@ export function initProxy(api, state) {
   document.querySelector('[data-action="deduplicate"]').addEventListener('click', deduplicateNodes);
   document.querySelector('[data-action="delete-disabled"]').addEventListener('click', deleteDisabledNodes);
   document.querySelector('[data-action="save-proxy"]').addEventListener('click', saveProxy);
-  document.querySelector('[data-action="stop-proxy"]').addEventListener('click', stopProxy);
+  const sidebarParallelTog = document.getElementById('sidebarParallelTog');
+  if (sidebarParallelTog) {
+    sidebarParallelTog.addEventListener('change', async (e) => {
+      const enabled = e.target.checked;
+      await _api.put('/api/admin/settings', { parallel_pool_enabled: enabled });
+      await loadProxyStatus();
+      const nodes = _state.get('allNodes') || [];
+      renderNodes(nodes);
+    });
+  }
 
   const subList = document.getElementById('subList');
   subList.addEventListener('change', (e) => {
@@ -351,7 +360,6 @@ async function useNode(btn) {
   try {
     const r = await _api.post('/api/admin/use-node', { raw_uri: uri, name });
     showToast('已启用: ' + (name || r.proxy_url), 'ok');
-    document.getElementById('proxy_url').value = r.proxy_url;
     _state.set('activeUri', uri);
     await loadProxyStatus();
     const nodes = _state.get('allNodes') || [];
@@ -498,10 +506,12 @@ export async function checkCore(opts = {}) {
   try {
     const s = await _api.get('/api/admin/worker-core');
     const el = document.getElementById('coreSummary');
-    if (el) el.textContent = s.binary_available ? `已就绪 · ${s.platform} · ${s.binary_path}` : `未就绪 · ${s.platform} · ${s.bin_dir}`;
+    if (el) {
+      el.textContent = s.status_msg || (s.binary_available ? `已就绪 · ${s.platform} · ${s.binary_path}` : `未就绪 · ${s.platform} · ${s.bin_dir}`);
+    }
     const badge = document.getElementById('coreBadge');
     if (badge) badge.style.display = s.binary_available ? 'none' : 'inline-block';
-    if (!opts.silent) showToast(s.binary_available ? '内核已就绪' : '内核未就绪', 'ok');
+    if (!opts.silent) showToast(s.status_msg || (s.binary_available ? '内核已就绪' : '内核未就绪'), 'ok');
     return s;
   } catch (e) { if (!opts.silent) showToast(e.message, 'err'); }
 }
@@ -509,8 +519,8 @@ export async function checkCore(opts = {}) {
 async function prepareCore() {
   const el = document.getElementById('coreSummary');
   const btn = document.getElementById('prepareCoreBtn');
-  if (el) el.textContent = '正在准备内核，首次下载可能需要 1-2 分钟，请勿重复点击';
-  if (btn) { btn.disabled = true; btn.textContent = '准备中...'; }
+  if (el) el.textContent = '正在下载内核，请勿重复点击';
+  if (btn) { btn.disabled = true; btn.textContent = '下载中...'; }
   try {
     const s = await _api.post('/api/admin/worker-core/prepare');
     if (el) el.textContent = `已就绪 · ${s.platform} · ${s.binary_path}`;
@@ -520,7 +530,7 @@ async function prepareCore() {
     if (el) el.textContent = e.message;
     showToast(e.message, 'err');
   } finally {
-    if (btn) { btn.disabled = false; btn.textContent = '准备/下载内核'; }
+    if (btn) { btn.disabled = false; btn.textContent = '下载内核'; }
   }
 }
 
@@ -550,38 +560,61 @@ async function importNodeFile(mode = 'append') {
 export async function loadProxyStatus() {
   try {
     const s = await _api.get('/api/admin/proxy-status');
+    const cfg = await _api.get('/api/admin/settings');
     _state.set('activeUri', s.active_node_uri || '');
-    const stopBtn = document.getElementById('stopBtn');
+    _state.set('proxyMode', s.proxy_mode || 'none');
     const coreBadge = document.getElementById('coreBadge');
 
     const sidebarStatus = document.getElementById('sidebarStatus');
     const sidebarLabel = document.getElementById('sidebarLabel');
     const sidebarSub = document.getElementById('sidebarSub');
+    const dot = sidebarStatus?.querySelector('.sidebar-status-dot');
+    if (sidebarLabel) sidebarLabel.textContent = '并行模式';
 
     coreBadge.style.display = s.binary_available ? 'none' : 'inline-block';
-
-    if (s.active_node_uri && (s.running || s.configured_proxy_url)) {
-      if (sidebarStatus) sidebarStatus.classList.add('active');
-      if (sidebarLabel) sidebarLabel.textContent = '活动节点';
-      if (sidebarSub) sidebarSub.textContent = s.active_node_name || '已连接';
-      if (stopBtn) stopBtn.style.display = 'flex';
-    } else if (s.configured_proxy_url) {
-      if (sidebarStatus) sidebarStatus.classList.add('active');
-      if (sidebarLabel) sidebarLabel.textContent = '手动代理';
-      if (sidebarSub) sidebarSub.textContent = s.configured_proxy_url;
-      if (stopBtn) stopBtn.style.display = 'flex';
-    } else {
-      if (sidebarStatus) sidebarStatus.classList.remove('active');
-      if (sidebarLabel) sidebarLabel.textContent = '无活动节点';
-      if (sidebarSub) sidebarSub.textContent = '并发模式';
-      if (stopBtn) stopBtn.style.display = 'none';
+    const coreSummary = document.getElementById('coreSummary');
+    if (coreSummary && !coreSummary.textContent) {
+      coreSummary.textContent = s.binary_available ? '内核已就绪' : '内核未就绪';
     }
-    const topBadge = document.getElementById('poolBadgeTop');
-    const topBadgeText = document.getElementById('poolBadgeText');
+
     const nodes = _state.get('allNodes') || [];
     const counts = _state.get('nodeCounts') || {};
     const total = counts.total ?? nodes.length;
     const enabled = counts.enabled_count ?? nodes.filter(n => !n.disabled).length;
+    const configuredProxyUrl = (s.configured_proxy_url || cfg.proxy_url || '').trim();
+
+    if (s.active_node_uri) {
+      const statusText = s.active_node_name || '已连接';
+      if (sidebarStatus) sidebarStatus.classList.add('active');
+      if (sidebarSub) { sidebarSub.textContent = statusText; sidebarSub.title = statusText; }
+      if (dot) dot.className = 'sidebar-status-dot active';
+    } else if (cfg.parallel_pool_enabled) {
+      const statusText = '并行模式已开启';
+      if (sidebarStatus) sidebarStatus.classList.remove('active');
+      if (sidebarSub) { sidebarSub.textContent = statusText; sidebarSub.title = statusText; }
+      if (dot) dot.className = 'sidebar-status-dot';
+    } else if (configuredProxyUrl) {
+      const statusText = '手动代理已启用';
+      if (sidebarStatus) sidebarStatus.classList.add('active');
+      if (sidebarSub) { sidebarSub.textContent = statusText; sidebarSub.title = configuredProxyUrl; }
+      if (dot) dot.className = 'sidebar-status-dot active';
+    } else {
+      const statusText = '未启用节点';
+      if (sidebarStatus) sidebarStatus.classList.remove('active');
+      if (sidebarSub) { sidebarSub.textContent = statusText; sidebarSub.title = statusText; }
+      if (dot) dot.className = 'sidebar-status-dot';
+    }
+
+    const parallelTog = document.getElementById('sidebarParallelTog');
+    const parallelTogWrap = document.getElementById('parallelTogWrap');
+    if (parallelTog) parallelTog.checked = !!cfg.parallel_pool_enabled;
+    if (parallelTogWrap) parallelTogWrap.style.display = '';
+
+    const proxyInput = document.getElementById('proxy_url');
+    if (proxyInput) proxyInput.value = cfg.proxy_url || '';
+
+    const topBadge = document.getElementById('poolBadgeTop');
+    const topBadgeText = document.getElementById('poolBadgeText');
     if (total > 0) {
       const text = `节点 ${enabled}/${total}`;
       if (topBadge) topBadge.style.display = 'flex';
@@ -594,8 +627,10 @@ export async function loadProxyStatus() {
 
 async function saveProxy() {
   try {
+    const proxyInput = document.getElementById('proxy_url');
+    const proxyUrl = proxyInput.value.trim();
     await _api.post('/api/admin/stop-proxy');
-    await _api.put('/api/admin/settings', { proxy_url: document.getElementById('proxy_url').value });
+    await _api.put('/api/admin/settings', { proxy_url: proxyUrl });
     showToast('代理已保存', 'ok');
     await loadProxyStatus();
     const nodes = _state.get('allNodes') || [];

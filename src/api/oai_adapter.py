@@ -13,6 +13,8 @@ from typing import Any
 
 from src.utils.logger import get_logger
 from src.api.part_cleaner import normalize_base64
+from src.api.model_config import ModelConfigBuilder
+from src.utils.string_utils import snake_to_camel
 
 logger = get_logger(__name__)
 
@@ -44,6 +46,9 @@ class OAIRequestConverter:
     def convert(body: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         """将 OAI ChatCompletion 请求转为 (model, gemini_payload)"""
         model = body["model"]
+        # Phase 2: strip thinking suffix, extract thinking config from model name
+        clean_model, thinking_from_suffix = ModelConfigBuilder.parse_thinking_suffix(model)
+        model = clean_model
         messages = body.get("messages", [])
 
         contents: list[dict[str, Any]] = []
@@ -120,7 +125,7 @@ class OAIRequestConverter:
                     if f.get("description"):
                         decl["description"] = f["description"]
                     if f.get("parameters"):
-                        decl["parameters"] = _sanitize_schema_for_gemini(f["parameters"])
+                        decl["parameters"] = _clean_function_parameters(copy.deepcopy(f["parameters"]))
                     else:
                         decl["parameters"] = {"type": "object", "properties": {}}
                     func_decls.append(decl)
@@ -184,7 +189,7 @@ class OAIRequestConverter:
                 gen_cfg["responseMimeType"] = "application/json"
                 schema = rf.get("json_schema", {}).get("schema")
                 if schema:
-                    gen_cfg["responseSchema"] = _sanitize_schema_for_gemini(schema)
+                    gen_cfg["responseSchema"] = _clean_function_parameters(copy.deepcopy(schema))
 
         modalities = body.get("modalities") or body.get("response_modalities")
         if isinstance(modalities, list):
@@ -197,6 +202,31 @@ class OAIRequestConverter:
         if gen_cfg:
             gemini_payload["generationConfig"] = gen_cfg
 
+        # Phase 2: thinkingConfig support (priority: extra_body > body > suffix > model match)
+        thinking_config = None
+        extra_body_root = body.get("extra_body", {})
+        if isinstance(extra_body_root, dict):
+            google_extra = extra_body_root.get("google", {})
+            if isinstance(google_extra, dict):
+                tc = google_extra.get("thinking_config") or google_extra.get("thinkingConfig")
+                if tc is not None:
+                    if isinstance(tc, dict):
+                        thinking_config = {snake_to_camel(k): v for k, v in tc.items()}
+                    else:
+                        thinking_config = tc
+        if thinking_config is None:
+            tc = body.get("thinkingConfig")
+            if tc is not None:
+                thinking_config = tc
+        if thinking_config is None and thinking_from_suffix is not None:
+            thinking_config = thinking_from_suffix
+        if thinking_config is None and "gemini-2.5-pro" in model:
+            thinking_config = {"thinkingLevel": "ENABLED"}
+        if thinking_config is not None:
+            if "generationConfig" not in gemini_payload:
+                gemini_payload["generationConfig"] = {}
+            gemini_payload["generationConfig"]["thinkingConfig"] = thinking_config
+
         oai_safety = body.get("safety_settings") or body.get("safetySettings")
         if isinstance(oai_safety, list):
             gemini_payload["safetySettings"] = oai_safety
@@ -208,6 +238,23 @@ class OAIRequestConverter:
         cached_content = body.get("cached_content") or body.get("cachedContent")
         if isinstance(cached_content, str) and cached_content:
             gemini_payload["cachedContent"] = cached_content
+
+        # Phase 3: extra_body.google passthrough
+        if isinstance(extra_body_root, dict):
+            google_extra = extra_body_root.get("google", {})
+            if isinstance(google_extra, dict):
+                for k, v in google_extra.items():
+                    camel_k = snake_to_camel(k)
+                    if camel_k == "thinkingConfig":
+                        continue
+                    if camel_k in {"safetySettings", "systemInstruction", "cachedContent", "labels"}:
+                        gemini_payload[camel_k] = v
+                    elif camel_k in {"generationConfig", "generation_config"}:
+                        if "generationConfig" not in gemini_payload:
+                            gemini_payload["generationConfig"] = {}
+                        gen_cfg_extra = v if isinstance(v, dict) else {}
+                        for gk, gv in gen_cfg_extra.items():
+                            gemini_payload["generationConfig"][snake_to_camel(gk)] = gv
 
         return model, gemini_payload
 
@@ -499,75 +546,34 @@ def _extract_oai_function_tool(tool: Any) -> dict[str, Any] | None:
     return None
 
 
-def _sanitize_schema_for_gemini(schema: Any) -> Any:
-    """清理 OpenAI/JSON Schema 中 Gemini 工具声明不稳定支持的字段。"""
+GEMINI_ALLOWED_SCHEMA_FIELDS: set[str] = {
+    "anyOf", "default", "description", "enum", "example", "format", "items",
+    "maxItems", "maxLength", "maxProperties", "maximum",
+    "minItems", "minLength", "minProperties", "minimum",
+    "nullable", "pattern", "properties", "propertyOrdering", "required",
+    "title", "type",
+}
+
+
+def _clean_function_parameters(schema: Any) -> Any:
+    """Recursively clean JSON Schema using Gemini API whitelist."""
     if isinstance(schema, list):
-        return [_sanitize_schema_for_gemini(item) for item in schema]
+        return [_clean_function_parameters(item) for item in schema]
     if not isinstance(schema, dict):
         return schema
-
-    unsupported_keys = {
-        "$schema", "$id", "$defs", "definitions", "additionalProperties",
-        "patternProperties", "unevaluatedProperties", "dependentSchemas",
-        "if", "then", "else", "not",
-        "examples", "default", "nullable",
-    }
-    sanitized: dict[str, Any] = {}
+    cleaned: dict[str, Any] = {}
     for key, value in schema.items():
-        if key in unsupported_keys:
+        if key not in GEMINI_ALLOWED_SCHEMA_FIELDS:
             continue
-        if key in {"allOf", "anyOf", "oneOf"} and isinstance(value, list):
-            flattened = _flatten_composed_schema(key, value)
-            for flattened_key, flattened_value in flattened.items():
-                sanitized[flattened_key] = _sanitize_schema_for_gemini(flattened_value)
-            continue
-        if key == "const":
-            sanitized["enum"] = [value]
-            continue
-        if key == "type" and isinstance(value, list):
-            non_null_types = [item for item in value if item != "null"]
-            sanitized[key] = non_null_types[0] if non_null_types else "string"
-            continue
-        sanitized[key] = _sanitize_schema_for_gemini(value)
-    if sanitized.get("type") == "object" and "properties" not in sanitized:
-        sanitized["properties"] = {}
-    return sanitized
-
-
-def _flatten_composed_schema(kind: str, variants: list[Any]) -> dict[str, Any]:
-    """把 OpenAI 常见组合 schema 尽量降级成 Gemini 可接受的 schema。"""
-    dict_variants = [copy.deepcopy(v) for v in variants if isinstance(v, dict)]
-    if not dict_variants:
-        return {}
-
-    if kind == "allOf":
-        merged: dict[str, Any] = {}
-        required: list[Any] = []
-        properties: dict[str, Any] = {}
-        for variant in dict_variants:
-            for key, value in variant.items():
-                if key == "properties" and isinstance(value, dict):
-                    properties.update(value)
-                elif key == "required" and isinstance(value, list):
-                    required.extend(item for item in value if item not in required)
-                else:
-                    merged[key] = value
-        if properties:
-            merged["properties"] = properties
-            merged.setdefault("type", "object")
-        if required:
-            merged["required"] = required
-        return merged
-
-    first = dict_variants[0]
-    if all(v.get("type") == "object" for v in dict_variants):
-        properties = {}
-        for variant in dict_variants:
-            if isinstance(variant.get("properties"), dict):
-                properties.update(variant["properties"])
-        if properties:
-            return {"type": "object", "properties": properties}
-    return first
+        if key == "properties" and isinstance(value, dict):
+            cleaned[key] = {k: _clean_function_parameters(v) for k, v in value.items()}
+        elif key == "items" and isinstance(value, dict):
+            cleaned[key] = _clean_function_parameters(value)
+        elif key == "anyOf" and isinstance(value, list):
+            cleaned[key] = [_clean_function_parameters(item) for item in value]
+        else:
+            cleaned[key] = value
+    return cleaned
 
 
 def _parse_data_uri(uri: str) -> tuple[str, str]:
@@ -637,6 +643,15 @@ def _extract_parts(parts: list[dict[str, Any]], for_stream: bool = False) -> tup
             if not for_stream:
                 tool_call.pop("index", None)
             tool_calls.append(tool_call)
+        elif "executableCode" in part:
+            ec = part["executableCode"]
+            lang = ec.get("codeLanguage", "")
+            code = ec.get("code", "")
+            texts.append(f"```{lang}\n{code}\n```")
+        elif "codeExecutionResult" in part:
+            cer = part["codeExecutionResult"]
+            output = cer.get("output", "")
+            texts.append(f"```output\n{output}\n```")
 
     text_content = "".join(texts)
     reasoning = "".join(thoughts)

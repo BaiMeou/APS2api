@@ -4,7 +4,7 @@ import { showToast } from './utils.js';
 import { initSettings, loadSettings } from './views/settings.js';
 import { initKeys, loadKeys } from './views/keys.js';
 import { initModels, loadModels } from './views/models.js';
-import { initProxy, loadSubscriptions, loadUnifiedNodes, loadProxyStatus, checkCore } from './views/proxy.js';
+import { initProxy, loadSubscriptions, loadUnifiedNodes, loadProxyStatus } from './views/proxy.js';
 
 const state = new AppState({ ...defaultState });
 const api = new ApiClient(state);
@@ -70,7 +70,6 @@ async function loadAll() {
     await loadModels();
     await loadSubscriptions();
     await loadProxyStatus();
-    await checkCore({ silent: true });
     await loadUnifiedNodes();
   } catch (e) {}
 }

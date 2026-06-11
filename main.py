@@ -21,8 +21,20 @@ from src.api import VertexAIClient, create_app
 from src.core.auth import api_key_manager
 from src.utils.logger import get_logger, configure_logging, set_request_id
 
+CONFIG_FILE = Path(__file__).parent / "config" / "config.json"
+
 # 初始化日志系统
 logger = get_logger(__name__)
+
+
+def _write_config(data: dict) -> None:
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = CONFIG_FILE.with_suffix(CONFIG_FILE.suffix + ".tmp")
+    import json
+    import os
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    os.replace(tmp, CONFIG_FILE)
 
 async def main() -> None:
     """启动服务器"""
@@ -56,7 +68,10 @@ async def main() -> None:
     _saved_name = config.get("active_node_name", "")
     if _saved_uri and needs_worker(_saved_uri):
         try:
-            proxy_url = worker.start_with_uri(_saved_uri, name=_saved_name)
+            proxy_url = await worker.start_with_uri_async(_saved_uri, name=_saved_name)
+            if config.get("proxy_url"):
+                config["proxy_url"] = ""
+                _write_config(config)
             logger.success(f"✅ 已自动恢复上次的代理节点: {_saved_name or _saved_uri[:40]} → {proxy_url}")
         except Exception as e:
             logger.warning(f"⚠ 自动恢复代理节点失败: {e}")
@@ -97,7 +112,7 @@ async def main() -> None:
         # 关闭 worker 子进程
         try:
             from src.transport.worker import worker
-            worker.stop()
+            await worker.stop_async()
         except Exception:
             pass
 

@@ -59,6 +59,8 @@ export class AppState {
 export const defaultState = {
   token: '',
   activeUri: '',
+  proxyMode: 'none',
+  workerProxyUrl: '',
   allNodes: [],
   subscriptions: [],
   selectedSubIds: new Set(),

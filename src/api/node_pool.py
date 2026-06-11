@@ -35,7 +35,7 @@ from src.utils.node_store import (
 )
 from src.transport.port_allocator import PortLease, port_allocator
 from src.transport.codec import build_config, needs_worker
-from src.transport.worker import worker
+from src.transport.worker import terminate_process_tree, worker
 
 logger = get_logger(__name__)
 
@@ -120,12 +120,7 @@ class ParallelNodeWorker:
         if proc is not None:
             try:
                 if proc.poll() is None:
-                    proc.terminate()
-                    try:
-                        await asyncio.to_thread(proc.wait, 3)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                        await asyncio.to_thread(proc.wait, 2)
+                    await asyncio.to_thread(terminate_process_tree, proc, "Parallel worker")
             except Exception as e:
                 logger.debug(f"并行 worker 停止失败: {e}")
             finally:
@@ -293,12 +288,13 @@ async def apply_pool_node(node: dict, idx: int) -> None:
     name = node.get("name", "")
     try:
         from src.api.admin import _activate_node_by_uri
-        await _activate_node_by_uri(raw_uri, name, idx)
+        proxy_url = await _activate_node_by_uri(raw_uri, name, idx)
         logger.info(f"节点池已切换到节点 [{idx+1}]: {name or raw_uri[:40]}")
     except Exception as e:
         logger.warning(f"切换节点代理失败: {e}")
+        proxy_url = load_config().get("proxy_url")
 
-    await wait_for_active_proxy_ready(load_config().get("proxy_url"))
+    await wait_for_active_proxy_ready(proxy_url)
 
 
 # ==================== Base class ====================
@@ -456,6 +452,11 @@ class ParallelNodePool(BaseNodePool):
         cfg = load_config()
         pool: list[dict] = cfg.get("node_pool", [])
         unified_nodes = load_nodes()
+
+        if not parallel_pool_enabled(cfg):
+            async for chunk in self._stream_inner_fn(model, gemini_payload=gemini_payload, **kwargs):
+                yield chunk
+            return
 
         if parallel_pool_enabled(cfg) and unified_nodes:
             async for chunk in self._stream_realtime_parallel_pool(model, gemini_payload, cfg, [], **kwargs):

@@ -7,7 +7,7 @@ import time
 import uuid
 import random
 import string
-from typing import Any, cast
+from typing import Any, AsyncGenerator, cast
 import collections.abc
 from fastapi import FastAPI, Request, UploadFile
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -369,6 +369,27 @@ def create_app(vertex_client: VertexAIClient) -> FastAPI:
     app.get("/v1beta/models/{model}", response_model=None)(get_model_info)
     app.get("/v1/models/{model}", response_model=None)(get_model_info)
 
+    # ==================== 内部 Gemini 处理函数 ====================
+
+    async def _internal_stream_gemini(
+        model: str,
+        gemini_payload: dict[str, Any],
+        source: str,
+        **kwargs: Any,
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        async with business_session(vertex_client, source=source) as session:
+            async for chunk in session.stream_gemini(model=model, gemini_payload=gemini_payload, **kwargs):
+                yield chunk
+
+    async def _internal_complete_gemini(
+        model: str,
+        gemini_payload: dict[str, Any],
+        source: str,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        async with business_session(vertex_client, source=source) as session:
+            return await session.complete_gemini(model=model, gemini_payload=gemini_payload, **kwargs)
+
     # ==================== Gemini 兼容端点 ====================
 
     async def stream_generate_content(model: str, request: Request) -> StreamingResponse | JSONResponse:
@@ -380,27 +401,24 @@ def create_app(vertex_client: VertexAIClient) -> FastAPI:
         except json.JSONDecodeError as e:
             raise InvalidArgumentError(f"Invalid JSON in request body: {e}")
 
-        # 简单类型检查
         if not isinstance(body_any, dict):
                 raise InvalidArgumentError("Request body must be a JSON object")
         body: dict[str, Any] = cast(dict[str, Any], body_any)
         
         logger.debug(f"请求体大小: {len(str(body))} 字符")
-        
-        # 完整记录请求内容（用于调试）
         logger.debug_json("下游请求体", body)
-        
+
         async def stream_generator():
             chunk_count = 0
             try:
-                async with business_session(vertex_client, source="gemini.streamGenerateContent") as session:
-                    async for chunk in session.stream_gemini(
-                        model=model, gemini_payload=_inject_anti_tracking(_inject_anti429(body))
-                    ):
+                async for chunk in _internal_stream_gemini(
+                    model=model, gemini_payload=_inject_anti_tracking(_inject_anti429(body)),
+                    source="gemini.streamGenerateContent", native_passthrough=True,
+                    skip_probe=("image" in model.lower()),
+                ):
                         chunk_count += 1
                         yield "data: " + json.dumps(chunk, ensure_ascii=False, separators=(',', ':')) + "\n\n"
             except VertexError as e:
-                # 检测安全拦截 → 返回 Gemini 标准格式的 final chunk
                 msg = (e.message or "").lower()
                 status = (e.status or "").lower()
                 if any(k in msg or k in status for k in ("safety", "content_filter", "block_reason")):
@@ -421,11 +439,9 @@ def create_app(vertex_client: VertexAIClient) -> FastAPI:
                     yield "data: " + json.dumps(safety_chunk, ensure_ascii=False, separators=(',', ':')) + "\n\n"
                 else:
                     logger.error(f"流式生成 Vertex 错误: {e.message}")
-                    # 使用统一的错误格式
                     yield e.to_sse()
             except Exception as e:
                 logger.error(f"流式生成未知错误: {e}")
-                # 未知错误包装为 InternalError
                 error = InternalError(message=str(e))
                 yield error.to_sse()
             finally:
@@ -457,21 +473,18 @@ def create_app(vertex_client: VertexAIClient) -> FastAPI:
         body: dict[str, Any] = cast(dict[str, Any], body_any)
         
         logger.debug(f"请求体大小: {len(str(body))} 字符")
-        
-        # 完整记录请求内容（用于调试）
         logger.debug_json("下游请求体", body)
-        
+
         start_time = time.time()
         
         try:
-            # 直接获取 Gemini 格式响应
-            async with business_session(vertex_client, source="gemini.generateContent") as session:
-                response = await session.complete_gemini(
-                    model=model,
-                    gemini_payload=_inject_anti_tracking(_inject_anti429(body))
-                )
+            response = await _internal_complete_gemini(
+                model=model,
+                gemini_payload=_inject_anti_tracking(_inject_anti429(body)),
+                source="gemini.generateContent", native_passthrough=True,
+                skip_probe=("image" in model.lower()),
+            )
         except VertexError as e:
-            # 检测安全拦截 → 返回 HTTP 200 + Gemini 标准格式
             msg = (e.message or "").lower()
             status = (e.status or "").lower()
             if any(k in msg or k in status for k in ("safety", "content_filter", "block_reason")):
@@ -545,22 +558,21 @@ def create_app(vertex_client: VertexAIClient) -> FastAPI:
                 has_finish = False
                 has_tool_calls = False
                 try:
-                    async with business_session(vertex_client, source="openai.chat.stream") as session:
-                        async for gemini_chunk in session.stream_gemini(model=model, gemini_payload=gemini_payload):
-                            events = OAIResponseConverter.convert_realtime_chunk(
-                                gemini_chunk,
-                                model,
-                                request_id,
-                                is_first=is_first,
-                                has_prior_tool_calls=has_tool_calls,
-                            )
-                            is_first = False
-                            for event in events:
-                                if '"tool_calls"' in event:
-                                    has_tool_calls = True
-                                if '"finish_reason"' in event and '"finish_reason": null' not in event:
-                                    has_finish = True
-                                yield event
+                    async for gemini_chunk in _internal_stream_gemini(model, gemini_payload, "openai.chat.stream"):
+                        events = OAIResponseConverter.convert_realtime_chunk(
+                            gemini_chunk,
+                            model,
+                            request_id,
+                            is_first=is_first,
+                            has_prior_tool_calls=has_tool_calls,
+                        )
+                        is_first = False
+                        for event in events:
+                            if '"tool_calls"' in event:
+                                has_tool_calls = True
+                            if '"finish_reason"' in event and '"finish_reason": null' not in event:
+                                has_finish = True
+                            yield event
                     if not has_finish:
                         base = {"id": f"chatcmpl-{request_id}", "object": "chat.completion.chunk", "created": int(time.time()), "model": model}
                         yield f"data: {json.dumps({**base, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]}, ensure_ascii=False)}\n\n"
@@ -586,8 +598,7 @@ def create_app(vertex_client: VertexAIClient) -> FastAPI:
             )
         else:
             try:
-                async with business_session(vertex_client, source="openai.chat") as session:
-                    gemini_response = await session.complete_gemini(model=model, gemini_payload=gemini_payload)
+                gemini_response = await _internal_complete_gemini(model, gemini_payload, "openai.chat")
                 oai_response = OAIResponseConverter.gemini_json_to_oai_json(gemini_response, model)
                 return JSONResponse(content=oai_response)
             except VertexError as e:
@@ -749,10 +760,7 @@ def _load_models_config() -> list[str]:
 
 
 def _supported_generation_methods(model: str) -> list[str]:
-    methods = ["generateContent", "streamGenerateContent", "countTokens"]
-    if "image" in model.lower():
-        methods.append("generateImages")
-    return methods
+    return ["generateContent", "streamGenerateContent", "countTokens"]
 
 
 def _vertex_error_to_oai(e: VertexError) -> dict[str, Any]:
@@ -842,7 +850,7 @@ async def _run_oai_image_request(
     try:
         async with business_session(vertex_client, source=source) as session:
             for _ in range(n):
-                gemini_response = await session.complete_gemini(model=model, gemini_payload=gemini_payload)
+                gemini_response = await session.complete_gemini(model=model, gemini_payload=gemini_payload, skip_probe=True)
                 image_items.extend(
                     OAIResponseConverter.gemini_json_to_oai_image_data(
                         gemini_response,

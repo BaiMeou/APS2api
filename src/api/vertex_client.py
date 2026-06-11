@@ -74,10 +74,14 @@ class VertexAIClient:
         async for chunk in self._node_pool.stream(model, gemini_payload=gemini_payload, **kwargs):
             yield chunk
 
+
+
     def _build_request_payload(self, model: str, gemini_payload: dict[str, Any], recaptcha_token: str, kwargs: dict[str, Any]) -> dict[str, Any]:
         """构建上游请求体（共用逻辑）"""
+        native_passthrough = kwargs.pop("native_passthrough", False)
         dummy_original_body = {"variables": {}}
-        new_variables = self.transformer.build_vertex_payload(
+        builder = self.transformer.build_vertex_payload_native if native_passthrough else self.transformer.build_vertex_payload
+        new_variables = builder(
             model=model, gemini_payload=gemini_payload,
             original_body=dummy_original_body, kwargs=kwargs
         )['variables']
@@ -388,6 +392,7 @@ class VertexAIClient:
         session_override = kwargs.pop("session_override", None)
         session_proxy_override = kwargs.pop("session_proxy_override", None)
         worker_override = kwargs.pop("worker_override", None)
+        skip_probe = kwargs.pop("skip_probe", False)
         content_yielded = False
         recaptcha_token = None
         is_first_auth_attempt = True
@@ -409,11 +414,15 @@ class VertexAIClient:
 
                 try:
                     chunk_count = 0
-                    probe_model = "gemini-2.5-flash"
-                    probe_payload = {"contents": [{"parts": [{"text": "Hello"}]}]}
                     
-                    current_model = probe_model if is_first_auth_attempt else model
-                    current_payload = probe_payload if is_first_auth_attempt else gemini_payload
+                    if skip_probe:
+                        current_model = model
+                        current_payload = gemini_payload
+                    else:
+                        probe_model = "gemini-2.5-flash"
+                        probe_payload = {"contents": [{"parts": [{"text": "Hello"}]}]}
+                        current_model = probe_model if is_first_auth_attempt else model
+                        current_payload = probe_payload if is_first_auth_attempt else gemini_payload
                     
                     async for chunk in self._execute_streaming_attempt(
                         session, current_model, current_payload, recaptcha_token, kwargs,

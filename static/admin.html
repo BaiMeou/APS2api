@@ -50,11 +50,19 @@
       <div class="sidebar-brand-div"></div>
     </div>
 
+    <div class="sidebar-control" id="sidebarParallelControl">
+      <span class="sidebar-status-lbl" id="sidebarLabel">并行模式</span>
+      <label class="mini-tog" id="parallelTogWrap">
+        <input type="checkbox" id="sidebarParallelTog">
+        <span class="mini-tog-track"><span class="mini-tog-thumb"></span></span>
+      </label>
+    </div>
+
     <div class="sidebar-status" id="sidebarStatus">
       <div class="sidebar-status-dot"></div>
-      <div class="sidebar-status-text">
-        <span class="sidebar-status-lbl" id="sidebarLabel">无活动节点</span>
-        <span class="sidebar-status-sub" id="sidebarSub">直连</span>
+      <div class="sidebar-status-text" style="flex:1">
+        <span class="sidebar-status-lbl">当前出站代理</span>
+        <span class="sidebar-status-sub" id="sidebarSub">未启用节点</span>
       </div>
     </div>
 
@@ -84,10 +92,7 @@
       <span class="sidebar-foot-ver">v1.0 · 控制面板</span>
     </div>
 
-    <button class="sidebar-stop" id="stopBtn" data-action="stop-proxy">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
-      停止代理 · 恢复并发
-    </button>
+
   </aside>
 
   <!-- CONTENT -->
@@ -212,13 +217,6 @@
           <div class="s-hd"><div><div class="s-title">并行请求池</div><div class="s-sub">同时尝试多个节点，谁先成功就使用谁，明显降低坏节点造成的等待。</div></div></div>
           <div class="s-body">
             <div style="display:flex;flex-direction:column;gap:10px">
-              <div class="toggle-row">
-                <div class="toggle-info">
-                  <div class="t-title">启用并行节点请求</div>
-                  <div class="t-sub">开启后每次流式请求会同时派发到多个节点，首个成功返回后自动取消其它请求。</div>
-                </div>
-                <label class="tog"><input type="checkbox" id="parallel_pool_enabled"><span class="tog-track"><span class="tog-thumb"></span></span></label>
-              </div>
               <div class="grid">
                 <div class="field">
                   <label>并行池大小</label>
@@ -413,9 +411,9 @@
 
             <div class="select-bar" style="display:flex">
               <span class="select-bar-label">代理内核</span>
-              <span id="coreSummary" style="font-size:11px;color:var(--text-muted)">测试 VLESS / VMess / Trojan / Clash 等节点前需要内核可用</span>
+              <span id="coreSummary" style="font-size:11px;color:var(--text-muted)"></span>
               <button class="btn btn-sm" data-action="check-core">检查内核</button>
-              <button class="btn btn-sm btn-primary" id="prepareCoreBtn" data-action="prepare-core">准备/下载内核</button>
+              <button class="btn btn-sm btn-primary" id="prepareCoreBtn" data-action="prepare-core">下载内核</button>
             </div>
 
             <div id="poolBar" class="pool-bar" style="display:none">
@@ -436,12 +434,12 @@
         </div>
 
         <div class="section">
-          <div class="s-hd"><div><div class="s-title">手动代理地址</div><div class="s-sub">不用订阅？直接填一个 http/socks5 代理地址。留空则直连。</div></div></div>
+          <div class="s-hd"><div><div class="s-title">手动代理地址</div><div class="s-sub">保存外部 http/socks5 代理。</div></div></div>
           <div class="s-body">
             <div class="field">
                 <label>代理地址</label>
-              <input type="text" id="proxy_url" placeholder="http://host:port  /  socks5://host:port  /  空=直连">
-              <div class="fhint">支持 <code>http://</code> · <code>https://</code> · <code>socks5://</code></div>
+              <input type="text" id="proxy_url" placeholder="http://host:port  /  socks5://host:port">
+              <div class="fhint">支持 <code>http://</code> · <code>https://</code> · <code>socks5://</code>；保存后将作为手动外部代理使用。</div>
               <div id="envOverrideWarn" class="fwarn" style="display:none;margin-top:6px"></div>
             </div>
             <div class="actions">

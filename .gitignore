@@ -24,6 +24,7 @@ env/
 
 # Runtime output
 logs/
+tests/
 errors/
 bin/
 

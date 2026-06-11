@@ -32,7 +32,7 @@ class PortLeaseAllocator:
     def __init__(self) -> None:
         self._leased: set[int] = set()
         self._lock = asyncio.Lock()
-        self._waiters: deque[asyncio.Future[PortLease]] = deque()
+        self._waiters: deque[tuple[asyncio.Future[PortLease], str]] = deque()
         self._cursor = 0
 
     def _range_from_config(self) -> tuple[int, int]:
@@ -68,15 +68,31 @@ class PortLeaseAllocator:
             return PortLease(port=port)
         return None
 
+    def _find_available_port_from_base_locked(self) -> PortLease | None:
+        base, span = self._range_from_config()
+        for offset in range(span):
+            port = base + offset
+            if port in self._leased:
+                continue
+            if not self._is_os_port_available(port):
+                continue
+            self._leased.add(port)
+            logger.debug(f"端口租约：从 base 分配 127.0.0.1:{port}, 已租用={len(self._leased)}/{span}")
+            return PortLease(port=port)
+        return None
+
     def _process_waiters_locked(self) -> None:
         base, span = self._range_from_config()
         while self._waiters:
-            waiter = self._waiters[0]
+            waiter, strategy = self._waiters[0]
             if waiter.cancelled():
                 self._waiters.popleft()
                 continue
 
-            lease = self._find_available_port_locked()
+            if strategy == "base":
+                lease = self._find_available_port_from_base_locked()
+            else:
+                lease = self._find_available_port_locked()
             if lease is None:
                 logger.warning(
                     f"端口租约：端口池暂无可用资源 base={base}, span={span}, "
@@ -89,10 +105,22 @@ class PortLeaseAllocator:
 
     async def acquire(self) -> PortLease:
         """Submit a port-use request and wait until allocator grants a lease."""
+        return await self._acquire("cursor")
+
+    async def acquire_from_base(self) -> PortLease:
+        """Acquire the first available port from the configured base.
+
+        This is intended for single-node workers that stop the previous worker
+        before starting the next one. It deliberately does not advance the
+        cursor used by parallel worker allocation.
+        """
+        return await self._acquire("base")
+
+    async def _acquire(self, strategy: str) -> PortLease:
         loop = asyncio.get_running_loop()
         waiter: asyncio.Future[PortLease] = loop.create_future()
         async with self._lock:
-            self._waiters.append(waiter)
+            self._waiters.append((waiter, strategy))
             logger.debug(f"端口租约：收到使用申请，排队申请={len(self._waiters)}")
             self._process_waiters_locked()
 

@@ -26,7 +26,7 @@ from pydantic import BaseModel
 from src.core.auth import api_key_manager
 from src.core.config import load_config
 from src.api.network import NetworkClient
-from src.transport.worker import worker
+from src.transport.worker import terminate_process_tree, worker
 from src.transport.codec import build_config, needs_worker
 from src.transport.port_allocator import PortLease, port_allocator
 from src.utils.node_store import (
@@ -591,12 +591,12 @@ class EnableNodeBody(BaseModel):
     raw_uri: str
 
 
-def _clear_active_proxy_if_missing(active_keys: set[str]) -> bool:
+async def _clear_active_proxy_if_missing(active_keys: set[str]) -> bool:
     cfg = _read_json(CONFIG_FILE, {})
     active_uri = str(cfg.get("active_node_uri") or "").strip()
     if not active_uri or node_key(active_uri) in active_keys:
         return False
-    worker.stop()
+    await worker.stop_async()
     cfg["proxy_url"] = ""
     cfg["active_node_uri"] = ""
     cfg["active_node_name"] = ""
@@ -604,12 +604,12 @@ def _clear_active_proxy_if_missing(active_keys: set[str]) -> bool:
     return True
 
 
-def _clear_active_proxy_if_uri(raw_uri: str) -> bool:
+async def _clear_active_proxy_if_uri(raw_uri: str) -> bool:
     cfg = _read_json(CONFIG_FILE, {})
     active_uri = str(cfg.get("active_node_uri") or "").strip()
     if not active_uri or node_key(active_uri) != node_key(raw_uri):
         return False
-    worker.stop()
+    await worker.stop_async()
     cfg["proxy_url"] = ""
     cfg["active_node_uri"] = ""
     cfg["active_node_name"] = ""
@@ -686,12 +686,7 @@ class _NodeTestWorker:
         if proc is not None:
             try:
                 if proc.poll() is None:
-                    proc.terminate()
-                    try:
-                        await asyncio.to_thread(proc.wait, 3)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                        await asyncio.to_thread(proc.wait, 2)
+                    await asyncio.to_thread(terminate_process_tree, proc, "Node test worker")
             except Exception as e:
                 logger.debug(f"预检 worker 停止失败: {e}")
             finally:
@@ -877,6 +872,12 @@ async def update_settings(body: SettingsBody, request: Request) -> dict[str, Any
 
     if body.parallel_pool_enabled is not None:
         cfg["parallel_pool_enabled"] = bool(body.parallel_pool_enabled)
+        if bool(body.parallel_pool_enabled):
+            from src.transport.worker import worker
+            await worker.stop_async()
+            cfg["proxy_url"] = ""
+            cfg["active_node_uri"] = ""
+            cfg["active_node_name"] = ""
 
     if body.parallel_pool_max_size is not None:
         if body.parallel_pool_max_size < 1 or body.parallel_pool_max_size > 64:
@@ -1180,7 +1181,7 @@ async def import_nodes_file(request: Request, file: UploadFile = File(...), mode
     saved_nodes = load_nodes()
     active_cleared = False
     if mode == "replace":
-        active_cleared = _clear_active_proxy_if_missing({node_key(str(n.get("raw_uri") or "")) for n in saved_nodes})
+        active_cleared = await _clear_active_proxy_if_missing({node_key(str(n.get("raw_uri") or "")) for n in saved_nodes})
     return {
         "status": "ok",
         "mode": mode,
@@ -1205,7 +1206,7 @@ async def delete_unified_node(body: DeleteNodeBody, request: Request) -> dict[st
     result = delete_node(raw_uri)
     if not result.get("deleted"):
         raise HTTPException(status_code=404, detail="未找到该节点")
-    active_cleared = _clear_active_proxy_if_uri(raw_uri)
+    active_cleared = await _clear_active_proxy_if_uri(raw_uri)
     return {
         "status": "ok",
         "deleted": True,
@@ -1277,23 +1278,27 @@ async def delete_disabled_unified_nodes(request: Request) -> dict[str, Any]:
     """删除所有 disabled 节点并同步清理健康记录。"""
     _require_auth(request)
     result = delete_disabled_nodes()
-    active_cleared = _clear_active_proxy_if_missing({node_key(str(n.get("raw_uri") or "")) for n in load_nodes()})
+    active_cleared = await _clear_active_proxy_if_missing({node_key(str(n.get("raw_uri") or "")) for n in load_nodes()})
     return {"status": "ok", **result, "active_cleared": active_cleared}
 
 
 @router.get("/api/admin/worker-core")
 async def get_worker_core(request: Request) -> dict[str, Any]:
-    """检查 worker core 状态，不触发下载。"""
+    """检查 worker core 状态，对比最新版本（不触发下载）。"""
     _require_auth(request)
-    return {"status": "ok", **worker.status()}
+    try:
+        s = await asyncio.to_thread(worker.check)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=_summarize_error(e))
+    return {"status": "ok", **s}
 
 
 @router.post("/api/admin/worker-core/prepare")
 async def prepare_worker_core(request: Request) -> dict[str, Any]:
-    """显式准备 worker core；不存在时下载。"""
+    """下载或更新 worker core。不存在时下载，存在但非最新时更新。"""
     _require_auth(request)
     try:
-        binary = await asyncio.to_thread(worker.ensure_binary)
+        binary = await asyncio.to_thread(worker.ensure_binary_updated)
     except Exception as e:
         raise HTTPException(status_code=500, detail=_summarize_error(e))
     return {"status": "ok", "binary_path": binary, **worker.status()}
@@ -1317,6 +1322,8 @@ async def use_node(body: UseNodeBody, request: Request) -> dict[str, Any]:
 
     cfg = _read_json(CONFIG_FILE, {})
 
+    cfg["parallel_pool_enabled"] = False
+
     pool = cfg.get("node_pool", [])
     if isinstance(pool, list) and len(pool) > 1:
         start_idx = next((i for i, node in enumerate(pool) if str(node.get("raw_uri", "")).strip() == uri), -1)
@@ -1332,10 +1339,10 @@ async def use_node(body: UseNodeBody, request: Request) -> dict[str, Any]:
     if needs_worker(uri):
         # 通过内置 worker 做协议转换
         try:
-            proxy_url = worker.start_with_uri(uri, name=body.name or "")
+            proxy_url = await worker.start_with_uri_async(uri, name=body.name or "")
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
-        cfg["proxy_url"] = proxy_url
+        cfg["proxy_url"] = ""
         cfg["active_node_uri"] = uri
         cfg["active_node_name"] = body.name or ""
         _write_json(CONFIG_FILE, cfg)
@@ -1346,7 +1353,7 @@ async def use_node(body: UseNodeBody, request: Request) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=f"不支持的协议: {uri[:20]}")
 
     # 切换到直连模式时停掉 worker
-    worker.stop()
+    await worker.stop_async()
     cfg["proxy_url"] = uri
     cfg["active_node_uri"] = uri
     cfg["active_node_name"] = body.name or ""
@@ -1361,16 +1368,17 @@ async def _activate_node_by_uri(uri: str, name: str, pool_index: int = 0) -> str
     """激活指定节点，写入 config，返回 proxy_url（供节点池轮换内部调用）"""
     cfg = _read_json(CONFIG_FILE, {})
     cfg["node_pool_index"] = pool_index
+    cfg["parallel_pool_enabled"] = False
     if needs_worker(uri):
-        proxy_url = worker.start_with_uri(uri, name=name)
-        cfg["proxy_url"] = proxy_url
+        proxy_url = await worker.start_with_uri_async(uri, name=name)
+        cfg["proxy_url"] = ""
         cfg["active_node_uri"] = uri
         cfg["active_node_name"] = name
         _write_json(CONFIG_FILE, cfg)
         return proxy_url
     if not any(uri.startswith(s) for s in ("http://", "https://", "socks5://", "socks://")):
         raise ValueError(f"不支持的协议: {uri[:30]}")
-    worker.stop()
+    await worker.stop_async()
     cfg["proxy_url"] = uri
     cfg["active_node_uri"] = uri
     cfg["active_node_name"] = name
@@ -1490,7 +1498,7 @@ async def activate_node_pool(body: ActivateNodePoolBody, request: Request) -> di
 async def stop_proxy(request: Request) -> dict[str, Any]:
     """停掉 worker、清空代理，回到直连模式"""
     _require_auth(request)
-    worker.stop()
+    await worker.stop_async()
     cfg = _read_json(CONFIG_FILE, {})
     cfg["proxy_url"] = ""
     cfg["active_node_uri"] = ""
@@ -1507,4 +1515,5 @@ async def proxy_status(request: Request) -> dict[str, Any]:
     s["configured_proxy_url"] = cfg.get("proxy_url", "")
     s["active_node_uri"] = cfg.get("active_node_uri", "")
     s["active_node_name"] = cfg.get("active_node_name", "")
+    s["proxy_mode"] = "worker" if s.get("running") and s["active_node_uri"] else ("direct" if cfg.get("proxy_url") else "none")
     return s

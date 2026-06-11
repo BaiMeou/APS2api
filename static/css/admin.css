@@ -217,6 +217,41 @@ label {
   box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 50%, transparent);
 }
 
+.mini-tog {
+  position: relative;
+  width: 32px;
+  height: 18px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.mini-tog input { display: none; }
+.mini-tog-track {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-hover);
+  border-radius: 9px;
+  transition: background var(--transition);
+}
+.mini-tog-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  background: var(--text-dim);
+  border-radius: 50%;
+  transition: all var(--transition);
+  pointer-events: none;
+}
+.mini-tog input:checked ~ .mini-tog-track {
+  background: color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.mini-tog input:checked ~ .mini-tog-track .mini-tog-thumb {
+  left: 16px;
+  background: var(--accent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--accent) 50%, transparent);
+}
+
 /* ─── LOGIN ───────────────────────────────────────────────────────────── */
 
 .login-wrap {
@@ -331,8 +366,20 @@ label {
   background: linear-gradient(180deg, transparent, color-mix(in srgb, var(--accent) 55%, var(--border)), transparent);
 }
 
-.sidebar-status {
+.sidebar-control {
   margin: 14px 12px 0;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+  z-index: 1;
+}
+.sidebar-status {
+  margin: 8px 12px 0;
   padding: 10px 12px;
   background: var(--bg);
   border: 1px solid var(--border);
@@ -362,7 +409,8 @@ label {
   color: var(--text-dim);
 }
 .sidebar-status.active .sidebar-status-lbl { color: var(--accent); }
-.sidebar-status-sub { font-size: 10px; color: var(--text-dim); letter-spacing: 0.05em; }
+.sidebar-status-sub { display: block; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; color: var(--text-dim); letter-spacing: 0.05em; }
+#parallelTogWrap { margin-left: auto; flex: 0 0 auto; }
 
 .sidebar-nav {
   flex: 1;

@@ -1,10 +1,12 @@
 """模型配置构建器"""
 
 import json
+import re
 import time
 from typing import Any, cast
 
 from src.core import MODELS_CONFIG_FILE
+from src.core.config import load_config
 from ..utils.logger import get_logger
 from ..utils.string_utils import snake_to_camel
 
@@ -54,8 +56,30 @@ class ModelConfigBuilder:
     def parse_model_name(self, model: str) -> str:
         """
         解析模型名称，返回 backend_model
+        依次：alias 映射 → 剥离 thinking/effort 后缀
         """
-        return self._get_model_map().get(model, model)
+        backend = self._get_model_map().get(model, model)
+        backend = re.sub(r'-thinking-\d+$', '', backend)
+        backend = re.sub(r'-(no)?thinking$', '', backend)
+        backend = re.sub(r'-effort-\w+$', '', backend)
+        return backend
+    
+    @staticmethod
+    def parse_thinking_suffix(model: str) -> tuple[str, dict[str, Any] | None]:
+        """从模型名解析 thinkingConfig。返回 (clean_model, thinking_config_dict or None)"""
+        # -thinking-<budget>
+        m = re.search(r'^(.*)-thinking-(\d+)$', model)
+        if m:
+            return m.group(1), {"thinkingBudget": int(m.group(2))}
+        # -thinking
+        m = re.search(r'^(.*)-thinking$', model)
+        if m:
+            return m.group(1), {"thinkingLevel": "ENABLED"}
+        # -nothinking
+        m = re.search(r'^(.*)-nothinking$', model)
+        if m:
+            return m.group(1), {"thinkingLevel": "DISABLED"}
+        return model, None
     
     def build_generation_config(
         self,
@@ -123,11 +147,23 @@ class ModelConfigBuilder:
         return value
     
     def build_safety_settings(self) -> list[dict[str, str]]:
-        """构建安全设置"""
+        """构建安全设置，优先使用配置文件中的自定义 threshold"""
+        cfg = load_config()
+        safety_config = cfg.get("safety_settings", {})
+        if not isinstance(safety_config, dict):
+            safety_config = {}
+
+        categories = [
+            "HARM_CATEGORY_HARASSMENT",
+            "HARM_CATEGORY_HATE_SPEECH",
+            "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+            "HARM_CATEGORY_DANGEROUS_CONTENT",
+            "HARM_CATEGORY_CIVIC_INTEGRITY",
+        ]
         return [
-            {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"}
+            {
+                "category": cat,
+                "threshold": safety_config.get(cat, "BLOCK_NONE")
+            }
+            for cat in categories
         ]

@@ -22,7 +22,6 @@ export async function loadSettings() {
   document.getElementById('anti429_enabled').checked = !!s.anti429_enabled;
   document.getElementById('anti429_target').value = s.anti429_target || 'system';
   document.getElementById('force_no_stream').checked = !!s.force_no_stream;
-  document.getElementById('parallel_pool_enabled').checked = !!s.parallel_pool_enabled;
   document.getElementById('parallel_pool_size').value = s.parallel_pool_size || 4;
   document.getElementById('parallel_pool_max_size').value = s.parallel_pool_max_size || 12;
   document.getElementById('parallel_pool_max_rounds').value = s.parallel_pool_max_rounds || 0;
@@ -78,7 +77,6 @@ async function saveStreaming() {
 async function saveParallelPool() {
   try {
     await _api.put('/api/admin/settings', {
-      parallel_pool_enabled: document.getElementById('parallel_pool_enabled').checked,
       parallel_pool_size: parseInt(document.getElementById('parallel_pool_size').value, 10),
       parallel_pool_max_size: parseInt(document.getElementById('parallel_pool_max_size').value, 10),
       parallel_pool_max_rounds: parseInt(document.getElementById('parallel_pool_max_rounds').value, 10),

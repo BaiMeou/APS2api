@@ -145,6 +145,93 @@ class RequestTransformer:
 
         return new_body
 
+    def build_vertex_payload_native(
+        self,
+        model: str,
+        gemini_payload: dict[str, Any],
+        original_body: dict[str, Any],
+        kwargs: dict[str, Any]
+    ) -> dict[str, Any]:
+        """
+        精简版 build_vertex_payload，用于 Gemini Native 入口。
+        跳过不必要的标准化步骤，保留必要的 Vertex 格式转换。
+        """
+        original_vars: Any = original_body.get('variables', {})
+        new_variables: dict[str, Any]
+        if hasattr(original_vars, 'model_dump'):
+            new_variables = cast(dict[str, Any], original_vars.model_dump())
+        elif isinstance(original_vars, dict):
+            new_variables = {str(k): v for k, v in cast(dict[Any, Any], original_vars).items()}
+        else:
+            new_variables = {}
+
+        target_model = self.model_builder.parse_model_name(model)
+        new_variables['model'] = target_model
+
+        supported_fields = self._supported_variable_fields()
+
+        try:
+            from src.core.types import GeminiPayload
+            gemini_payload_obj = GeminiPayload.model_validate(gemini_payload)
+            dumped_payload = gemini_payload_obj.model_dump(by_alias=True, exclude_none=True)
+            for field in supported_fields:
+                if field in dumped_payload:
+                    new_variables[field] = dumped_payload[field]
+        except Exception as e:
+            logger.debug(f"Pydantic validation failed in native, using basic: {e}")
+            for field in supported_fields:
+                if field in gemini_payload:
+                    new_variables[field] = gemini_payload[field]
+                else:
+                    snake_field = camel_to_snake(field)
+                    if snake_field in gemini_payload:
+                        new_variables[field] = gemini_payload[snake_field]
+
+        # Native: only base64 handling, skip _normalize_contents, _handle_system_instruction,
+        # _filter_empty_contents, encode_thought_signature, _handle_inline_data_case
+        if 'contents' in new_variables:
+            new_variables['contents'] = handle_base64_in_contents(new_variables['contents'])
+
+        if 'tools' in new_variables:
+            normalized_tools = self._normalize_tools_format(new_variables['tools'])
+            if normalized_tools:
+                new_variables['tools'] = normalized_tools
+            else:
+                del new_variables['tools']
+                if 'toolConfig' in new_variables:
+                    del new_variables['toolConfig']
+
+        if 'toolConfig' in new_variables:
+            new_variables['toolConfig'] = self._convert_tools_format(new_variables['toolConfig'])
+
+        gen_config = self.model_builder.build_generation_config(
+            gen_config={},
+            gemini_payload=gemini_payload,
+            **kwargs
+        )
+        if gen_config:
+            new_variables['generationConfig'] = gen_config
+
+        cfg = load_config()
+        if cfg.get("drop_max_tokens", True) and 'generationConfig' in new_variables:
+            new_variables['generationConfig'].pop('maxOutputTokens', None)
+            if not new_variables['generationConfig']:
+                del new_variables['generationConfig']
+
+        if 'safetySettings' not in new_variables and 'safety_settings' not in gemini_payload:
+            new_variables['safetySettings'] = self.model_builder.build_safety_settings()
+
+        new_body: dict[str, Any] = {
+            "querySignature": original_body.get('querySignature'),
+            "operationName": original_body.get('operationName'),
+            "variables": new_variables
+        }
+
+        if new_variables.get('contents'):
+            logger.info(f"[Vertex Payload Native Contents] (model={model}): {json.dumps(new_variables.get('contents'), ensure_ascii=False, default=str)[:2000]}")
+
+        return new_body
+
     def _supported_variable_fields(self) -> list[str]:
         """Gemini 下游请求可透传到上游 variables 的字段。"""
         return [
@@ -340,7 +427,7 @@ class RequestTransformer:
         """
         new_schema: dict[str, Any] = schema.copy()
         unsupported_keys = {
-            '$schema', '$id', '$defs', 'definitions', 'additionalProperties',
+            '$schema', '$id', '$defs', '$ref', 'definitions', 'additionalProperties',
             'patternProperties', 'unevaluatedProperties', 'dependentSchemas',
             'if', 'then', 'else', 'allOf', 'anyOf', 'oneOf', 'not',
             'examples', 'default', 'nullable'
@@ -400,7 +487,7 @@ class RequestTransformer:
         
         native_schema = standard_schema.copy()
         unsupported_keys = {
-            '$schema', '$id', '$defs', 'definitions', 'additionalProperties',
+            '$schema', '$id', '$defs', '$ref', 'definitions', 'additionalProperties',
             'patternProperties', 'unevaluatedProperties', 'dependentSchemas',
             'if', 'then', 'else', 'allOf', 'anyOf', 'oneOf', 'not',
             'examples', 'default', 'nullable'
