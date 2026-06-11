@@ -45,6 +45,7 @@ async def main() -> None:
     merge_default_config_file()
     
     config = load_config()
+    configure_logging(debug=config.get("debug", False), log_dir=config.get("log_dir", "logs"))
     debug_mode = config.get("debug", False)
     
     logger.info("=" * 60)
@@ -119,10 +120,6 @@ async def main() -> None:
         logger.success("✅ 资源清理完成，服务已安全关闭")
 
 def main_sync() -> None:
-    from src.core.config import load_config, merge_default_config_file
-    merge_default_config_file()
-    config = load_config()
-    configure_logging(debug=config.get("debug", False), log_dir=config.get("log_dir", "logs"))
     try:
         asyncio.run(main())
     except KeyboardInterrupt:

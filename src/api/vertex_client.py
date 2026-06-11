@@ -1,7 +1,11 @@
 """Vertex AI客户端"""
 
 import asyncio
+import glob
 import json
+import os
+import tempfile
+import time
 from typing import Any, Awaitable, Callable, cast, AsyncGenerator
 
 from src.core.config import load_config
@@ -31,6 +35,8 @@ class VertexAIClient:
     def __init__(self):
         logger.info("初始化 Vertex AI 客户端")
 
+        self._cleanup_old_temp_files()
+
         self.config = load_config()
 
         self.model_builder = ModelConfigBuilder()
@@ -42,6 +48,17 @@ class VertexAIClient:
         self._node_pool = ParallelNodePool(self.network, self._stream_realtime_inner)
 
         logger.success("Vertex AI 客户端初始化完成")
+
+    @staticmethod
+    def _cleanup_old_temp_files() -> None:
+        now = time.time()
+        pattern = os.path.join(tempfile.gettempdir(), "parallel-worker-*")
+        for f in glob.glob(pattern):
+            try:
+                if os.path.getmtime(f) < now:
+                    os.remove(f)
+            except Exception:
+                pass
 
     async def close(self):
         """关闭客户端并释放资源"""
@@ -131,6 +148,7 @@ class VertexAIClient:
             if response.status_code != 200:
                 error_bytes = await response.aread()
                 error_text_str = error_bytes.decode('utf-8') if isinstance(error_bytes, bytes) else str(error_bytes)
+                await response.aclose()
                 if response.status_code in [401, 403] or "Failed to verify action" in error_text_str or "The caller does not have permission" in error_text_str:
                     raise AuthenticationError(message=f"Authentication/Recaptcha failed: {error_text_str}", upstream_response=error_text_str)
                 parsed_error = parse_error_response(error_text_str)

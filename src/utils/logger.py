@@ -172,14 +172,18 @@ class LoggerManager:
             h.setLevel(self._log_level)
             
         if log_file:
-            os.makedirs(os.path.dirname(log_file), exist_ok=True)
-            # 使用 'w' 模式在每次启动时清空日志文件
-            file_h = logging.FileHandler(log_file, mode='w', encoding='utf-8', delay=False)
-            file_h.setFormatter(BetterFormatter(use_colors=False))
-            file_h.setLevel(self._log_level)
-            # 立即刷新，确保日志写入
-            file_h.flush()
-            root.addHandler(file_h)
+            abs_log_file = os.path.abspath(log_file)
+            for h in root.handlers:
+                if isinstance(h, logging.FileHandler) and os.path.abspath(h.baseFilename) == abs_log_file:
+                    h.setLevel(self._log_level)
+                    break
+            else:
+                os.makedirs(os.path.dirname(log_file), exist_ok=True)
+                file_h = logging.FileHandler(log_file, mode='w', encoding='utf-8', delay=False)
+                file_h.setFormatter(BetterFormatter(use_colors=False))
+                file_h.setLevel(self._log_level)
+                file_h.flush()
+                root.addHandler(file_h)
 
 class LoggerAdapter(logging.LoggerAdapter):  # type: ignore[type-arg]
     """增加便捷方法的 Logger 适配器"""

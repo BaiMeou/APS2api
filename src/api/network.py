@@ -27,7 +27,6 @@ class NetworkClient:
     """底层网络客户端"""
     
     def __init__(self):
-        self.config = load_config()
         self.recaptcha_base_api = "https://www.google.com"
         self.browser_targets = ["chrome124", "chrome131"]
         if self.proxy_url:

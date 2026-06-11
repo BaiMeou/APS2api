@@ -1,5 +1,6 @@
 """FastAPI路由模块"""
 
+import asyncio
 import base64
 import json
 import mimetypes
@@ -252,8 +253,11 @@ def create_app(vertex_client: VertexAIClient) -> FastAPI:
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
     # 挂载管理后台路由
-    from src.api.admin import router as admin_router
+    from src.api.admin import router as admin_router, session_cleanup_loop
     app.include_router(admin_router)
+
+    # 启动后台 session 清理任务
+    asyncio.create_task(session_cleanup_loop())
 
     # ==================== 全局异常处理 ====================
     

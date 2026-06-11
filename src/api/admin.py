@@ -112,6 +112,14 @@ def ensure_admin_password() -> str:
     return new_pw
 
 
+def _cleanup_expired_sessions() -> int:
+    now = time.time()
+    expired = [k for k, v in _sessions.items() if v < now]
+    for k in expired:
+        _sessions.pop(k, None)
+    return len(expired)
+
+
 def _issue_token() -> str:
     tok = secrets.token_urlsafe(32)
     _sessions[tok] = time.time() + SESSION_TTL
@@ -781,6 +789,11 @@ async def admin_login(body: LoginBody) -> dict[str, Any]:
     if body.password != expected:
         await asyncio.sleep(0.5)  # 轻微延迟
         raise HTTPException(status_code=401, detail="密码错误")
+
+    _cleanup_expired_sessions()
+    if len(_sessions) >= 100:
+        raise HTTPException(status_code=429, detail="会话数量过多，请稍后再试")
+
     tok = _issue_token()
     return {"token": tok, "ttl_seconds": SESSION_TTL}
 
@@ -1517,3 +1530,12 @@ async def proxy_status(request: Request) -> dict[str, Any]:
     s["active_node_name"] = cfg.get("active_node_name", "")
     s["proxy_mode"] = "worker" if s.get("running") and s["active_node_uri"] else ("direct" if cfg.get("proxy_url") else "none")
     return s
+
+
+async def session_cleanup_loop(interval: int = 3600) -> None:
+    """后台定期清理过期 session token。"""
+    while True:
+        await asyncio.sleep(interval)
+        removed = _cleanup_expired_sessions()
+        if removed:
+            logger.info(f"[SessionCleanup] 已清理 {removed} 个过期 token")
