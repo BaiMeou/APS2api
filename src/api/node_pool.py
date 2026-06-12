@@ -85,7 +85,7 @@ class ParallelNodeWorker:
         self.proc: subprocess.Popen[bytes] | None = None
 
     async def start(self) -> str:
-        binary = worker.ensure_binary()
+        binary = await asyncio.to_thread(worker.ensure_binary)
         self.lease = await port_allocator.acquire()
         self.port = self.lease.port
         self.proxy_url = f"socks5://127.0.0.1:{self.lease.port}"

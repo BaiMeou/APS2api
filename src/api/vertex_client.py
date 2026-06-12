@@ -153,23 +153,29 @@ class VertexAIClient:
                 raise raise_for_status(code=response.status_code, message=f"Upstream Error: {error_text_str}", upstream_response=error_text_str)
 
             buffer = ""
+            scan_pos = 0
+            start_idx = 0
+            brace_count = 0
+            in_string = False
+            escape = False
             async for chunk in response.aiter_content():
                 if not chunk: continue
                 text_chunk = chunk.decode('utf-8') if isinstance(chunk, bytes) else chunk
                 buffer += text_chunk
-                
+
                 while True:
-                    start_idx = buffer.find('{')
-                    if start_idx == -1:
-                        buffer = ""
-                        break
-                    
-                    brace_count = 0
-                    in_string = False
-                    escape = False
+                    if scan_pos == 0:
+                        start_idx = buffer.find('{')
+                        if start_idx == -1:
+                            buffer = ""
+                            break
+                        scan_pos = start_idx
+                        brace_count = 0
+                        in_string = False
+                        escape = False
+
                     end_idx = -1
-                    
-                    for i in range(start_idx, len(buffer)):
+                    for i in range(scan_pos, len(buffer)):
                         char = buffer[i]
                         if escape:
                             escape = False
@@ -180,7 +186,7 @@ class VertexAIClient:
                         if char == '"':
                             in_string = not in_string
                             continue
-                            
+
                         if not in_string:
                             if char == '{':
                                 brace_count += 1
@@ -189,11 +195,12 @@ class VertexAIClient:
                                 if brace_count == 0:
                                     end_idx = i
                                     break
-                                    
+
                     if end_idx != -1:
-                        json_str = buffer[start_idx:end_idx+1]
-                        buffer = buffer[end_idx+1:]
-                        
+                        json_str = buffer[start_idx:end_idx + 1]
+                        buffer = buffer[end_idx + 1:]
+                        scan_pos = 0
+
                         try:
                             obj = json.loads(json_str)
                             async for chunk_data in self._process_streaming_object(obj):
@@ -201,7 +208,7 @@ class VertexAIClient:
                         except json.JSONDecodeError:
                             pass
                     else:
-                        buffer = buffer[start_idx:]
+                        scan_pos = len(buffer)
                         break
 
     async def _process_streaming_object(self, obj: dict[str, Any]) -> AsyncGenerator[dict[str, Any], None]:
