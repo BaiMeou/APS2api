@@ -234,6 +234,28 @@ class OAIRequestConverter:
         elif _looks_like_image_model(model):
             gen_cfg.setdefault("responseModalities", ["TEXT", "IMAGE"])
 
+        # Image resolution control for chat-based image generation. Image models
+        # honor generationConfig.imageConfig.imageSize; expose it to chat clients
+        # via image_size/imageSize/size (and a raw imageConfig passthrough).
+        # Only image models are affected, and an explicit imageConfig is left
+        # byte-for-byte untouched so existing behavior is preserved.
+        if _looks_like_image_model(model):
+            raw_image_config = body.get("imageConfig")
+            existing_image_config = gen_cfg.get("imageConfig")
+            if isinstance(raw_image_config, dict) and raw_image_config:
+                if isinstance(existing_image_config, dict):
+                    existing_image_config.update(raw_image_config)
+                else:
+                    gen_cfg["imageConfig"] = dict(raw_image_config)
+            elif not isinstance(existing_image_config, dict) or "imageSize" not in existing_image_config:
+                image_size = _resolve_chat_image_size(body)
+                if image_size:
+                    img_cfg = gen_cfg.get("imageConfig")
+                    if not isinstance(img_cfg, dict):
+                        img_cfg = {}
+                        gen_cfg["imageConfig"] = img_cfg
+                    img_cfg["imageSize"] = image_size
+
         if gen_cfg:
             gemini_payload["generationConfig"] = gen_cfg
 
@@ -962,6 +984,74 @@ def _size_to_image_size(size: Any) -> str | None:
     if max_side >= 1500:
         return "2K"
     return "1K"
+
+
+# Image resolution tiers accepted directly from chat requests. The "K" suffix is
+# uppercase by design and must be forwarded to the upstream verbatim.
+_CHAT_IMAGE_SIZE_TIERS = {"512", "1K", "2K", "4K"}
+
+# Pixel long-edge thresholds -> tier, evaluated largest first.
+_PIXEL_IMAGE_SIZE_TIERS = [
+    (4096, "4K"),
+    (2048, "2K"),
+    (1024, "1K"),
+    (512, "512"),
+]
+
+
+def _pixels_to_image_size(px: int) -> str | None:
+    """Map a pixel long-edge to the closest tier not exceeding it; below 512 -> None."""
+    for threshold, tier in _PIXEL_IMAGE_SIZE_TIERS:
+        if px >= threshold:
+            return tier
+    return None
+
+
+def _normalize_chat_image_size(value: Any) -> str | None:
+    """Normalize a chat-supplied resolution into a Gemini image-size tier.
+
+    Accepts tier strings (512/1K/2K/4K, case-insensitive -> canonical uppercase),
+    raw pixel counts (int/float/digit string), and WxH dimension strings. Returns
+    None for anything unrecognized so callers can leave the payload untouched.
+    """
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return _pixels_to_image_size(int(value))
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    upper = text.upper()
+    if upper in _CHAT_IMAGE_SIZE_TIERS:
+        return upper
+    lower = text.lower()
+    if "x" in lower:
+        try:
+            width_str, height_str = lower.split("x", 1)
+            return _pixels_to_image_size(max(int(width_str.strip()), int(height_str.strip())))
+        except (ValueError, TypeError):
+            return None
+    if text.isdigit():
+        return _pixels_to_image_size(int(text))
+    return None
+
+
+def _resolve_chat_image_size(body: dict[str, Any]) -> str | None:
+    """Resolve the requested image-size tier from a chat request body, if any.
+
+    Priority: image_size > imageSize > size. Returns None when no usable value is
+    present so the generationConfig is left unchanged.
+    """
+    for key in ("image_size", "imageSize", "size"):
+        if body.get(key) is not None:
+            tier = _normalize_chat_image_size(body.get(key))
+            if tier is not None:
+                return tier
+    return None
 
 
 def _iter_response_parts(gemini_response: dict[str, Any]) -> list[dict[str, Any]]:
