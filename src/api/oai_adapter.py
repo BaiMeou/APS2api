@@ -580,6 +580,16 @@ def _convert_content_to_parts(content: Any) -> list[dict[str, Any]]:
                     image_part = _image_url_to_part(str(url or ""))
                     if image_part:
                         parts.append(image_part)
+                elif t in {"video_url", "input_video"}:
+                    # Inline small video clips as base64 inlineData. Accepts both
+                    # {"type":"video_url","video_url":{"url":"data:video/mp4;base64,..."}}
+                    # and {"type":"input_video","input_video":{"url":"data:..."}},
+                    # as well as a bare-string form {"type":"video_url","video_url":"data:..."}.
+                    video_obj = item.get("video_url") or item.get("input_video") or {}
+                    url = video_obj.get("url") if isinstance(video_obj, dict) else video_obj
+                    video_part = _video_url_to_part(str(url or ""))
+                    if video_part:
+                        parts.append(video_part)
                 elif "text" in item and len(item) == 1:
                     parts.append({"text": str(item["text"])})
     return parts
@@ -704,6 +714,23 @@ def _image_url_to_part(url: str) -> dict[str, Any] | None:
     if url.startswith(("http://", "https://", "gs://")):
         return {"fileData": {"mimeType": _guess_mime_from_url(url), "fileUri": url}}
     return None
+
+
+def _video_url_to_part(url: str) -> dict[str, Any] | None:
+    """Convert an OpenAI video content block URL to a Gemini part.
+
+    Only inline base64 data: URIs are supported. If the data: URI does not
+    declare a video/* mime type, fall back to video/mp4 so the clip is not
+    misclassified as an image downstream.
+    """
+    if not url or not url.startswith("data:"):
+        return None
+    mime, b64 = _parse_data_uri(url)
+    if not b64:
+        return None
+    if not mime or not mime.startswith("video/"):
+        mime = "video/mp4"
+    return {"inlineData": {"mimeType": mime, "data": normalize_base64(b64)}}
 
 
 def _parse_gemini_sse(chunk: str) -> dict[str, Any] | None:
