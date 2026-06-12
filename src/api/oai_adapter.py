@@ -9,6 +9,8 @@ import math
 import time
 import uuid
 import copy
+import base64
+import binascii
 from typing import Any
 
 from src.utils.logger import get_logger
@@ -23,6 +25,39 @@ OPENAI_IMAGE_MODEL_ALIASES = {
     "gpt-image-1",
     "dall-e-2",
     "dall-e-3",
+}
+
+# Default Gemini model for text-to-speech requests. OpenAI TTS model names
+# (e.g. tts-1, gpt-4o-mini-tts) fall back to this.
+DEFAULT_TTS_MODEL = "gemini-3.1-flash-tts-preview"
+OPENAI_TTS_MODEL_ALIASES = {
+    "tts-1",
+    "tts-1-hd",
+    "gpt-4o-mini-tts",
+}
+
+# OpenAI voice names -> Gemini prebuilt voice names.
+OPENAI_VOICE_MAP = {
+    "alloy": "Kore",
+    "echo": "Puck",
+    "fable": "Charon",
+    "onyx": "Fenrir",
+    "nova": "Aoede",
+    "shimmer": "Leda",
+    "ash": "Orus",
+    "ballad": "Zephyr",
+    "coral": "Aoede",
+    "sage": "Charon",
+    "verse": "Puck",
+}
+DEFAULT_TTS_VOICE = "Kore"
+# Native Gemini prebuilt voice names: passed through verbatim if requested.
+GEMINI_VOICE_NAMES = {
+    "Kore", "Puck", "Charon", "Aoede", "Fenrir", "Leda", "Orus", "Zephyr",
+    "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba", "Despina",
+    "Erinome", "Algenib", "Rasalgethi", "Laomedeia", "Achernar", "Alnilam",
+    "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi", "Vindemiatrix",
+    "Sadachbia", "Sadaltager", "Sulafat",
 }
 
 FINISH_REASON_MAP = {
@@ -344,6 +379,50 @@ class OAIImageRequestConverter:
         }
 
 
+class OAITTSRequestConverter:
+    """OpenAI Audio Speech (TTS) → Gemini generateContent 请求转换"""
+
+    @staticmethod
+    def resolve_model(model: Any) -> str:
+        if not model:
+            return DEFAULT_TTS_MODEL
+        model_str = str(model).strip()
+        if not model_str or model_str in OPENAI_TTS_MODEL_ALIASES or not model_str.startswith("gemini"):
+            return DEFAULT_TTS_MODEL
+        return model_str
+
+    @staticmethod
+    def resolve_voice(voice: Any) -> str:
+        if not isinstance(voice, str) or not voice.strip():
+            return DEFAULT_TTS_VOICE
+        candidate = voice.strip()
+        if candidate in GEMINI_VOICE_NAMES:
+            return candidate
+        return OPENAI_VOICE_MAP.get(candidate.lower(), DEFAULT_TTS_VOICE)
+
+    @staticmethod
+    def build_payload(text: str, voice: str, speed: Any = None) -> dict[str, Any]:
+        prompt = text
+        try:
+            rate = float(speed) if speed is not None else 1.0
+        except (TypeError, ValueError):
+            rate = 1.0
+        if rate and abs(rate - 1.0) > 1e-6:
+            # The anonymous endpoint does not reliably honor speakingRate, so steer
+            # pacing through a natural-language style instruction instead.
+            pace = "more slowly" if rate < 1.0 else "faster"
+            prompt = f"Say the following {pace}: {text}"
+        return {
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "responseModalities": ["AUDIO"],
+                "speechConfig": {
+                    "voiceConfig": {"prebuiltVoiceConfig": {"voiceName": voice}}
+                },
+            },
+        }
+
+
 class OAIResponseConverter:
     """Gemini → OpenAI 响应转换"""
 
@@ -445,6 +524,34 @@ class OAIResponseConverter:
             else:
                 items.append({"b64_json": b64_data})
         return items
+
+    @staticmethod
+    def gemini_json_to_oai_audio(gemini_response: dict[str, Any]) -> tuple[bytes, str]:
+        """从 Gemini 响应中抽取 TTS 音频原始字节。
+
+        Gemini TTS 把整段音频切成多段 inlineData（每段一小块 L16 PCM）放在
+        candidate.content.parts[]，必须把所有音频段按序拼接，否则只取第一段会被
+        截断成几十毫秒。返回 (拼接后的裸 PCM 字节, mimeType)。
+        """
+        raw = bytearray()
+        mime_type = ""
+        for part in _iter_response_parts(gemini_response):
+            inline = part.get("inlineData") or part.get("inline_data")
+            if not isinstance(inline, dict):
+                continue
+            data = inline.get("data")
+            if not (isinstance(data, str) and data.strip()):
+                continue
+            part_mime = str(inline.get("mimeType") or inline.get("mime_type") or "")
+            if part_mime and not part_mime.startswith("audio/"):
+                continue
+            if not mime_type:
+                mime_type = part_mime or "audio/L16;rate=24000"
+            try:
+                raw += base64.b64decode(normalize_base64(data))
+            except (ValueError, binascii.Error):
+                continue
+        return bytes(raw), (mime_type or "audio/L16;rate=24000")
 
 
 # ==================== 内部工具函数 ====================

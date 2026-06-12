@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import mimetypes
+import struct
 import time
 import uuid
 import random
@@ -11,7 +12,7 @@ import string
 from typing import Any, AsyncGenerator, cast
 import collections.abc
 from fastapi import FastAPI, Request, UploadFile
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.datastructures import UploadFile as StarletteUploadFile
@@ -28,7 +29,7 @@ from src.core.errors import (
 )
 from src.api.vertex_client import VertexAIClient
 from src.api.session_pool import business_session
-from src.api.oai_adapter import OAIImageRequestConverter, OAIRequestConverter, OAIResponseConverter
+from src.api.oai_adapter import OAIImageRequestConverter, OAIRequestConverter, OAIResponseConverter, OAITTSRequestConverter
 from src.api.transform import _is_safety_block
 from src.core.auth import api_key_manager
 from src.utils.logger import get_logger, set_request_id
@@ -756,6 +757,63 @@ def create_app(vertex_client: VertexAIClient) -> FastAPI:
     app.post("/v1/images/edits", response_model=None)(oai_images_edits)
     app.post("/v1/images/variations", response_model=None)(oai_images_variations)
 
+    # ==================== OpenAI 音频兼容端点 (TTS) ====================
+
+    async def oai_audio_speech(request: Request) -> Response | JSONResponse:
+        """OpenAI Audio: text-to-speech (/v1/audio/speech)"""
+        try:
+            body_any = await request.json()
+        except json.JSONDecodeError as e:
+            return _oai_bad_request(f"Invalid JSON: {e}")
+        if not isinstance(body_any, dict):
+            return _oai_bad_request("Request body must be a JSON object")
+        body: dict[str, Any] = cast(dict[str, Any], body_any)
+
+        text = body.get("input")
+        if not isinstance(text, str) or not text.strip():
+            return _oai_bad_request("input is required")
+
+        model = OAITTSRequestConverter.resolve_model(body.get("model"))
+        voice = OAITTSRequestConverter.resolve_voice(body.get("voice"))
+        gemini_payload = OAITTSRequestConverter.build_payload(text, voice, body.get("speed"))
+        gemini_payload = _inject_anti429(gemini_payload)
+
+        response_format = str(body.get("response_format") or "mp3").lower()
+        content_type, wrap_wav = _TTS_FORMAT_INFO.get(response_format, ("audio/wav", True))
+
+        logger.info(f"收到 OAI 语音合成请求: 模型={model}, voice={voice}, fmt={response_format}, chars={len(text)}")
+
+        try:
+            gemini_response = await _internal_complete_gemini(
+                model=model,
+                gemini_payload=gemini_payload,
+                source="openai.audio.speech",
+            )
+        except VertexError as e:
+            return JSONResponse(status_code=e.code, content=_vertex_error_to_oai(e))
+        except Exception as e:
+            logger.error(f"OAI 语音合成错误: {e}")
+            return JSONResponse(status_code=500, content={"error": {"message": str(e), "type": "server_error", "code": None}})
+
+        raw, mime_type = OAIResponseConverter.gemini_json_to_oai_audio(gemini_response)
+        if not raw:
+            return JSONResponse(
+                status_code=502,
+                content={"error": {"message": "Upstream response did not contain audio data", "type": "server_error", "code": None}},
+            )
+
+        # Gemini returns raw 16-bit little-endian mono PCM (L16). Wrap it in a WAV
+        # container for formats clients expect to be self-describing; pcm stays bare.
+        if wrap_wav:
+            out = _pcm_to_wav(raw, _parse_pcm_sample_rate(mime_type))
+        else:
+            out = raw
+
+        logger.success(f"OAI 语音合成完成: 模型={model}, bytes={len(out)}")
+        return Response(content=out, media_type=content_type)
+
+    app.post("/v1/audio/speech", response_model=None)(oai_audio_speech)
+
     # ==================== Gemini 辅助端点 ====================
 
     async def count_tokens(model: str, request: Request) -> JSONResponse:
@@ -818,6 +876,46 @@ def _load_models_config() -> list[str]:
 
 def _supported_generation_methods(model: str) -> list[str]:
     return ["generateContent", "streamGenerateContent", "countTokens"]
+
+
+# response_format -> (Content-Type, wrap raw PCM in a WAV container).
+# Pure-Python cannot transcode to mp3/opus/aac/flac, so those formats degrade to
+# WAV and the Content-Type reflects the actual bytes (RIFF/WAVE) rather than the
+# requested codec.
+_TTS_FORMAT_INFO: dict[str, tuple[str, bool]] = {
+    "mp3": ("audio/wav", True),
+    "wav": ("audio/wav", True),
+    "opus": ("audio/wav", True),
+    "aac": ("audio/wav", True),
+    "flac": ("audio/wav", True),
+    "pcm": ("audio/L16", False),
+}
+
+
+def _parse_pcm_sample_rate(mime_type: str, default: int = 24000) -> int:
+    """从 inlineData mimeType 解析采样率 (如 'audio/L16;rate=24000')。"""
+    if not mime_type:
+        return default
+    for token in mime_type.split(";"):
+        token = token.strip().lower()
+        if token.startswith("rate="):
+            try:
+                return int(token[5:])
+            except ValueError:
+                return default
+    return default
+
+
+def _pcm_to_wav(pcm: bytes, sample_rate: int, bits: int = 16, channels: int = 1) -> bytes:
+    """为裸 PCM (L16, 16-bit LE 单声道) 构造 44 字节 RIFF/WAVE 头。"""
+    byte_rate = sample_rate * channels * bits // 8
+    block_align = channels * bits // 8
+    header = (
+        b"RIFF" + struct.pack("<I", 36 + len(pcm)) + b"WAVE"
+        + b"fmt " + struct.pack("<IHHIIHH", 16, 1, channels, sample_rate, byte_rate, block_align, bits)
+        + b"data" + struct.pack("<I", len(pcm))
+    )
+    return header + pcm
 
 
 def _vertex_error_to_oai(e: VertexError) -> dict[str, Any]:
