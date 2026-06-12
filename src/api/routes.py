@@ -549,7 +549,7 @@ def create_app(vertex_client: VertexAIClient) -> FastAPI:
         except (KeyError, ValueError) as e:
             return JSONResponse(status_code=400, content={"error": {"message": str(e), "type": "invalid_request_error", "code": None}})
 
-        gemini_payload = _inject_anti_tracking(_inject_anti429(gemini_payload))
+        gemini_payload = _inject_anti429(gemini_payload)
 
         logger.info(f"收到 OAI 请求: 模型={model}, stream={stream}")
 
