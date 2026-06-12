@@ -29,21 +29,17 @@ from src.core.errors import (
 from src.api.vertex_client import VertexAIClient
 from src.api.session_pool import business_session
 from src.api.oai_adapter import OAIImageRequestConverter, OAIRequestConverter, OAIResponseConverter
+from src.api.transform import _is_safety_block
 from src.core.auth import api_key_manager
 from src.utils.logger import get_logger, set_request_id
 
 
 def _inject_anti429(gemini_payload: dict[str, Any]) -> dict[str, Any]:
     """如果配置开启了防429，在 gemini_payload 里插入100位随机数"""
-    import copy
-
     from src.core.config import load_config
     cfg = load_config()
     if not cfg.get("anti429_enabled", False):
         return gemini_payload
-
-    # 深拷贝 payload 防止就地修改产生 side effect
-    gemini_payload = copy.deepcopy(gemini_payload)
 
     rand_str = ''.join(random.choices(string.digits, k=100))
     target = cfg.get("anti429_target", "system")
@@ -94,14 +90,10 @@ def _inject_anti429(gemini_payload: dict[str, Any]) -> dict[str, Any]:
 
 def _inject_anti_tracking(gemini_payload: dict[str, Any]) -> dict[str, Any]:
     """如果配置开启了防追踪，在 systemInstruction 的 parts 最前面插入50位随机字母+数字"""
-    import copy
-
     from src.core.config import load_config
     cfg = load_config()
     if not cfg.get("anti_tracking", True):
         return gemini_payload
-
-    gemini_payload = copy.deepcopy(gemini_payload)
 
     rand_str = ''.join(random.choices(string.ascii_letters + string.digits, k=50))
 
@@ -417,7 +409,7 @@ def create_app(vertex_client: VertexAIClient) -> FastAPI:
             try:
                 async for chunk in _internal_stream_gemini(
                     model=model, gemini_payload=_inject_anti_tracking(_inject_anti429(body)),
-                    source="gemini.streamGenerateContent", native_passthrough=True,
+                    source="gemini.streamGenerateContent",
                     skip_probe=("image" in model.lower()),
                 ):
                         chunk_count += 1
@@ -485,7 +477,7 @@ def create_app(vertex_client: VertexAIClient) -> FastAPI:
             response = await _internal_complete_gemini(
                 model=model,
                 gemini_payload=_inject_anti_tracking(_inject_anti429(body)),
-                source="gemini.generateContent", native_passthrough=True,
+                source="gemini.generateContent",
                 skip_probe=("image" in model.lower()),
             )
         except VertexError as e:
@@ -582,8 +574,12 @@ def create_app(vertex_client: VertexAIClient) -> FastAPI:
                         yield f"data: {json.dumps({**base, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]}, ensure_ascii=False)}\n\n"
                     yield "data: [DONE]\n\n"
                 except VertexError as e:
-                    err = _vertex_error_to_oai(e)
-                    yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
+                    if _is_safety_block(e):
+                        base = {"id": f"chatcmpl-{request_id}", "object": "chat.completion.chunk", "created": int(time.time()), "model": model}
+                        yield f"data: {json.dumps({**base, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'content_filter'}]}, ensure_ascii=False)}\n\n"
+                    else:
+                        err = _vertex_error_to_oai(e)
+                        yield f"data: {json.dumps(err, ensure_ascii=False)}\n\n"
                     yield "data: [DONE]\n\n"
                 except Exception as e:
                     logger.error(f"OAI 流式错误: {e}")
@@ -606,6 +602,21 @@ def create_app(vertex_client: VertexAIClient) -> FastAPI:
                 oai_response = OAIResponseConverter.gemini_json_to_oai_json(gemini_response, model)
                 return JSONResponse(content=oai_response)
             except VertexError as e:
+                if _is_safety_block(e):
+                    request_id = uuid.uuid4().hex[:24]
+                    safety_response = {
+                        "id": f"chatcmpl-{request_id}",
+                        "object": "chat.completion",
+                        "created": int(time.time()),
+                        "model": model,
+                        "choices": [{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": None},
+                            "finish_reason": "content_filter"
+                        }],
+                        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+                    }
+                    return JSONResponse(status_code=200, content=safety_response)
                 err = _vertex_error_to_oai(e)
                 return JSONResponse(status_code=e.code, content=err)
             except Exception as e:
@@ -853,8 +864,9 @@ async def _run_oai_image_request(
 
     try:
         async with business_session(vertex_client, source=source) as session:
-            for _ in range(n):
-                gemini_response = await session.complete_gemini(model=model, gemini_payload=gemini_payload, skip_probe=True)
+            tasks = [session.complete_gemini(model=model, gemini_payload=gemini_payload, skip_probe=True) for _ in range(n)]
+            gemini_responses = await asyncio.gather(*tasks)
+            for gemini_response in gemini_responses:
                 image_items.extend(
                     OAIResponseConverter.gemini_json_to_oai_image_data(
                         gemini_response,

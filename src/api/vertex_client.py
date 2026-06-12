@@ -95,13 +95,9 @@ class VertexAIClient:
 
     def _build_request_payload(self, model: str, gemini_payload: dict[str, Any], recaptcha_token: str, kwargs: dict[str, Any]) -> dict[str, Any]:
         """构建上游请求体（共用逻辑）"""
-        native_passthrough = kwargs.pop("native_passthrough", False)
-        dummy_original_body = {"variables": {}}
-        builder = self.transformer.build_vertex_payload_native if native_passthrough else self.transformer.build_vertex_payload
-        new_variables = builder(
-            model=model, gemini_payload=gemini_payload,
-            original_body=dummy_original_body, kwargs=kwargs
-        )['variables']
+        new_variables = self.transformer.build_vertex_payload(
+            model=model, gemini_payload=gemini_payload, kwargs=kwargs
+        )
         new_variables["region"] = "global"
         new_variables["recaptchaToken"] = recaptcha_token
         return {
