@@ -724,6 +724,10 @@ class ResponseAggregator:
         except Exception as e:
             raise InternalError(message=f"Non-streaming request error: {e}")
         
+        # Merge consecutive parts here to fix crazy line breaks in non-streaming mode
+        from src.api.part_cleaner import merge_content_blocks
+        all_parts = merge_content_blocks(all_parts)
+
         # 处理图片响应特例
         inline_images = ResponseAggregator._extract_inline_images(all_parts)
         if _raw_image_response and inline_images:

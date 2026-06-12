@@ -29,7 +29,6 @@ export async function loadSettings() {
   document.getElementById('parallel_worker_base_port').value = s.parallel_worker_base_port || 12080;
   document.getElementById('parallel_worker_port_span').value = s.parallel_worker_port_span || 2000;
   document.getElementById('business_session_concurrency_limit').value = s.business_session_concurrency_limit || 0;
-  document.getElementById('anti_tracking').checked = !!s.anti_tracking;
   document.getElementById('drop_max_tokens').checked = !!s.drop_max_tokens;
 
   const warn = document.getElementById('envOverrideWarn');
@@ -58,7 +57,6 @@ async function saveSettings() {
 async function saveProtection() {
   try {
     await _api.put('/api/admin/settings', {
-      anti_tracking: document.getElementById('anti_tracking').checked,
       drop_max_tokens: document.getElementById('drop_max_tokens').checked,
       anti429_enabled: document.getElementById('anti429_enabled').checked,
       anti429_target: document.getElementById('anti429_target').value,

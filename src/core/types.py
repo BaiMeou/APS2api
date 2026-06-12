@@ -19,7 +19,8 @@ class AppConfig(BaseModel):
     active_node_name: str = ""  # 当前激活节点的显示名
     node_pool: list[dict[str, Any]] = []  # 节点轮换池
     node_pool_index: int = 0  # 当前轮换池索引
-    anti429_enabled: bool = False  # 随机数防429开关
+    anti429_enabled: bool = True  # 随机数防429开关
+    drop_max_tokens: bool = True  # 请求防护开关，管理页面维护
     anti429_target: str = "system"  # 插入位置：system 或 user
     force_no_stream: bool = False  # 强制关闭流式输出（客户端 stream=true 也会被转成非流式）
     safety_settings: dict[str, str] = Field(default_factory=dict)  # 自定义 safety threshold 配置

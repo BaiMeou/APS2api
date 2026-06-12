@@ -88,31 +88,7 @@ def _inject_anti429(gemini_payload: dict[str, Any]) -> dict[str, Any]:
     return gemini_payload
 
 
-def _inject_anti_tracking(gemini_payload: dict[str, Any]) -> dict[str, Any]:
-    """如果配置开启了防追踪，在 systemInstruction 的 parts 最前面插入50位随机字母+数字"""
-    from src.core.config import load_config
-    cfg = load_config()
-    if not cfg.get("anti_tracking", True):
-        return gemini_payload
 
-    rand_str = ''.join(random.choices(string.ascii_letters + string.digits, k=50))
-
-    si = gemini_payload.get("systemInstruction", {})
-    if isinstance(si, dict):
-        parts = si.get("parts", [])
-        if not isinstance(parts, list):
-            try:
-                parts = list(parts)
-            except TypeError:
-                parts = []
-    elif isinstance(si, str):
-        parts = [{"text": si}]
-    else:
-        parts = []
-    parts.insert(0, {"text": rand_str})
-    gemini_payload["systemInstruction"] = {"parts": parts}
-
-    return gemini_payload
 
 
 # 初始化日志
@@ -404,11 +380,42 @@ def create_app(vertex_client: VertexAIClient) -> FastAPI:
         logger.debug(f"请求体大小: {len(str(body))} 字符")
         logger.debug_json("下游请求体", body)
 
+        from src.core.config import load_config as _load_cfg
+        force_no_stream_enabled = _load_cfg().get("force_no_stream", False)
+
+        if force_no_stream_enabled:
+            logger.info("force_no_stream 已开启，Gemini 假流式返回")
+            async def fake_stream_generator():
+                try:
+                    response = await _internal_complete_gemini(
+                        model=model,
+                        gemini_payload=_inject_anti429(body),
+                        source="gemini.streamGenerateContent.fake",
+                        skip_probe=("image" in model.lower()),
+                    )
+                    yield "data: " + json.dumps(response, ensure_ascii=False, separators=(',', ':')) + "\n\n"
+                except VertexError as e:
+                    yield e.to_sse()
+                except Exception as e:
+                    logger.error(f"假流式生成未知错误: {e}")
+                    error = InternalError(message=str(e))
+                    yield error.to_sse()
+
+            return StreamingResponse(
+                fake_stream_generator(),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+
         async def stream_generator():
             chunk_count = 0
             try:
                 async for chunk in _internal_stream_gemini(
-                    model=model, gemini_payload=_inject_anti_tracking(_inject_anti429(body)),
+                    model=model, gemini_payload=_inject_anti429(body),
                     source="gemini.streamGenerateContent",
                     skip_probe=("image" in model.lower()),
                 ):
@@ -476,7 +483,7 @@ def create_app(vertex_client: VertexAIClient) -> FastAPI:
         try:
             response = await _internal_complete_gemini(
                 model=model,
-                gemini_payload=_inject_anti_tracking(_inject_anti429(body)),
+                gemini_payload=_inject_anti429(body),
                 source="gemini.generateContent",
                 skip_probe=("image" in model.lower()),
             )
@@ -531,11 +538,11 @@ def create_app(vertex_client: VertexAIClient) -> FastAPI:
         body: dict[str, Any] = cast(dict[str, Any], body_any)
         stream = body.get("stream", False)
 
-        # 强制关闭流式输出
         from src.core.config import load_config as _load_cfg
-        if stream and _load_cfg().get("force_no_stream", False):
-            stream = False
-            logger.info("force_no_stream 已开启，强制转为非流式")
+        force_no_stream_enabled = _load_cfg().get("force_no_stream", False)
+
+        if stream and force_no_stream_enabled:
+            logger.info("force_no_stream 已开启，OpenAI 假流式输出")
 
         try:
             model, gemini_payload = OAIRequestConverter.convert(body)
@@ -554,7 +561,42 @@ def create_app(vertex_client: VertexAIClient) -> FastAPI:
                 has_finish = False
                 has_tool_calls = False
                 try:
-                    async for gemini_chunk in _internal_stream_gemini(model, gemini_payload, "openai.chat.stream"):
+                    if force_no_stream_enabled:
+                        # 假流式：一次性获取完整 Gemini 响应
+                        gemini_response = await _internal_complete_gemini(model, gemini_payload, "openai.chat.stream.fake")
+                        oai_response = OAIResponseConverter.gemini_json_to_oai_json(gemini_response, model)
+                        created_time = oai_response.get("created", int(time.time()))
+                        msg = oai_response.get("choices", [{}])[0].get("message", {})
+                        content = msg.get("content")
+                        reasoning_content = msg.get("reasoning_content")
+                        tool_calls = msg.get("tool_calls")
+                        finish_reason = oai_response.get("choices", [{}])[0].get("finish_reason", "stop")
+                        usage = oai_response.get("usage")
+                        
+                        base = {
+                            "id": oai_response.get("id", f"chatcmpl-{request_id}"),
+                            "object": "chat.completion.chunk",
+                            "created": created_time,
+                            "model": model
+                        }
+                        
+                        yield f"data: {json.dumps({**base, 'choices': [{'index': 0, 'delta': {'role': 'assistant'}, 'finish_reason': None}]}, ensure_ascii=False)}\n\n"
+                        if reasoning_content:
+                            yield f"data: {json.dumps({**base, 'choices': [{'index': 0, 'delta': {'reasoning_content': reasoning_content}, 'finish_reason': None}]}, ensure_ascii=False)}\n\n"
+                        if content:
+                            yield f"data: {json.dumps({**base, 'choices': [{'index': 0, 'delta': {'content': content}, 'finish_reason': None}]}, ensure_ascii=False)}\n\n"
+                        if tool_calls:
+                            yield f"data: {json.dumps({**base, 'choices': [{'index': 0, 'delta': {'tool_calls': tool_calls}, 'finish_reason': None}]}, ensure_ascii=False)}\n\n"
+                        
+                        finish_evt = {
+                            **base,
+                            "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}]
+                        }
+                        if usage:
+                            finish_evt["usage"] = usage
+                        yield f"data: {json.dumps(finish_evt, ensure_ascii=False)}\n\n"
+                    else:
+                        async for gemini_chunk in _internal_stream_gemini(model, gemini_payload, "openai.chat.stream"):
                         events = OAIResponseConverter.convert_realtime_chunk(
                             gemini_chunk,
                             model,
