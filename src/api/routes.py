@@ -597,20 +597,20 @@ def create_app(vertex_client: VertexAIClient) -> FastAPI:
                         yield f"data: {json.dumps(finish_evt, ensure_ascii=False)}\n\n"
                     else:
                         async for gemini_chunk in _internal_stream_gemini(model, gemini_payload, "openai.chat.stream"):
-                        events = OAIResponseConverter.convert_realtime_chunk(
-                            gemini_chunk,
-                            model,
-                            request_id,
-                            is_first=is_first,
-                            has_prior_tool_calls=has_tool_calls,
-                        )
-                        is_first = False
-                        for event in events:
-                            if '"tool_calls"' in event:
-                                has_tool_calls = True
-                            if '"finish_reason"' in event and '"finish_reason": null' not in event:
-                                has_finish = True
-                            yield event
+                            events = OAIResponseConverter.convert_realtime_chunk(
+                                gemini_chunk,
+                                model,
+                                request_id,
+                                is_first=is_first,
+                                has_prior_tool_calls=has_tool_calls,
+                            )
+                            is_first = False
+                            for event in events:
+                                if '"tool_calls"' in event:
+                                    has_tool_calls = True
+                                if '"finish_reason"' in event and '"finish_reason": null' not in event:
+                                    has_finish = True
+                                yield event
                     if not has_finish:
                         base = {"id": f"chatcmpl-{request_id}", "object": "chat.completion.chunk", "created": int(time.time()), "model": model}
                         yield f"data: {json.dumps({**base, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'stop'}]}, ensure_ascii=False)}\n\n"
