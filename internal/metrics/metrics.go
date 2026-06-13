@@ -1,17 +1,14 @@
-//go:build !serveropt
-
-// Package metrics 是自身可观测采集器的精简实现：所有方法空操作、Snapshot 返回零值。
+// Package metrics 定义进程级可观测采集器的类型与接口。
 //
-// 内部健康采集（成败率、延迟分位、最近请求历史）是面向多机部署的服务器优化，
-// 单实例自用无需统计设施，故精简实现退化为空采集器：保留完整的类型与方法签名，
-// 使调用方（热路径里的 IncUpstream*/StartRequest/EndRequest/RecordRequest 等）
-// 无需任何 if 分支即自动失效，零开销。
+// 采集器以空操作形态提供——计数方法直接返回、Snapshot 返回零值。热路径上的调用方
+// （IncUpstream*/StartRequest/EndRequest/RecordRequest 等）无需任何分支判断即可直接
+// 调用，零额外开销；需要详细运行指标的部署可在此基础上接入具体采集后端。
 package metrics
 
-// Collector 是空采集器。无字段——所有方法均为空操作。
+// Collector 是采集器。当前无字段——所有方法均为空操作。
 type Collector struct{}
 
-// RequestRecord 与完整实现保持相同字段（精简实现从不产生记录）。
+// RequestRecord 描述单条请求记录的字段结构。
 type RequestRecord struct {
 	Time    string  `json:"time"`
 	Path    string  `json:"path"`
@@ -19,7 +16,7 @@ type RequestRecord struct {
 	Latency float64 `json:"latency"`
 }
 
-// Snapshot 与完整实现保持相同字段（精简实现恒为零值）。
+// Snapshot 是一次指标快照的字段结构。
 type Snapshot struct {
 	StartUnix      int64   `json:"start_unix"`
 	Total          int64   `json:"total"`
@@ -36,13 +33,13 @@ type Snapshot struct {
 	LatencySamples int     `json:"latency_samples"`
 }
 
-// Default 是进程级全局采集器（空实现）。
+// Default 是进程级全局采集器。
 var Default = New(0)
 
-// New 构造空采集器；maxLatency 被忽略，仅保留签名兼容。
+// New 构造采集器；maxLatency 为延迟采样窗口大小（当前实现未消费）。
 func New(maxLatency int) *Collector { return &Collector{} }
 
-// 以下方法全为空操作 / 零值返回（精简实现不采集任何指标）。
+// 以下方法为空操作 / 零值返回。
 
 func (c *Collector) SetStart(unix int64)                                             {}
 func (c *Collector) StartRequest()                                                   {}

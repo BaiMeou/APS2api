@@ -24,7 +24,7 @@ const shutdownGrace = 25 * time.Second
 func main() {
 	cfg := config.Load()
 	metrics.Default.SetStart(time.Now().Unix())
-	spool.SetMaxSpillBytes(int64(cfg.MaxSpillMB) << 20) // 大请求/媒体落盘的全局磁盘配额
+	spool.SetMaxSpillBytes(int64(cfg.MaxSpillMB) << 20) // 大请求/媒体序列化的磁盘溢出配额上限
 
 	keys := api.NewAPIKeyManager()
 	keys.LoadKeys()
@@ -34,7 +34,7 @@ func main() {
 	api.StartAdminSessionCleanup(time.Hour)
 
 	vc := vertex.NewVertexAIClient()
-	vc.StartTokenPool() // 后台预取 recaptcha token（token_pool_size=0 时为空操作）
+	vc.StartTokenPool() // 启动 recaptcha token 获取器
 
 	srv := api.NewServer(vc, keys, cfg)
 	httpServer := &http.Server{

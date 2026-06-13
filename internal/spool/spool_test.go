@@ -1,5 +1,3 @@
-//go:build !serveropt
-
 package spool
 
 import (
@@ -9,9 +7,9 @@ import (
 	"github.com/bsfdsagfadg/vertex/internal/jsonx"
 )
 
-// TestEncodeJSONMatchesJsonxLite 验证精简实现的 EncodeJSON 与 jsonx.Marshal 逐字节一致
+// TestEncodeJSONMatchesJsonx 验证 EncodeJSON 与 jsonx.Marshal 逐字节一致
 // （关 HTML 转义 + 去尾换行），保证发往上游的请求体不变。
-func TestEncodeJSONMatchesJsonxLite(t *testing.T) {
+func TestEncodeJSONMatchesJsonx(t *testing.T) {
 	cases := []any{
 		map[string]any{"a": float64(1), "b": "x<y>&z"}, // 含 < > & 验证不转义
 		map[string]any{"contents": []any{map[string]any{"role": "user", "parts": []any{map[string]any{"text": "你好"}}}}},
@@ -33,12 +31,12 @@ func TestEncodeJSONMatchesJsonxLite(t *testing.T) {
 	}
 }
 
-// TestBufferLiteMemOnly 验证精简实现纯内存：写入、读回完整、Len 正确、从不落盘。
-func TestBufferLiteMemOnly(t *testing.T) {
+// TestBufferMemOnly 验证内存缓冲：写入、读回完整、Len 正确、不落盘。
+func TestBufferMemOnly(t *testing.T) {
 	if SpilledBytes() != 0 {
-		t.Fatal("精简实现 SpilledBytes 应恒为 0")
+		t.Fatal("SpilledBytes 应为 0")
 	}
-	SetMaxSpillBytes(123) // 空操作，不应改变行为
+	SetMaxSpillBytes(123) // 不溢出磁盘，调用不应改变行为
 
 	b := New()
 	if _, err := b.Write([]byte("hello")); err != nil {
@@ -59,7 +57,7 @@ func TestBufferLiteMemOnly(t *testing.T) {
 		t.Fatalf("读回内容错: %q", got)
 	}
 	if SpilledBytes() != 0 {
-		t.Fatal("精简实现写入后 SpilledBytes 仍应为 0（从不落盘）")
+		t.Fatal("写入后 SpilledBytes 仍应为 0（不落盘）")
 	}
 	if err := b.Close(); err != nil {
 		t.Fatalf("Close: %v", err)

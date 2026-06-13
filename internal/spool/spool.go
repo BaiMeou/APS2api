@@ -1,11 +1,7 @@
-//go:build !serveropt
-
 // Package spool 提供"先写后读"的字节缓冲，用于承载请求/媒体体的序列化输出。
 //
-// 这是面向单实例自用的精简实现：纯内存缓冲，不落盘、无磁盘配额。落盘+配额是面向
-// 海量并发、磁盘紧张场景的服务器优化，单实例自用收益甚微，故精简构建只保留内存路径。
-// 对外接口（New/EncodeJSON/Write/Reader/Close/Len/SetMaxSpillBytes/SpilledBytes）
-// 与完整实现完全一致，调用方无需区分。
+// 缓冲驻留内存。SetMaxSpillBytes / SpilledBytes 是为磁盘溢出策略预留的接口位，
+// 当前不启用磁盘配额，调用方无需感知缓冲介质。
 package spool
 
 import (
@@ -14,10 +10,10 @@ import (
 	"io"
 )
 
-// SetMaxSpillBytes 在精简实现里为空操作（无磁盘配额概念），仅保留签名以兼容调用方。
+// SetMaxSpillBytes 设置磁盘溢出配额上限；当前不溢出到磁盘，故为空操作。
 func SetMaxSpillBytes(int64) {}
 
-// SpilledBytes 在精简实现里恒返回 0（从不落盘）。
+// SpilledBytes 返回已溢出到磁盘的字节数；当前恒为 0。
 func SpilledBytes() int64 { return 0 }
 
 // Buffer 是纯内存的先写后读字节缓冲。

@@ -1,5 +1,3 @@
-//go:build !serveropt
-
 package api
 
 import (
@@ -10,9 +8,9 @@ import (
 	"github.com/bsfdsagfadg/vertex/internal/metrics"
 )
 
-// TestWithMetricsLite 验证 withMetrics 中间件在精简（空指标）构建下的与指标无关行为：
-// 设 X-Request-Id、注入 context、跳过 /health。不断言计数（空采集器恒为零值）。
-func TestWithMetricsLite(t *testing.T) {
+// TestWithMetrics 验证 withMetrics 中间件的与指标无关行为：
+// 设 X-Request-Id、注入 context、跳过 /health。
+func TestWithMetrics(t *testing.T) {
 	s := &Server{metrics: metrics.New(10)}
 
 	var seenReqID string
@@ -38,8 +36,8 @@ func TestWithMetricsLite(t *testing.T) {
 		t.Fatal("/health 不应设 X-Request-Id")
 	}
 
-	// 空采集器 Snapshot 恒为零值。
+	// Snapshot 返回零值。
 	if s.metrics.Snapshot().Total != 0 {
-		t.Fatalf("精简构建下空采集器 total 应恒为 0，got %d", s.metrics.Snapshot().Total)
+		t.Fatalf("采集器 total 应为 0，got %d", s.metrics.Snapshot().Total)
 	}
 }

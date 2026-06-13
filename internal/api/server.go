@@ -84,8 +84,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleMetrics 返回自身内部健康指标。具体内容由构建变体决定：服务器优化构建返回
-// 请求成败率/在途/延迟分位 + token 池水位 + uptime；精简构建返回基本状态。
+// handleMetrics 返回服务的实时状态，供健康检查与管理后台做存活探测。
 // 刻意不含 per-key/模型用量（那是上游网关的账本职责）。
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, s.metricsBody())
