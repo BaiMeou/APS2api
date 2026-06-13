@@ -171,19 +171,10 @@ func (s *Server) geminiFakeStream(ctx context.Context, sw *sseWriter, model stri
 	}
 
 	text := geminiResponseText(resp)
-	chunkSize := 1
-	if len(text) > 0 {
-		if cs := len(text) / 8; cs > 1 {
-			chunkSize = cs
-		}
-	}
-	for i := 0; i < len(text); i += chunkSize {
-		end := i + chunkSize
-		if end > len(text) {
-			end = len(text)
-		}
-		cand := map[string]any{"index": 0, "content": map[string]any{"role": "model", "parts": []any{map[string]any{"text": text[i:end]}}}}
-		if end >= len(text) {
+	chunks := splitIntoRuneChunks(text)
+	for i, piece := range chunks {
+		cand := map[string]any{"index": 0, "content": map[string]any{"role": "model", "parts": []any{map[string]any{"text": piece}}}}
+		if i == len(chunks)-1 {
 			cand["finishReason"] = "STOP"
 		}
 		chunk := map[string]any{"candidates": []any{cand}}

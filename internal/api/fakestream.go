@@ -11,6 +11,31 @@ import (
 // 本文件实现假流式：模型名带 "假流式-"/"fake-" 前缀时，先完整非流式生成、再切片按 SSE 推。
 // OpenAI 端点与 Gemini 端点（use_fake 分支）共用此机制。
 
+// splitIntoRuneChunks 把文本切成若干分片用于假流式推送，分片数约为 8。
+//
+// 必须按 rune（完整字符）切分，不能按字节：多字节 UTF-8 字符（如汉字、emoji）若在字节
+// 边界被截断，半个字符经 JSON 序列化会被替换成 U+FFFD（），客户端收到的就是乱码。
+// 空文本返回 nil。
+func splitIntoRuneChunks(text string) []string {
+	runes := []rune(text)
+	if len(runes) == 0 {
+		return nil
+	}
+	chunkSize := 1
+	if cs := len(runes) / 8; cs > 1 {
+		chunkSize = cs
+	}
+	chunks := make([]string, 0, (len(runes)+chunkSize-1)/chunkSize)
+	for i := 0; i < len(runes); i += chunkSize {
+		end := i + chunkSize
+		if end > len(runes) {
+			end = len(runes)
+		}
+		chunks = append(chunks, string(runes[i:end]))
+	}
+	return chunks
+}
+
 // sseWriter 是一个带 flush 的 SSE 行写出器；write 返回 false 表示客户端断开。
 type sseWriter struct {
 	w     http.ResponseWriter
@@ -61,21 +86,8 @@ func (s *Server) oaiFakeStream(ctx context.Context, w http.ResponseWriter, model
 	contentText := firstChoiceContent(oai)
 
 	createdTS := time.Now().Unix()
-	chunkSize := 1
-	if len(contentText) > 0 {
-		if cs := len(contentText) / 8; cs > 1 {
-			chunkSize = cs
-		}
-	}
-
-	// 按字节切片推 delta（len/8 的字节切片；非 ASCII 可能切在多字节边界，
-	// 但客户端按字节流重组无碍——逐字节保持既定行为，不做 rune 边界优化）。
-	for i := 0; i < len(contentText); i += chunkSize {
-		end := i + chunkSize
-		if end > len(contentText) {
-			end = len(contentText)
-		}
-		piece := contentText[i:end]
+	chunks := splitIntoRuneChunks(contentText)
+	for i, piece := range chunks {
 		base := s.streamChunkBase(model, requestID)
 		base["created"] = createdTS
 		var delta map[string]any
@@ -85,7 +97,7 @@ func (s *Server) oaiFakeStream(ctx context.Context, w http.ResponseWriter, model
 			delta = map[string]any{"content": piece}
 		}
 		choice := map[string]any{"index": 0, "delta": delta}
-		if end >= len(contentText) {
+		if i == len(chunks)-1 {
 			choice["finish_reason"] = "stop"
 		}
 		base["choices"] = []any{choice}
