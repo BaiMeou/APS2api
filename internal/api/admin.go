@@ -181,8 +181,29 @@ func (s *Server) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 代理池管理（多代理节点）：仅 proxynode 构建注册，其它构建 adminProxyRoute 恒返回 false。
-	if s.adminProxyRoute(w, r, path) {
+	switch path {
+	case "/nodes":
+		switch r.Method {
+		case http.MethodGet:
+			s.adminGetNodes(w, r)
+		case http.MethodDelete:
+			s.adminDeleteNode(w, r)
+		}
+		return
+	case "/nodes/test-all":
+		s.adminTestAll(w, r)
+		return
+	case "/nodes/deduplicate":
+		s.adminDedupNodes(w, r)
+		return
+	case "/nodes/disabled":
+		s.adminDeleteDisabledNodes(w, r)
+		return
+	case "/subscriptions/fetch":
+		s.adminFetchSub(w, r)
+		return
+	case "/use-node":
+		s.adminUseNode(w, r)
 		return
 	}
 
@@ -295,7 +316,7 @@ func (s *Server) adminGetSettings(w http.ResponseWriter, _ *http.Request) {
 		"force_no_stream": cfg.ForceNoStream,
 		"anti_tracking":   cfg.AntiTracking,
 		"drop_max_tokens": cfg.DropMaxTokens,
-		"proxy_url":       cfg.ProxyURL,
+		"proxy_url":       cfg.ProxyURL, "parallel_pool_enabled": cfg.ParallelPoolEnabled, "parallel_pool_size": cfg.ParallelPoolSize, "active_node_uri": cfg.ActiveNodeURI,
 	}})
 }
 
@@ -305,6 +326,7 @@ var adminAllowedSettings = map[string]bool{
 	"max_request_mb": true, "max_n": true, "anti429_enabled": true,
 	"anti429_target": true, "force_no_stream": true, "anti_tracking": true,
 	"drop_max_tokens": true, "proxy_url": true, "admin_password": true,
+	"parallel_pool_enabled": true, "parallel_pool_size": true,
 }
 
 // adminPutSettings 处理 PUT /api/admin/settings：合并 {settings:{...}} 写回 config.json 并清缓存。
@@ -322,7 +344,7 @@ func (s *Server) adminPutSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		// 数字字段：前端 number 输入可能传 float64，强类型字段需为整数，统一收敛成 int。
 		switch k {
-		case "max_retries", "token_pool_size", "max_spill_mb", "max_request_mb", "max_n":
+		case "max_retries", "token_pool_size", "max_spill_mb", "max_request_mb", "max_n", "parallel_pool_size":
 			if f, ok := v.(float64); ok {
 				updates[k] = int(f)
 				continue

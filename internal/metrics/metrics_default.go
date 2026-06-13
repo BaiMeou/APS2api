@@ -44,13 +44,13 @@ func New(maxLatency int) *Collector { return &Collector{} }
 
 // 以下方法全为空操作 / 零值返回（精简实现不采集任何指标）。
 
-func (c *Collector) SetStart(unix int64)                                    {}
-func (c *Collector) StartRequest()                                          {}
-func (c *Collector) EndRequest(success bool, latencySec float64)            {}
-func (c *Collector) IncUpstream429()                                        {}
-func (c *Collector) IncUpstreamEmpty()                                      {}
-func (c *Collector) IncUpstreamAuth()                                       {}
-func (c *Collector) Snapshot() Snapshot                                     { return Snapshot{} }
-func (c *Collector) Reset()                                                 {}
+func (c *Collector) SetStart(unix int64)                                             {}
+func (c *Collector) StartRequest()                                                   {}
+func (c *Collector) EndRequest(success bool, latencySec float64)                     {}
+func (c *Collector) IncUpstream429()                                                 {}
+func (c *Collector) IncUpstreamEmpty()                                               {}
+func (c *Collector) IncUpstreamAuth()                                                {}
+func (c *Collector) Snapshot() Snapshot                                              { return Snapshot{} }
+func (c *Collector) Reset()                                                          {}
 func (c *Collector) RecordRequest(path string, success bool, lat float64, at string) {}
-func (c *Collector) RecentRequests() []RequestRecord                        { return nil }
+func (c *Collector) RecentRequests() []RequestRecord                                 { return nil }

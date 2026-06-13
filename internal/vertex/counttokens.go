@@ -22,7 +22,7 @@ import (
 func (c *VertexAIClient) CountTokens(ctx context.Context, model string, contents []any) int {
 	cfg := config.Load()
 
-	sess, err := c.net.CreateSession(60)
+	sess, err := c.net.CreateSession(60, config.Load().ProxyURL)
 	if err != nil {
 		return 0
 	}

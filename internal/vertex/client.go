@@ -66,7 +66,9 @@ func (c *VertexAIClient) TokenPoolStats() (size, fill int) { return c.pool.Stats
 
 // CompleteChat 非流式请求（里程碑1 入口）。非流式请求主循环。
 func (c *VertexAIClient) CompleteChat(ctx context.Context, model string, geminiPayload map[string]any) (map[string]any, error) {
-	return c.completeInner(ctx, model, geminiPayload)
+	return RunParallel(ctx, config.Load(), func(ctx context.Context, proxyURI string) (map[string]any, error) {
+		return c.completeInner(ctx, model, geminiPayload, proxyURI)
+	})
 }
 
 // CompleteChatN 并发发 n 次单候选请求，返回成功的响应列表（n 多候选用）。
@@ -94,7 +96,7 @@ func (c *VertexAIClient) CompleteChatN(ctx context.Context, model string, gemini
 				}
 			}()
 			// 共享请求 ctx：客户端断开则所有候选的上游请求与重试一并中止。
-			r, err := c.completeInner(ctx, model, geminiPayload)
+			r, err := c.CompleteChat(ctx, model, geminiPayload)
 			results[idx] = res{resp: r, err: err}
 		}(i)
 	}
@@ -121,13 +123,13 @@ func (c *VertexAIClient) CompleteChatN(ctx context.Context, model string, gemini
 }
 
 // completeInner 非流式重试主循环。
-func (c *VertexAIClient) completeInner(ctx context.Context, model string, geminiPayload map[string]any) (map[string]any, error) {
+func (c *VertexAIClient) completeInner(ctx context.Context, model string, geminiPayload map[string]any, proxyURI string) (map[string]any, error) {
 	maxRetries := c.maxRetries
 	recaptchaToken := ""
 	isFirstAuth := true
 	attempt := 0
 
-	sess, err := c.net.CreateSession(180)
+	sess, err := c.net.CreateSession(180, proxyURI)
 	if err != nil {
 		return nil, NewInternalError("create session: " + err.Error())
 	}
@@ -197,7 +199,7 @@ func (c *VertexAIClient) completeInner(ctx context.Context, model string, gemini
 			}
 			// 429：销毁旧 session 重建新的，换 token
 			sess.Close()
-			newSess, e := c.net.CreateSession(180)
+			newSess, e := c.net.CreateSession(180, proxyURI)
 			if e != nil {
 				return nil, NewInternalError("recreate session: " + e.Error())
 			}

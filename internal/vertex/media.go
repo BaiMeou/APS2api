@@ -4,12 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"strings"
-)
 
-// 本文件实现图片/音频响应的提取，
-// 及 complete_chat 的 _raw_image_response / _raw_audio_response 分支。
-// 供 /v1/images/* 与 /v1/audio/speech 端点用：先走标准非流式 completeInner，再从
-// Gemini 响应里抽图 / 抽音频（音频必须多段 PCM 拼接，血泪教训）。
+	"github.com/bsfdsagfadg/vertex/internal/config"
+)
 
 // ImageData 是一张抽出的图片（base64 + mime）。
 type ImageData struct {
@@ -25,7 +22,9 @@ type AudioData struct {
 
 // CompleteChatImage 走标准非流式请求，再从响应抽取图片数据。
 func (c *VertexAIClient) CompleteChatImage(ctx context.Context, model string, geminiPayload map[string]any) ([]ImageData, error) {
-	result, err := c.completeInner(ctx, model, geminiPayload)
+	result, err := RunParallel(ctx, config.Load(), func(ctx context.Context, proxyURI string) (map[string]any, error) {
+		return c.completeInner(ctx, model, geminiPayload, proxyURI)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -34,7 +33,9 @@ func (c *VertexAIClient) CompleteChatImage(ctx context.Context, model string, ge
 
 // CompleteChatAudio 走标准非流式请求，再从响应抽取（拼接）音频数据。
 func (c *VertexAIClient) CompleteChatAudio(ctx context.Context, model string, geminiPayload map[string]any) (AudioData, error) {
-	result, err := c.completeInner(ctx, model, geminiPayload)
+	result, err := RunParallel(ctx, config.Load(), func(ctx context.Context, proxyURI string) (map[string]any, error) {
+		return c.completeInner(ctx, model, geminiPayload, proxyURI)
+	})
 	if err != nil {
 		return AudioData{}, err
 	}
@@ -167,7 +168,7 @@ func firstCandidateParts(result map[string]any) []any {
 	return parts
 }
 
-// decodeBase64Loose 容错解码 base64：先标准、失败再 URL-safe、再补 padding，保持宽松性
+// decodeBase64Loose 容错解码 base64：先 standard、失败再 URL-safe、再补 padding，保持宽松性
 // （上游偶有 URL-safe / 缺 padding 的段）。
 func decodeBase64Loose(s string) ([]byte, error) {
 	if b, err := base64.StdEncoding.DecodeString(s); err == nil {

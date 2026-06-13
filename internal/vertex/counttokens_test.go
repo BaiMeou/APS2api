@@ -12,42 +12,42 @@ func TestParseCountTokensResponse(t *testing.T) {
 	}{
 		{
 			name: "data.ui.countTokensV2 (number)",
-			raw: `[{"results":[{"data":{"ui":{"countTokensV2":{"totalTokens":42}}}}]}]`,
+			raw:  `[{"results":[{"data":{"ui":{"countTokensV2":{"totalTokens":42}}}}]}]`,
 			want: 42,
 		},
 		{
 			name: "data.countTokensV2 (number)",
-			raw: `[{"results":[{"data":{"countTokensV2":{"totalTokens":100}}}]}]`,
+			raw:  `[{"results":[{"data":{"countTokensV2":{"totalTokens":100}}}]}]`,
 			want: 100,
 		},
 		{
 			name: "data.countTokens (number)",
-			raw: `[{"results":[{"data":{"countTokens":{"totalTokens":7}}}]}]`,
+			raw:  `[{"results":[{"data":{"countTokens":{"totalTokens":7}}}]}]`,
 			want: 7,
 		},
 		{
 			name: "totalTokens as string",
-			raw: `[{"results":[{"data":{"ui":{"countTokensV2":{"totalTokens":"256"}}}}]}]`,
+			raw:  `[{"results":[{"data":{"ui":{"countTokensV2":{"totalTokens":"256"}}}}]}]`,
 			want: 256,
 		},
 		{
 			name: "single object (not array)",
-			raw: `{"results":[{"data":{"countTokensV2":{"totalTokens":15}}}]}`,
+			raw:  `{"results":[{"data":{"countTokensV2":{"totalTokens":15}}}]}`,
 			want: 15,
 		},
 		{
 			name: "entry-level errors skipped",
-			raw: `[{"errors":[{"message":"boom"}]},{"results":[{"data":{"countTokensV2":{"totalTokens":9}}}]}]`,
+			raw:  `[{"errors":[{"message":"boom"}]},{"results":[{"data":{"countTokensV2":{"totalTokens":9}}}]}]`,
 			want: 9,
 		},
 		{
 			name: "result-level errors skipped",
-			raw: `[{"results":[{"errors":[{"x":1}]},{"data":{"countTokensV2":{"totalTokens":11}}}]}]`,
+			raw:  `[{"results":[{"errors":[{"x":1}]},{"data":{"countTokensV2":{"totalTokens":11}}}]}]`,
 			want: 11,
 		},
 		{
 			name: "ui preferred over flat",
-			raw: `[{"results":[{"data":{"ui":{"countTokensV2":{"totalTokens":1}},"countTokensV2":{"totalTokens":999}}}]}]`,
+			raw:  `[{"results":[{"data":{"ui":{"countTokensV2":{"totalTokens":1}},"countTokensV2":{"totalTokens":999}}}]}]`,
 			want: 1,
 		},
 		{
@@ -82,7 +82,7 @@ func TestParseCountTokensResponse(t *testing.T) {
 		},
 		{
 			name: "totalTokens non-numeric string returns 0",
-			raw: `[{"results":[{"data":{"countTokensV2":{"totalTokens":"abc"}}}]}]`,
+			raw:  `[{"results":[{"data":{"countTokensV2":{"totalTokens":"abc"}}}]}]`,
 			want: 0,
 		},
 	}

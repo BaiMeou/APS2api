@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/bsfdsagfadg/vertex/internal/config"
 	"github.com/bsfdsagfadg/vertex/internal/transport"
 )
 
@@ -56,7 +57,7 @@ func FetchRecaptchaToken(net *transport.NetworkClient) (string, error) {
 }
 
 func fetchOnce(net *transport.NetworkClient) (string, bool) {
-	sess, err := net.CreateSession(15)
+	sess, err := net.CreateSession(15, config.Load().ProxyURL)
 	if err != nil {
 		return "", false
 	}

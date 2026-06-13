@@ -176,7 +176,7 @@
       <button data-page="settings"><span class="ic">⚙️</span> 设置</button>
       <button data-page="keys"><span class="ic">🔑</span> 密钥</button>
       <button data-page="models"><span class="ic">🧩</span> 模型</button>
-      <button data-page="nodes"><span class="ic">🌐</span> 代理节点</button>
+      <button data-page="nodes"><span class="ic">🌐</span> 订阅与并发</button>
       <button data-page="appearance"><span class="ic">🎨</span> 外观</button>
     </nav>
     <div class="spacer"></div>
@@ -213,10 +213,24 @@
     </section>
 
     <section id="page-nodes" class="hidden">
-      <div class="page-head"><div><h2>代理节点</h2><div class="hint">出站代理池：每次请求轮询选用一个节点（留空则直连）</div></div></div>
-      <div class="card glass">
-        <div class="toolbar"><input id="nodeUrl" placeholder="代理 URL，如 socks5://host:port 或 http://host:port"><button class="btn" onclick="addNode()">添加节点</button></div>
-        <table><thead><tr><th>#</th><th>代理 URL</th><th></th></tr></thead><tbody id="nodesBody"></tbody></table>
+      <div class="page-head"><div><h2>代理与节点</h2><div class="hint">配置并发竞争请求池或锁定订阅节点。sing-box 已内嵌，无需占本地端口。</div></div></div>
+      <div class="grid" style="grid-template-columns:1fr">
+        <div class="card glass">
+          <div class="field"><label>全局外部代理 (SOCKS5/HTTP)</label>
+            <div class="toolbar" style="margin:0"><input id="globalProxy" placeholder="socks5://127.0.0.1:1080"><button class="btn" onclick="saveGlobalProxy()">保存</button></div>
+            <div class="desc" style="margin-top:6px">配置后默认走该代理；如果未启用并发池且无锁定节点，将使用此代理。</div>
+          </div>
+        </div>
+        <div class="card glass">
+          <div class="toolbar"><input id="subUrl" placeholder="订阅链接 (vless/vmess/trojan/ss/ssr...)"><button class="btn" onclick="addAndFetchSub()">拉取并保存</button></div>
+          <div class="desc" style="margin-bottom:12px" id="nodesSummary">当前共 0 个节点</div>
+          <div class="actions" style="margin-bottom:12px">
+            <button class="btn ghost" onclick="testAllNodes()">后台并发测速</button>
+            <button class="btn ghost" onclick="dedupNodes()">一键去重</button>
+            <button class="btn danger" onclick="deleteDisabledNodes()">清理失效节点</button>
+          </div>
+          <table><thead><tr><th>节点名</th><th>协议</th><th>状态/延迟</th><th>操作</th></tr></thead><tbody id="nodesBody"></tbody></table>
+        </div>
       </div>
     </section>
 
@@ -276,7 +290,7 @@ async function loadOverview() {
   let keys = 0, models = 0, nodes = 0;
   try { keys = ((await api('/api/admin/keys')).keys || []).length; } catch (e) {}
   try { models = ((await api('/api/admin/models')).models || []).length; } catch (e) {}
-  try { nodes = ((await api('/api/admin/proxies')).proxies || []).length; } catch (e) {}
+  try { nodes = ((await api('/api/admin/nodes')).nodes || []).length; } catch (e) {}
   $('#ovCards').innerHTML =
     card('服务状态', '运行中', 'green', 'OpenAI / Gemini 兼容') +
     card('API 密钥', keys, 'gold') +
@@ -285,6 +299,8 @@ async function loadOverview() {
 }
 
 const SETTINGS_FIELDS = [
+  { k: 'parallel_pool_enabled', label: '并发请求池', type: 'bool', desc: '同时请求多个健康节点，首包到达即采纳，降低延迟' },
+  { k: 'parallel_pool_size', label: '并发数', type: 'number', desc: '并发抢跑的节点数 (默认4)' },
   { k: 'max_retries', label: '上游重试次数', type: 'number', desc: '上游请求失败时的重试次数；总尝试 = 此值 + 1' },
   { k: 'max_n', label: 'n 多候选上限', type: 'number', desc: 'chat 的 n（一次返回多个候选）上限' },
   { k: 'anti429_target', label: 'anti429 注入位置', type: 'select', opts: ['system', 'user'], desc: '随机数注入到 system 指令、还是首条 user 消息前' },
@@ -331,13 +347,40 @@ async function saveModels() {
   await api('/api/admin/models', { method: 'PUT', body: JSON.stringify({ models, alias_map }) }); toast('模型已保存');
 }
 
+async function saveGlobalProxy() { await api('/api/admin/settings', { method: 'PUT', body: JSON.stringify({ settings: { proxy_url: $('#globalProxy').value } }) }); loadSettings(); toast('全局代理已保存'); }
 async function loadNodes() {
-  const d = await api('/api/admin/proxies');
-  $('#nodesBody').innerHTML = (d.proxies || []).map((p, i) => `<tr><td>${i + 1}</td><td><code>${esc(p)}</code></td><td style="text-align:right"><button class="danger" onclick="delNode(${i})">删除</button></td></tr>`).join('') || `<tr><td colspan="3" style="color:var(--text-dim)">暂无代理节点（直连）</td></tr>`;
+  const d = await api('/api/admin/nodes');
+  document.getElementById('nodesSummary').textContent = `当前共 ${(d.nodes || []).length} 个节点`;
+  $('#nodesBody').innerHTML = (d.nodes || []).map((n) => `
+    <tr>
+      <td>${esc(n.name)} ${n.raw_uri === curSettings.active_node_uri ? '<span class="pill on">锁定使用中</span>' : ''}</td>
+      <td><code>${esc(n.type)}</code></td>
+      <td>${n.disabled ? '<span class="err">已禁用</span>' : (d.health[n.raw_uri]?.last_test_ms ? Math.round(d.health[n.raw_uri].last_test_ms)+'ms' : '未测试')}</td>
+      <td style="text-align:right">
+        <button class="btn ghost" onclick="useNode('${esc(n.raw_uri)}')">锁定使用</button>
+        <button class="btn danger" onclick="delNode('${esc(n.raw_uri)}')">删除</button>
+      </td>
+    </tr>
+  `).join('') || `<tr><td colspan="4" style="color:var(--text-dim)">暂无节点</td></tr>`;
 }
-async function addNode() { const u = $('#nodeUrl').value.trim(); if (!u) return toast('请填代理 URL'); await api('/api/admin/proxies', { method: 'POST', body: JSON.stringify({ url: u }) }); $('#nodeUrl').value = ''; loadNodes(); toast('已添加节点'); }
-async function delNode(i) { if (!confirm('删除该代理节点？')) return; await api('/api/admin/proxies/' + i, { method: 'DELETE' }); loadNodes(); toast('已删除'); }
-
+async function addAndFetchSub() {
+  const u = $('#subUrl').value.trim();
+  if (!u) return toast('请填订阅 URL');
+  toast('正在拉取...');
+  try {
+    const res = await api('/api/admin/subscriptions/fetch', { method: 'POST', body: JSON.stringify({ url: u }) });
+    $('#subUrl').value = '';
+    await loadNodes();
+    toast('拉取成功，导入了 ' + (res.count || 0) + ' 个节点');
+  } catch (e) {
+    toast('拉取失败: ' + e.message);
+  }
+}
+async function testAllNodes() { toast('测试中，稍后自动刷新...'); await api('/api/admin/nodes/test-all', { method: 'POST' }); let count = 0; let timer = setInterval(async () => { await loadNodes(); count++; if (count > 4) clearInterval(timer); }, 3000); }
+async function dedupNodes() { await api('/api/admin/nodes/deduplicate', { method: 'POST' }); loadNodes(); toast('去重完成'); }
+async function deleteDisabledNodes() { await api('/api/admin/nodes/disabled', { method: 'DELETE' }); loadNodes(); toast('清理完成'); }
+async function useNode(uri) { await api('/api/admin/use-node', { method: 'POST', body: JSON.stringify({ raw_uri: uri }) }); loadSettings(); loadNodes(); toast('已锁定使用该节点，并关闭并发池'); }
+async function delNode(uri) { if(!confirm('删除该节点？')) return; await api('/api/admin/nodes', { method: 'DELETE', body: JSON.stringify({ raw_uri: uri }) }); loadNodes(); toast('已删除'); }
 function loadAppearance() {
   const presets = ['background.jpg'];
   $('#presets').innerHTML = presets.map(p => `<div class="thumb" style="background-image:url('${p}')" onclick="applyBg(\"url('${p}')\");localStorage.setItem('vproxy_bg',\"url('${p}')\");toast('背景已更换')"></div>`).join('');

@@ -119,15 +119,15 @@ func pickProfile() profiles.ClientProfile {
 //
 // timeoutSec 为该会话所有请求的超时（tls-client 是 client 级超时，非 per-request）。
 // recaptcha 取 token 用较短超时（15s），batchGraphql 用 180s。
-func (c *NetworkClient) CreateSession(timeoutSec int) (*Session, error) {
+func (c *NetworkClient) CreateSession(timeoutSec int, proxyURI string) (*Session, error) {
 	opts := []tls_client.HttpClientOption{
 		tls_client.WithTimeoutSeconds(timeoutSec),
 		tls_client.WithClientProfile(pickProfile()),
 		tls_client.WithCookieJar(tls_client.NewCookieJar()),
 	}
-	if proxy := pickProxy(); proxy != "" {
-		opts = append(opts, tls_client.WithProxyUrl(proxy))
-	}
+	opts = injectProxy(opts, proxyURI)
+	// remove old pickProxy
+
 	client, err := tls_client.NewHttpClient(tls_client.NewNoopLogger(), opts...)
 	if err != nil {
 		return nil, err

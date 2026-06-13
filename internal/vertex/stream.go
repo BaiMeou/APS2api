@@ -42,11 +42,29 @@ type StreamChunk struct {
 // 不再重试（已发出的内容不能重来）。ctx 取消（客户端断开/优雅关闭）时干净结束流：
 // 重试退避被打断、上游流连接中断，不再空转。
 func (c *VertexAIClient) StreamChat(ctx context.Context, model string, geminiPayload map[string]any, yield func(StreamChunk) bool) {
+	op := func(ctx context.Context, proxyURI string) <-chan StreamChunk {
+		ch := make(chan StreamChunk, 64)
+		go func() {
+			defer close(ch)
+			c.executeStreamingWithRetries(ctx, model, geminiPayload, proxyURI, func(chunk StreamChunk) bool {
+				select {
+				case ch <- chunk:
+					return true
+				case <-ctx.Done():
+					return false
+				}
+			})
+		}()
+		return ch
+	}
+	StreamParallel(ctx, config.Load(), op, yield)
+}
+func (c *VertexAIClient) executeStreamingWithRetries(ctx context.Context, model string, geminiPayload map[string]any, proxyURI string, yield func(StreamChunk) bool) {
 	maxRetries := c.maxRetries
 	contentYielded := false
 	var lastError *VertexError
 
-	sess, err := c.net.CreateSession(180)
+	sess, err := c.net.CreateSession(180, proxyURI)
 	if err != nil {
 		yield(StreamChunk{Err: NewInternalError("create session: " + err.Error())})
 		return
@@ -132,7 +150,7 @@ retryLoop:
 			}
 			// 429：销毁旧 session 重建新的，换 token。
 			sess.Close()
-			newSess, e := c.net.CreateSession(180)
+			newSess, e := c.net.CreateSession(180, proxyURI)
 			if e != nil {
 				yield(StreamChunk{Err: NewInternalError("recreate session: " + e.Error())})
 				return
@@ -246,8 +264,8 @@ func scanStream(body io.Reader, onObject func(map[string]any) (bool, error)) err
 	readBuf := make([]byte, 16*1024)
 
 	var buffer []byte
-	scanPos := 0   // 已扫到的位置（buffer 内），下个网络 chunk 从这里续扫。
-	startIdx := 0  // 当前对象的起始 '{' 位置。
+	scanPos := 0  // 已扫到的位置（buffer 内），下个网络 chunk 从这里续扫。
+	startIdx := 0 // 当前对象的起始 '{' 位置。
 	braceCount := 0
 	inString := false
 	escape := false
