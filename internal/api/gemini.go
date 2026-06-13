@@ -235,8 +235,15 @@ func (s *Server) geminiError(w http.ResponseWriter, status int, msg, geminiStatu
 
 // vertexErrorToGemini 把 VertexError 转为 Gemini 错误响应体（friendly 提示 + status）。
 func vertexErrorToGemini(e *vertex.VertexError) map[string]any {
+	msg := vertex.FriendlyErrorMessage(e)
+	if e.Message != "" {
+		msg += " | Raw: " + e.Message
+	}
+	if e.UpstreamResponse != "" {
+		msg += " | Upstream: " + e.UpstreamResponse
+	}
 	return map[string]any{"error": map[string]any{
-		"code": e.Code, "message": vertex.FriendlyErrorMessage(e), "status": e.Status,
+		"code": e.Code, "message": msg, "status": e.Status,
 	}}
 }
 

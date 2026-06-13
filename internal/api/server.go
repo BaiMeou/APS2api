@@ -411,8 +411,15 @@ func vertexErrorToOAI(e *vertex.VertexError) map[string]any {
 	default:
 		errType = "server_error"
 	}
+	msg := vertex.FriendlyErrorMessage(e)
+	if e.Message != "" {
+		msg += " | Raw: " + e.Message
+	}
+	if e.UpstreamResponse != "" {
+		msg += " | Upstream: " + e.UpstreamResponse
+	}
 	return map[string]any{"error": map[string]any{
-		"message": vertex.FriendlyErrorMessage(e),
+		"message": msg,
 		"type":    errType,
 		"code":    e.Code,
 	}}
