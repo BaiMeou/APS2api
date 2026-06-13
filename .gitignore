@@ -9,6 +9,9 @@ vertex-proxy
 vertex-proxy-*
 *.exe
 
+# Release packaging output
+dist/
+
 # IDE / OS
 .vscode/
 .idea/

@@ -64,6 +64,8 @@ cp config/api_keys.example.txt config/api_keys.txt
 
 管理面板访问 `http://localhost:<port>/admin/`。
 
+> Windows / Linux / Android(Termux) 的分平台部署、开机自启、代理配置等详细步骤见 **[部署指南.md](部署指南.md)**；预编译压缩包见 [Releases](../../releases)。
+
 ### 代理节点
 
 如需多出站代理（应对 IP 限制），在管理面板「代理节点」页添加代理地址（支持 http/socks5），程序会在请求间轮转使用。
@@ -73,12 +75,14 @@ cp config/api_keys.example.txt config/api_keys.txt
 | 字段 | 默认 | 说明 |
 |------|------|------|
 | `port_api` | 2156 | 监听端口 |
-| `admin_password` | 自动生成 | 管理面板密码 |
+| `admin_password` | 自动生成 | 管理面板密码（留空首启自动生成并写回） |
 | `max_retries` | 2 | 上游请求失败重试次数 |
-| `proxy_url` | "" | 单一出站代理 |
-| `proxy_pool` | [] | 代理池（多个代理轮转） |
-| `anti429_enabled` | true | 是否插入 anti-429 提示 |
-| `fake_streaming` | false | 非流式模型伪装流式输出 |
+| `proxy_url` | "" | 单一出站代理（http/socks5） |
+| `anti429_enabled` | false | 是否插入 anti-429 提示 |
+| `force_no_stream` | false | 强制所有请求走非流式 |
+| `parallel_pool_enabled` | true | 并发竞速节点池（节点在管理面板「代理与节点」页配置） |
+
+> 假流式：在模型名前加 `fake-` 或 `假流式-` 前缀即可（先完整生成再切片推送），无需配置项。完整字段说明见 [部署指南.md](部署指南.md#六配置说明)。
 
 ## License
 

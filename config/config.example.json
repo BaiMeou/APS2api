@@ -1,5 +1,6 @@
 {
-  "port_api": 2157,
+  "port_api": 2156,
   "max_retries": 10,
+  "admin_password": "",
   "proxy_url": ""
 }
