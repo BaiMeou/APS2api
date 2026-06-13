@@ -289,7 +289,7 @@ func (s *Server) streamChatCompletions(ctx context.Context, w http.ResponseWrite
 	s.vc.StreamChat(ctx, model, geminiPayload, func(ch vertex.StreamChunk) bool {
 		// 错误 chunk（重试耗尽）：发 OAI error 事件 + [DONE] 后终止。
 		if ch.Err != nil {
-			s.writeStreamError(write, ch.Err, requestID)
+			s.writeStreamError(write, ch.Err, requestID, model)
 			return false
 		}
 		events := transform.ConvertRealtimeChunk(ch.Data, model, requestID, isFirst)
@@ -313,7 +313,7 @@ func (s *Server) streamChatCompletions(ctx context.Context, w http.ResponseWrite
 	if !gotContent {
 		// 上游 0-token 空回 → 明确报错让客户端重试，而非正常空结束（EmptyResponseError 分支）。
 		ee := vertex.NewEmptyResponseError("Upstream returned empty response (no content)")
-		s.writeStreamError(write, ee, requestID)
+		s.writeStreamError(write, ee, requestID, model)
 		return
 	}
 	if !hasFinish {
@@ -326,9 +326,9 @@ func (s *Server) streamChatCompletions(ctx context.Context, w http.ResponseWrite
 
 // writeStreamError 发一条 OAI 错误事件 + [DONE]。安全拦截 → finish_reason=content_filter（不报错）；
 // 其余走友好错误返回（流式错误分支）。
-func (s *Server) writeStreamError(write func(string) bool, e *vertex.VertexError, requestID string) {
+func (s *Server) writeStreamError(write func(string) bool, e *vertex.VertexError, requestID, model string) {
 	if isSafetyBlock(e) {
-		base := s.streamChunkBase("", requestID)
+		base := s.streamChunkBase(model, requestID)
 		base["choices"] = []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "content_filter"}}
 		_ = write(s.sseEvent(base))
 	} else {

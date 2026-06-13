@@ -143,7 +143,7 @@ func (s *Server) handleGeminiStreamGenerate(w http.ResponseWriter, r *http.Reque
 				_ = sw.write(s.geminiSSE(geminiSafetyChunk(ch.Err)))
 			} else {
 				_ = sw.write(s.geminiSSE(map[string]any{"error": map[string]any{
-					"code": ch.Err.Code, "message": vertex.FriendlyErrorMessage(ch.Err), "status": "INTERNAL",
+					"code": ch.Err.Code, "message": vertex.FriendlyErrorMessage(ch.Err), "status": geminiStatusOf(ch.Err),
 				}}))
 			}
 			return false
@@ -165,7 +165,7 @@ func (s *Server) geminiFakeStream(ctx context.Context, sw *sseWriter, model stri
 			return
 		}
 		_ = sw.write(s.geminiSSE(map[string]any{"error": map[string]any{
-			"code": ve.Code, "message": vertex.FriendlyErrorMessage(ve), "status": "INTERNAL",
+			"code": ve.Code, "message": vertex.FriendlyErrorMessage(ve), "status": geminiStatusOf(ve),
 		}}))
 		return
 	}
@@ -234,8 +234,17 @@ func vertexErrorToGemini(e *vertex.VertexError) map[string]any {
 		msg += " | Upstream: " + e.UpstreamResponse
 	}
 	return map[string]any{"error": map[string]any{
-		"code": e.Code, "message": msg, "status": e.Status,
+		"code": e.Code, "message": msg, "status": geminiStatusOf(e),
 	}}
+}
+
+// geminiStatusOf 返回 Gemini 错误响应的 status 字段：优先用 VertexError 的真实 gRPC 状态
+// （INVALID_ARGUMENT/RESOURCE_EXHAUSTED/UNAUTHENTICATED 等），为空时回退 INTERNAL。
+func geminiStatusOf(e *vertex.VertexError) string {
+	if e != nil && e.Status != "" {
+		return e.Status
+	}
+	return "INTERNAL"
 }
 
 // geminiSafetyResponse 安全拦截的非流式 Gemini 标准响应（200 + 空 candidates + promptFeedback）。

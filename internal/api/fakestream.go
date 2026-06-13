@@ -78,7 +78,7 @@ func (s *Server) oaiFakeStream(ctx context.Context, w http.ResponseWriter, model
 	resp, vErr := s.vc.CompleteChat(ctx, model, geminiPayload)
 	if vErr != nil {
 		ve := toVertexError(vErr)
-		s.writeStreamError(sw.write, ve, requestID)
+		s.writeStreamError(sw.write, ve, requestID, model)
 		return
 	}
 

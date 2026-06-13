@@ -268,7 +268,7 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 常量时间比较，防计时侧信道泄漏密码长度/前缀匹配信息。
-	if subtle.ConstantTimeCompare([]byte(body.Password), []byte(expected)) != 1 {
+	if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(body.Password)), []byte(expected)) != 1 {
 		s.writeJSON(w, http.StatusUnauthorized, adminErr("密码错误 (invalid password)"))
 		return
 	}
@@ -350,8 +350,12 @@ func (s *Server) adminPutSettings(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 		case "admin_password":
-			// 空密码不允许（避免误把密码清空导致无法登录）。
+			// 空密码不允许（避免误把密码清空导致无法登录）。存 TrimSpace 后的值，
+			// 与登录端/EnsureAdminPassword 的 trim 对称，避免"存了带空格、登录比 trim 后值"的不一致。
 			if pw, ok := v.(string); !ok || strings.TrimSpace(pw) == "" {
+				continue
+			} else {
+				updates[k] = strings.TrimSpace(pw)
 				continue
 			}
 		}

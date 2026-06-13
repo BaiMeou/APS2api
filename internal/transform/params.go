@@ -468,7 +468,8 @@ func toNativeSchema(schema any) any {
 	if props, ok := out["properties"].(map[string]any); ok {
 		nativeProps := make([]any, 0, len(props))
 		for key, value := range props {
-			var converted any = map[string]any{}
+			// 默认保留原值；仅当 value 是嵌套 schema(map)时才递归转原生格式，非 map 值不丢失。
+			converted := value
 			if vm, ok := value.(map[string]any); ok {
 				converted = toNativeSchema(vm)
 			}
