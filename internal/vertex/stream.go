@@ -1,0 +1,547 @@
+package vertex
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"strings"
+	"time"
+
+	"github.com/bsfdsagfadg/vertex/internal/config"
+	"github.com/bsfdsagfadg/vertex/internal/metrics"
+	"github.com/bsfdsagfadg/vertex/internal/spool"
+	"github.com/bsfdsagfadg/vertex/internal/transport"
+)
+
+// finishReasonUnspecified 是匿名 batchGraphql 每帧都携带的 protobuf 默认值（无意义）。
+//
+// 流式最关键红线（红线⑤）：匿名端点每个增量帧都带 finishReason="FINISH_REASON_UNSPECIFIED"，
+// 只有真正结束时才给 STOP/MAX_TOKENS/SAFETY/PROHIBITED_CONTENT 等真实值。
+// **绝不能据 UNSPECIFIED 发 finish 事件或结束流**：首帧就命中会立即截断（血泪教训）。
+// 只有 finishReason 非空且 != FINISH_REASON_UNSPECIFIED 才主动结束流（否则上游不及时关连接
+// 会挂死到 180s 超时）。
+const finishReasonUnspecified = "FINISH_REASON_UNSPECIFIED"
+
+// StreamChunk 是真流式中 yield 的单个增量。要么是 Gemini 数据 chunk，要么是错误。
+//
+// 正常 yield Gemini dict，所有重试耗尽时 yield {"error": {...}}（routes 层据此
+// 发 OAI error 事件 + [DONE]）。
+type StreamChunk struct {
+	// Data 是清洗后的 Gemini 增量（candidates/usageMetadata/...），Err==nil 时有效。
+	Data map[string]any
+	// Err 非 nil 表示重试耗尽、对外报错（yield error dict）。
+	Err *VertexError
+}
+
+// StreamChat 真流式入口。
+//
+// 通过 yield 回调推送增量：回调返回 false 表示客户端断开/上层要求停止，立即终止。
+// 单 session 复用 + response 排干防串流。重试逻辑与非流式对齐，但 content_yielded 后
+// 不再重试（已发出的内容不能重来）。ctx 取消（客户端断开/优雅关闭）时干净结束流：
+// 重试退避被打断、上游流连接中断，不再空转。
+func (c *VertexAIClient) StreamChat(ctx context.Context, model string, geminiPayload map[string]any, yield func(StreamChunk) bool) {
+	maxRetries := c.maxRetries
+	contentYielded := false
+	var lastError *VertexError
+
+	sess, err := c.net.CreateSession(180)
+	if err != nil {
+		yield(StreamChunk{Err: NewInternalError("create session: " + err.Error())})
+		return
+	}
+	defer sess.Close()
+
+	recaptchaToken := ""
+	isFirstAuth := true
+	attempt := 0
+
+	// 标签化循环：各重试 case 用 break retryLoop 直接终止整个循环（in-case break 只跳 switch）。
+	// 这样重试预算由 `for attempt <= maxRetries` 单独控制（总尝试=maxRetries+1），与非流式 completeInner
+	// 一致——修复此前 post-switch 二次判定导致真流式少 1 次重试的 off-by-one。
+retryLoop:
+	for attempt <= maxRetries {
+		if recaptchaToken == "" {
+			tok, _ := c.pool.GetToken()
+			recaptchaToken = tok
+			isFirstAuth = true
+		}
+		if recaptchaToken == "" {
+			if attempt == maxRetries {
+				lastError = NewAuthenticationError("Could not fetch recaptcha token.")
+				break retryLoop
+			}
+			attempt++
+			if err := sleepCtx(ctx, time.Second); err != nil {
+				break retryLoop // ctx 取消：客户端已断开，停止重试
+			}
+			continue
+		}
+
+		// 单次流式尝试：把增量 yield 给上层，统计本次 attempt yield 的 chunk 数。
+		chunkCount := 0
+		attemptErr := c.executeStreamingAttempt(ctx, sess, model, geminiPayload, recaptchaToken, isFirstAuth, func(ch map[string]any) bool {
+			chunkCount++
+			contentYielded = true
+			return yield(StreamChunk{Data: ch})
+		})
+
+		if attemptErr == nil {
+			// 本次尝试无错误。若 0 chunk 且仍是首帧 → 认证重试（同 token 再打一次）。
+			if chunkCount == 0 && isFirstAuth {
+				isFirstAuth = false
+				if err := sleepCtx(ctx, 500*time.Millisecond); err != nil {
+					break retryLoop
+				}
+				continue
+			}
+			return
+		}
+
+		ve := asVertexError(attemptErr)
+		switch {
+		case ve != nil && ve.Kind == "auth":
+			isVerifyFail := strings.Contains(ve.Message, "Failed to verify action") ||
+				strings.Contains(ve.Message, "The caller does not have permission")
+			if isFirstAuth && isVerifyFail {
+				// 首次认证重试：token 不清空，同一 token 再打一次（匿名端点首帧预期 verify-fail）。
+				isFirstAuth = false
+				if err := sleepCtx(ctx, 500*time.Millisecond); err != nil {
+					break retryLoop
+				}
+				continue
+			}
+			recaptchaToken = ""
+			isFirstAuth = true
+			lastError = ve
+			metrics.Default.IncUpstreamAuth() // 真实认证失败（首帧 verify-fail 预热已在上面 continue，不计）
+			if contentYielded || attempt >= maxRetries {
+				break retryLoop
+			}
+			attempt++
+			if err := sleepCtx(ctx, time.Second); err != nil {
+				break retryLoop
+			}
+
+		case ve != nil && ve.Kind == "ratelimit":
+			lastError = ve
+			metrics.Default.IncUpstream429()
+			if contentYielded || attempt >= maxRetries {
+				break retryLoop
+			}
+			// 429：销毁旧 session 重建新的，换 token。
+			sess.Close()
+			newSess, e := c.net.CreateSession(180)
+			if e != nil {
+				yield(StreamChunk{Err: NewInternalError("recreate session: " + e.Error())})
+				return
+			}
+			sess = newSess
+			recaptchaToken = ""
+			attempt++
+			wait := min(10, 1+attempt)
+			if err := sleepCtx(ctx, time.Duration(wait)*time.Second); err != nil {
+				break retryLoop
+			}
+
+		case ve != nil:
+			lastError = ve
+			if ve.Kind == "empty" {
+				metrics.Default.IncUpstreamEmpty()
+			}
+			if !ve.IsRetryable() || contentYielded || attempt >= maxRetries {
+				break retryLoop
+			}
+			attempt++
+			if err := sleepCtx(ctx, backoff(attempt)); err != nil {
+				break retryLoop
+			}
+
+		default:
+			lastError = NewInternalError(attemptErr.Error())
+			if contentYielded || attempt >= maxRetries {
+				break retryLoop
+			}
+			attempt++
+			if err := sleepCtx(ctx, time.Second); err != nil {
+				break retryLoop
+			}
+		}
+	}
+
+	// 所有重试耗尽且没发出过任何内容 → yield 一个 error chunk（末尾 yield error dict）。
+	if !contentYielded && lastError != nil {
+		yield(StreamChunk{Err: lastError})
+	}
+}
+
+// stopRequested 哨兵已不再需要：客户端断开时 emit 返回 false → scanStream 正常停止返回 nil，
+// StreamChat 据 chunkCount>0 收尾。此处保留注释记录这一设计决策（不引入额外哨兵分支）。
+
+// executeStreamingAttempt 执行单次流式请求：发请求 → 增量扫描 JSON → 提取 chunk → 过滤 finishReason。
+//
+// emit 回调把清洗后的 Gemini chunk 推给上层；
+// emit 返回 false（客户端断开）时扫描正常停止、返回 nil（StreamChat 据 chunkCount>0 收尾，不重试）。
+// ctx 绑定到上游流连接：ctx 取消时 Body.Read 报错，scanStream 干净结束（返回 nil，不 panic）。
+func (c *VertexAIClient) executeStreamingAttempt(ctx context.Context, sess *transport.Session, model string, geminiPayload map[string]any, recaptchaToken string, isFirstAuth bool, emit func(map[string]any) bool) error {
+	cfg := config.Load()
+	newBody := buildRequestPayload(model, geminiPayload, recaptchaToken, cfg)
+	// 上游请求 payload 序列化到 spool 缓冲（大媒体自动落盘）。流式：请求体在 DoStream 发送期被读取，
+	// 缓冲存活到本函数返回（整个流消费完）后由 defer Close 删除临时文件。
+	buf, err := spool.EncodeJSON(newBody)
+	if err != nil {
+		return NewInternalError("marshal payload: " + err.Error())
+	}
+	defer buf.Close()
+	reader, err := buf.Reader()
+	if err != nil {
+		return NewInternalError("spool reader: " + err.Error())
+	}
+	header := transport.XHRHeaders(
+		"application/json", "*/*",
+		"https://console.cloud.google.com", "https://console.cloud.google.com/", "cross-site",
+	)
+
+	sr, err := sess.DoStream(ctx, "POST", batchGraphqlURL, header, reader)
+	if err != nil {
+		return NewInternalError("upstream request: " + err.Error())
+	}
+	defer sr.Close() // 排干 → close，防串流。
+
+	// HTTP 错误：读完 error body 后按状态映射（与非流式 executeCompleteRequest 一致）。
+	if sr.StatusCode != 200 {
+		var buf bytes.Buffer
+		_, _ = buf.ReadFrom(sr.Body)
+		errText := buf.String()
+		if sr.StatusCode == 401 || sr.StatusCode == 403 ||
+			strings.Contains(errText, "Failed to verify action") ||
+			strings.Contains(errText, "The caller does not have permission") {
+			return NewAuthenticationError("Authentication/Recaptcha failed: " + errText)
+		}
+		if parsed := parseErrorResponse(errText); parsed != nil {
+			parsed.UpstreamResponse = errText
+			return parsed
+		}
+		return raiseForStatus(sr.StatusCode, "", "Upstream Error: "+errText, nil, errText)
+	}
+
+	// 增量扫描上游流，逐个完整 JSON 对象提取 chunk。
+	return scanStream(sr.Body, func(obj map[string]any) (stop bool, err error) {
+		// 从单个上游对象提取（可能多个）chunk，逐个 emit；命中真实 finishReason 即结束。
+		return processStreamingObject(obj, emit)
+	})
+}
+
+// scanStream 跨 chunk 增量扫描花括号配对，逐个完整 JSON 对象回调 onObject（O(n)）。
+//
+// M27 增量扫描：
+// 跨网络 chunk 维护 scanPos/braceCount/inString/escape 状态，下个 chunk 从上次扫到的位置
+// 续扫，而非每来一个 chunk 都从 startIdx 重扫整个 buffer（旧逻辑 O(n²)）。逐字节逻辑等价。
+//
+// onObject 返回 (stop, err)：stop=true（命中真实 finishReason / 客户端断开）即正常结束扫描；
+// err 非 nil 即中断并上抛（上游错误）。
+func scanStream(body io.Reader, onObject func(map[string]any) (bool, error)) error {
+	reader := bufio.NewReader(body)
+	readBuf := make([]byte, 16*1024)
+
+	var buffer []byte
+	scanPos := 0   // 已扫到的位置（buffer 内），下个网络 chunk 从这里续扫。
+	startIdx := 0  // 当前对象的起始 '{' 位置。
+	braceCount := 0
+	inString := false
+	escape := false
+
+	for {
+		n, readErr := reader.Read(readBuf)
+		if n > 0 {
+			buffer = append(buffer, readBuf[:n]...)
+
+			for {
+				if scanPos == 0 {
+					// 找下一个对象的起始 '{'。
+					startIdx = bytes.IndexByte(buffer, '{')
+					if startIdx == -1 {
+						buffer = buffer[:0]
+						break
+					}
+					scanPos = startIdx
+					braceCount = 0
+					inString = false
+					escape = false
+				}
+
+				endIdx := -1
+				for i := scanPos; i < len(buffer); i++ {
+					ch := buffer[i]
+					if escape {
+						escape = false
+						continue
+					}
+					if ch == '\\' {
+						escape = true
+						continue
+					}
+					if ch == '"' {
+						inString = !inString
+						continue
+					}
+					if !inString {
+						if ch == '{' {
+							braceCount++
+						} else if ch == '}' {
+							braceCount--
+							if braceCount == 0 {
+								endIdx = i
+								break
+							}
+						}
+					}
+				}
+
+				if endIdx != -1 {
+					jsonStr := buffer[startIdx : endIdx+1]
+					// 复制出对象后裁剪 buffer（drop 已消费前缀），重置扫描状态。
+					rest := make([]byte, len(buffer)-(endIdx+1))
+					copy(rest, buffer[endIdx+1:])
+					buffer = rest
+					scanPos = 0
+
+					obj := parseJSONObject(jsonStr)
+					if obj != nil {
+						stop, err := onObject(obj)
+						if err != nil {
+							return err
+						}
+						if stop {
+							return nil
+						}
+					}
+					// jsonStr 解析失败（半截/畸形）静默跳过。
+				} else {
+					// 未扫到完整对象：记下已扫位置，下个 chunk 续扫，不重扫前缀。
+					scanPos = len(buffer)
+					break
+				}
+			}
+		}
+
+		if readErr != nil {
+			// EOF 或读错误：流结束（正常 EOF 直接返回 nil，上层会按 got_content 判定空响应）。
+			return nil
+		}
+	}
+}
+
+// parseJSONObject 把单个 JSON 对象字符串解析为 map，失败返回 nil（解析失败跳过）。
+func parseJSONObject(b []byte) map[string]any {
+	var obj map[string]any
+	if err := json.Unmarshal(b, &obj); err != nil {
+		return nil
+	}
+	return obj
+}
+
+// processStreamingObject 从单个上游 JSON 对象提取增量 chunk。
+//
+// 先识别 results 内的错误（"Failed to verify action" → AuthenticationError 触发重试），
+// 再 unwrap data.ui.streamGenerateContentAnonymous，最后 _extract_chunk 清洗后 emit。
+// 返回 (stop, err)：emit 出真实 finishReason 或客户端断开即 stop=true（结束扫描）；上游错误即 err 非 nil。
+func processStreamingObject(obj map[string]any, emit func(map[string]any) bool) (bool, error) {
+	results, _ := obj["results"].([]any)
+	for _, rRaw := range results {
+		result, ok := rRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		// results 内的错误处理。
+		if errs, ok := result["errors"].([]any); ok && len(errs) > 0 {
+			errMsg := ""
+			if first, ok := errs[0].(map[string]any); ok {
+				errMsg = toStr(first["message"])
+			} else {
+				errMsg = toStr(errs[0])
+			}
+			if strings.Contains(errMsg, "Failed to verify action") ||
+				strings.Contains(errMsg, "The caller does not have permission") {
+				return false, NewAuthenticationError(errMsg)
+			}
+			if parsed := parseErrorResponse(map[string]any{"errors": errs}); parsed != nil {
+				return false, parsed
+			}
+		}
+
+		data, ok := result["data"].(map[string]any)
+		if !ok {
+			continue
+		}
+
+		// unwrap data.ui.streamGenerateContentAnonymous（匿名端点把载荷包在这里面）。
+		if ui, ok := data["ui"].(map[string]any); ok {
+			if innerRaw, exists := ui["streamGenerateContentAnonymous"]; exists {
+				switch inner := innerRaw.(type) {
+				case map[string]any:
+					data = inner
+				case []any:
+					// 极少数情况 inner 是 list：逐项 extract+emit，本 result 处理完跳过下方。
+					for _, itemRaw := range inner {
+						if item, ok := itemRaw.(map[string]any); ok {
+							if chunk := extractChunk(item); chunk != nil {
+								if _, done := emitAndCheckFinish(chunk, emit); done {
+									return true, nil
+								}
+							}
+						}
+					}
+					continue
+				default:
+					continue
+				}
+			}
+		}
+
+		if chunk := extractChunk(data); chunk != nil {
+			if _, done := emitAndCheckFinish(chunk, emit); done {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
+}
+
+// emitAndCheckFinish emit 一个 chunk 并判定是否应结束流。
+//
+// finishReason 过滤（红线⑤）：emit 后取 chunk 的 candidates[0].finishReason，
+// **仅当非空且 != FINISH_REASON_UNSPECIFIED 才主动结束流**。
+// 返回 (stopByClient, done)：done=true 表示应停止扫描；stopByClient 区分是客户端断开还是正常 finish。
+func emitAndCheckFinish(chunk map[string]any, emit func(map[string]any) bool) (stopByClient bool, done bool) {
+	if !emit(chunk) {
+		// 客户端断开 / 上层要求停止。
+		return true, true
+	}
+	fr := chunkFinishReason(chunk)
+	if fr != "" && fr != finishReasonUnspecified {
+		// 真实 finishReason：主动结束（避免上游不关连接挂到 180s）。
+		return false, true
+	}
+	return false, false
+}
+
+// chunkFinishReason 取 chunk 的 candidates[0].finishReason。
+func chunkFinishReason(chunk map[string]any) string {
+	cands, ok := chunk["candidates"].([]any)
+	if !ok || len(cands) == 0 {
+		return ""
+	}
+	c, ok := cands[0].(map[string]any)
+	if !ok {
+		return ""
+	}
+	return toStr(c["finishReason"])
+}
+
+// extractChunk 从 Gemini 数据中提取标准化 chunk，清洗畸形嵌套。
+//
+// 无 candidates → nil（跳过）。每个 candidate 的 content.parts 经 cleanStreamParts 清洗，
+// 再附带 usageMetadata/modelVersion/responseId/promptFeedback/createTime（非空时）。
+func extractChunk(data map[string]any) map[string]any {
+	candidatesRaw, _ := data["candidates"].([]any)
+	if len(candidatesRaw) == 0 {
+		return nil
+	}
+
+	cleanedCandidates := make([]any, 0, len(candidatesRaw))
+	for _, cRaw := range candidatesRaw {
+		candidate, ok := cRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		content, hasContent := candidate["content"].(map[string]any)
+		if hasContent {
+			parts, ok := content["parts"].([]any)
+			if ok {
+				cleanedParts := cleanStreamParts(parts)
+				cleanedCandidate := shallowCopy(candidate)
+				role := toStr(content["role"])
+				if role == "" {
+					role = "model"
+				}
+				cleanedCandidate["content"] = map[string]any{"role": role, "parts": cleanedParts}
+				cleanedCandidates = append(cleanedCandidates, cleanedCandidate)
+			} else {
+				cleanedCandidates = append(cleanedCandidates, candidate)
+			}
+		} else {
+			cleanedCandidates = append(cleanedCandidates, candidate)
+		}
+	}
+
+	if len(cleanedCandidates) == 0 {
+		return nil
+	}
+
+	chunk := map[string]any{"candidates": cleanedCandidates}
+	for _, key := range []string{"usageMetadata", "modelVersion", "responseId", "promptFeedback", "createTime"} {
+		if v, ok := data[key]; ok && isTruthyAny(v) {
+			chunk[key] = v
+		}
+	}
+	return chunk
+}
+
+// cleanStreamParts 清洗 parts 列表，展开畸形嵌套，确保每个 part 的 text 是字符串。
+func cleanStreamParts(parts []any) []any {
+	cleaned := make([]any, 0, len(parts))
+	for _, pRaw := range parts {
+		part, ok := pRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		textVal, hasText := part["text"]
+		if hasText {
+			if _, isStr := textVal.(string); !isStr {
+				// 畸形嵌套：text 值是 list/dict 而非字符串，递归提取真正文本。
+				extracted := extractTextRecursive(textVal, 0)
+				if extracted != "" {
+					newPart := shallowCopy(part)
+					newPart["text"] = extracted
+					cleaned = append(cleaned, newPart)
+				}
+				continue
+			}
+		}
+		cleaned = append(cleaned, part)
+	}
+	return cleaned
+}
+
+// extractTextRecursive 从嵌套结构中递归提取纯文本，防止无限递归（depth>20 截断）。
+func extractTextRecursive(val any, depth int) string {
+	if depth > 20 {
+		s := toStr(val)
+		if len(s) > 500 {
+			return s[:500]
+		}
+		return s
+	}
+	switch v := val.(type) {
+	case string:
+		return v
+	case map[string]any:
+		if t, ok := v["text"]; ok {
+			return extractTextRecursive(t, depth+1)
+		}
+		return ""
+	case []any:
+		var sb strings.Builder
+		for _, item := range v {
+			if t := extractTextRecursive(item, depth+1); t != "" {
+				sb.WriteString(t)
+			}
+		}
+		return sb.String()
+	default:
+		return ""
+	}
+}
