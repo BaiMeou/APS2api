@@ -1,36 +1,19 @@
-# Runtime config/state
+# Runtime config (contains secrets)
 config/config.json
 config/api_keys.txt
 config/nodes.json
 config/node_health.json
 
-# Local environment
-.env
+# Binaries
+vertex-proxy
+vertex-proxy-*
+*.exe
 
-# Generated test artifacts
-test-generated-*.png
-
-# Python cache
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.mypy_cache/
-
-# Virtual environments
-.conda/
-.venv/
-venv/
-env/
-
-# Runtime output
-logs/
-tests/
-errors/
-bin/
-
-# IDE
+# IDE / OS
 .vscode/
-.kilo/
 .idea/
 *.swp
-*.swo
+.DS_Store
+
+# Test artifacts
+test-generated-*.png
