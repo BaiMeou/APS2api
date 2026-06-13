@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vertex AI Proxy · 控制台</title>
+<style>
+  /* 玻璃拟态控制台。背景可在「外观」页更换；侧栏与卡片磨砂半透，背后透出。
+     暖金主色、青蓝点缀。自写 CSS、零外部依赖。 */
+  :root {
+    --gold: #f0bd5c;
+    --gold-deep: #e0a13c;
+    --gold-soft: rgba(240, 189, 92, .15);
+    --blue: #8fd0e8;
+    --green: #84d6a0;
+    --red: #ec8a7c;
+    --text: #f6f1e9;
+    --text-dim: #c3b6a4;
+    --glass: rgba(34, 27, 22, .38);
+    --stroke: rgba(255, 246, 232, .14);
+    --hi: rgba(255, 250, 240, .18);
+    --radius: 18px;
+    --ease: cubic-bezier(.22, .8, .3, 1);
+    --bg-img: url('background.jpg');
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body { font: 14px/1.55 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color: var(--text); overflow: hidden; }
+  ::selection { background: rgba(240, 189, 92, .3); }
+  a { color: var(--blue); text-decoration: none; }
+  button { font: inherit; cursor: pointer; color: inherit; }
+  input, select, textarea {
+    font: inherit; color: var(--text); background: rgba(255, 255, 255, .05);
+    border: 1px solid var(--stroke); border-radius: 11px; padding: 10px 13px; width: 100%;
+    transition: border-color .2s var(--ease), background .2s var(--ease), box-shadow .2s var(--ease);
+  }
+  input::placeholder, textarea::placeholder { color: rgba(195, 182, 164, .55); }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--gold); background: rgba(255, 255, 255, .08); box-shadow: 0 0 0 3px var(--gold-soft); }
+  select {
+    appearance: none; -webkit-appearance: none; cursor: pointer; padding-right: 36px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%23f0bd5c' stroke-width='1.6' fill='none' stroke-linecap='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 14px center;
+  }
+  option { background: #1f1813; color: var(--text); }
+  .hidden { display: none !important; }
+
+  .bg { position: fixed; inset: -4%; z-index: -2; background: var(--bg-img) center/cover no-repeat; animation: kenburns 50s ease-in-out infinite alternate; }
+  .bg-veil {
+    position: fixed; inset: 0; z-index: -1; pointer-events: none;
+    background:
+      radial-gradient(1200px 800px at 82% -6%, rgba(240, 180, 110, .16), transparent 55%),
+      radial-gradient(900px 700px at 10% 110%, rgba(120, 150, 190, .1), transparent 55%),
+      linear-gradient(180deg, rgba(20, 15, 11, .42), rgba(13, 10, 8, .62));
+  }
+  @keyframes kenburns { from { transform: scale(1) translate(0, 0); } to { transform: scale(1.08) translate(-1%, -1.5%); } }
+
+  .glass {
+    background: var(--glass); backdrop-filter: blur(26px) saturate(165%); -webkit-backdrop-filter: blur(26px) saturate(165%);
+    border: 1px solid var(--stroke); border-radius: var(--radius);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, .4), inset 0 1px 0 var(--hi);
+  }
+  .btn {
+    background: linear-gradient(180deg, var(--gold), var(--gold-deep)); color: #2c1d08; border: none;
+    border-radius: 11px; padding: 10px 18px; font-weight: 600; letter-spacing: .01em;
+    box-shadow: 0 6px 18px rgba(224, 161, 60, .3); transition: transform .18s var(--ease), filter .18s, box-shadow .18s;
+  }
+  .btn:hover { filter: brightness(1.06); transform: translateY(-1.5px); box-shadow: 0 9px 24px rgba(224, 161, 60, .42); }
+  .btn:active { transform: translateY(0) scale(.99); }
+  .btn.ghost { background: rgba(255, 255, 255, .06); color: var(--text-dim); box-shadow: none; border: 1px solid var(--stroke); }
+  .btn.ghost:hover { color: var(--text); border-color: var(--gold); background: rgba(255, 255, 255, .11); transform: translateY(-1.5px); }
+  .btn.danger { background: transparent; color: var(--red); border: 1px solid rgba(236, 138, 124, .35); box-shadow: none; padding: 6px 13px; }
+  .btn.danger:hover { background: rgba(236, 138, 124, .14); transform: none; }
+
+  .toggle { position: relative; display: inline-flex; width: 46px; height: 26px; flex: none; }
+  .toggle input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+  .toggle .track { position: absolute; inset: 0; border-radius: 99px; background: rgba(255, 255, 255, .1); border: 1px solid var(--stroke); transition: background .26s var(--ease), border-color .26s; }
+  .toggle .track::after { content: ''; position: absolute; top: 2.5px; left: 3px; width: 19px; height: 19px; border-radius: 50%; background: #ece4d6; box-shadow: 0 2px 6px rgba(0, 0, 0, .45); transition: left .28s var(--ease), background .26s; }
+  .toggle input:checked + .track { background: linear-gradient(180deg, var(--gold), var(--gold-deep)); border-color: transparent; box-shadow: 0 0 14px rgba(240, 189, 92, .4); }
+  .toggle input:checked + .track::after { left: 22px; background: #fff; }
+
+  #login { position: fixed; inset: 0; display: grid; place-items: center; transition: opacity .42s var(--ease), transform .42s var(--ease), filter .42s; }
+  #login.out { opacity: 0; transform: scale(.97); filter: blur(4px); pointer-events: none; }
+  #login .box { width: 372px; padding: 42px 36px; text-align: center; animation: pop .55s var(--ease); }
+  @keyframes pop { from { opacity: 0; transform: translateY(18px) scale(.95); } to { opacity: 1; transform: none; } }
+  #login .logo { width: 56px; height: 56px; margin: 0 auto; border-radius: 16px; background: linear-gradient(135deg, var(--gold), var(--gold-deep)); display: grid; place-items: center; font-size: 26px; font-weight: 800; color: #2c1d08; box-shadow: 0 8px 22px rgba(240, 189, 92, .4); }
+  #login h1 { font-size: 21px; margin: 16px 0 5px; letter-spacing: .02em; }
+  #login .sub { color: var(--text-dim); font-size: 12.5px; margin-bottom: 26px; }
+  #login input { margin-bottom: 14px; text-align: center; }
+  #login .btn { width: 100%; }
+  .err { color: var(--red); font-size: 12px; min-height: 16px; margin-top: 12px; }
+
+  #app { position: fixed; inset: 0; display: grid; grid-template-columns: 236px 1fr; padding: 18px; gap: 18px; opacity: 0; transition: opacity .5s var(--ease); }
+  #app.in { opacity: 1; }
+  aside { padding: 24px 16px; display: flex; flex-direction: column; gap: 4px; }
+  .brand { display: flex; align-items: center; gap: 11px; padding: 4px 6px 24px; font-size: 16px; font-weight: 700; letter-spacing: .01em; }
+  .brand .mk { width: 30px; height: 30px; border-radius: 9px; background: linear-gradient(135deg, var(--gold), var(--gold-deep)); display: grid; place-items: center; font-size: 15px; font-weight: 800; color: #2c1d08; flex: none; }
+  nav { display: flex; flex-direction: column; gap: 3px; }
+  nav button {
+    display: flex; align-items: center; gap: 12px; width: 100%; text-align: left;
+    background: transparent; border: none; color: var(--text-dim);
+    padding: 11px 14px; border-radius: 12px; font-size: 14px;
+    transition: background .2s var(--ease), color .2s, transform .2s var(--ease), box-shadow .2s;
+  }
+  nav button .ic { font-size: 16px; width: 20px; text-align: center; }
+  nav button:hover { background: rgba(255, 255, 255, .07); color: var(--text); transform: translateX(3px); }
+  nav button.active { background: var(--gold-soft); color: var(--gold); font-weight: 600; box-shadow: inset 0 0 0 1px rgba(240, 189, 92, .32), 0 4px 16px rgba(240, 189, 92, .14); }
+  aside .spacer { flex: 1; }
+
+  main { overflow: auto; padding: 28px 32px; position: relative; }
+  main::-webkit-scrollbar { width: 9px; } main::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, .14); border-radius: 9px; }
+  .page-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 24px; }
+  .page-head h2 { font-size: 24px; font-weight: 700; letter-spacing: .01em; text-shadow: 0 2px 14px rgba(0, 0, 0, .3); }
+  .page-head .hint { color: var(--text-dim); font-size: 12.5px; margin-top: 4px; }
+  section { transition: opacity .34s var(--ease), transform .34s var(--ease); }
+  section.leaving { opacity: 0; transform: translateY(10px); }
+  section.entering { opacity: 0; transform: translateY(14px); }
+
+  .grid { display: grid; gap: 16px; }
+  .grid.stats { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
+  .card { padding: 20px 22px; transition: transform .22s var(--ease), box-shadow .22s, border-color .22s; }
+  .card.hoverable:hover { transform: translateY(-4px); box-shadow: 0 22px 54px rgba(0, 0, 0, .46), inset 0 1px 0 var(--hi); border-color: rgba(240, 189, 92, .32); }
+  .grid.stats .card { animation: rise .55s var(--ease) both; }
+  .grid.stats .card:nth-child(2){animation-delay:.06s} .grid.stats .card:nth-child(3){animation-delay:.12s} .grid.stats .card:nth-child(4){animation-delay:.18s}
+  @keyframes rise { from { opacity: 0; transform: translateY(18px) scale(.98); } to { opacity: 1; transform: none; } }
+  .stat .label { color: var(--text-dim); font-size: 12px; letter-spacing: .03em; }
+  .stat .value { font-size: 30px; font-weight: 700; margin-top: 8px; line-height: 1.1; }
+  .stat .value.gold { color: var(--gold); text-shadow: 0 0 26px rgba(240, 189, 92, .4); }
+  .stat .value.blue { color: var(--blue); } .stat .value.green { color: var(--green); }
+  .stat .sub { color: var(--text-dim); font-size: 11.5px; margin-top: 6px; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 13px 15px; border-bottom: 1px solid var(--stroke); font-size: 13px; }
+  th { color: var(--text-dim); font-weight: 600; font-size: 12px; }
+  tr:last-child td { border-bottom: none; }
+  tbody tr { transition: background .16s; } tbody tr:hover { background: rgba(255, 255, 255, .05); }
+  td code { background: rgba(0, 0, 0, .3); padding: 2px 9px; border-radius: 8px; font-size: 12px; word-break: break-all; }
+
+  .field { margin-bottom: 18px; }
+  .field label { display: block; color: var(--text-dim); font-size: 12.5px; margin-bottom: 7px; }
+  .field.bool { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+  .field.bool label { margin: 0; color: var(--text); font-size: 13.5px; }
+  .field .desc { color: var(--text-dim); font-size: 11px; margin-top: 6px; opacity: .85; }
+  .toolbar { display: flex; gap: 11px; margin-bottom: 18px; }
+  .toolbar input { flex: 1; }
+  .pill { display: inline-block; padding: 3px 11px; border-radius: 99px; font-size: 11.5px; }
+  .pill.on { background: rgba(132, 214, 160, .16); color: var(--green); }
+  .pill.off { background: rgba(255, 255, 255, .07); color: var(--text-dim); }
+  .preset { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 6px; }
+  .preset .thumb { width: 120px; height: 74px; border-radius: 12px; background-size: cover; background-position: center; cursor: pointer; border: 2px solid transparent; transition: border-color .2s, transform .2s var(--ease); }
+  .preset .thumb:hover { transform: translateY(-3px) scale(1.02); border-color: var(--gold); }
+  .toast { position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(22px); padding: 13px 24px; font-size: 13px; opacity: 0; transition: all .34s var(--ease); pointer-events: none; z-index: 50; }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+</style>
+</head>
+<body>
+
+<div class="bg"></div>
+<div class="bg-veil"></div>
+
+<div id="login">
+  <div class="box glass">
+    <div class="logo">V</div>
+    <h1>Vertex AI Proxy</h1>
+    <div class="sub">OpenAI 兼容 · Vertex / Gemini 代理</div>
+    <input id="pw" type="password" placeholder="管理员密码" autocomplete="current-password">
+    <button class="btn" onclick="login()">登 录</button>
+    <div class="err" id="loginErr"></div>
+  </div>
+</div>
+
+<div id="app" class="hidden">
+  <aside class="glass">
+    <div class="brand"><span class="mk">V</span> Vertex AI Proxy</div>
+    <nav>
+      <button data-page="overview" class="active"><span class="ic">📊</span> 概览</button>
+      <button data-page="settings"><span class="ic">⚙️</span> 设置</button>
+      <button data-page="keys"><span class="ic">🔑</span> 密钥</button>
+      <button data-page="models"><span class="ic">🧩</span> 模型</button>
+      <button data-page="nodes"><span class="ic">🌐</span> 代理节点</button>
+      <button data-page="appearance"><span class="ic">🎨</span> 外观</button>
+    </nav>
+    <div class="spacer"></div>
+    <button class="btn ghost" onclick="logout()">退出登录</button>
+  </aside>
+
+  <main class="glass">
+    <section id="page-overview">
+      <div class="page-head"><div><h2>概览</h2><div class="hint">服务运行状态与资源概况</div></div>
+        <button class="btn ghost" onclick="loadOverview()">刷新</button></div>
+      <div class="grid stats" id="ovCards"></div>
+    </section>
+
+    <section id="page-settings" class="hidden">
+      <div class="page-head"><div><h2>设置</h2><div class="hint">改动稍后生效，不影响在途请求</div></div></div>
+      <div class="card glass" id="settingsForm"></div>
+    </section>
+
+    <section id="page-keys" class="hidden">
+      <div class="page-head"><div><h2>密钥</h2><div class="hint">对外 API 密钥（name → key）</div></div></div>
+      <div class="card glass">
+        <div class="toolbar"><input id="kName" placeholder="名称（如 alice）"><input id="kKey" placeholder="密钥（留空自动生成）"><button class="btn" onclick="addKey()">添加</button></div>
+        <table><thead><tr><th>名称</th><th>密钥</th><th></th></tr></thead><tbody id="keysBody"></tbody></table>
+      </div>
+    </section>
+
+    <section id="page-models" class="hidden">
+      <div class="page-head"><div><h2>模型</h2><div class="hint">对外暴露的模型清单（每行一个）+ 别名映射</div></div>
+        <button class="btn" onclick="saveModels()">保存</button></div>
+      <div class="grid" style="grid-template-columns:1fr 1fr">
+        <div class="card glass"><div class="field" style="margin:0"><label>模型清单（每行一个）</label><textarea id="modelsList" rows="13" style="font-family:ui-monospace,monospace"></textarea></div></div>
+        <div class="card glass"><div class="field" style="margin:0"><label>别名映射（每行 别名=真名）</label><textarea id="aliasMap" rows="13" style="font-family:ui-monospace,monospace"></textarea></div></div>
+      </div>
+    </section>
+
+    <section id="page-nodes" class="hidden">
+      <div class="page-head"><div><h2>代理节点</h2><div class="hint">出站代理池：每次请求轮询选用一个节点（留空则直连）</div></div></div>
+      <div class="card glass">
+        <div class="toolbar"><input id="nodeUrl" placeholder="代理 URL，如 socks5://host:port 或 http://host:port"><button class="btn" onclick="addNode()">添加节点</button></div>
+        <table><thead><tr><th>#</th><th>代理 URL</th><th></th></tr></thead><tbody id="nodesBody"></tbody></table>
+      </div>
+    </section>
+
+    <section id="page-appearance" class="hidden">
+      <div class="page-head"><div><h2>外观</h2><div class="hint">自定义控制台背景（仅本机浏览器记住）</div></div></div>
+      <div class="card glass">
+        <div class="field"><label>图片 URL</label><div class="toolbar" style="margin:0"><input id="bgUrl" placeholder="粘贴图片 URL…"><button class="btn" onclick="applyBgUrl()">应用</button></div></div>
+        <div class="field"><label>从本地上传</label><div style="display:flex;gap:11px"><button class="btn ghost" onclick="document.getElementById('bgFile').click()">选择图片…</button><button class="btn ghost" onclick="resetBg()">恢复默认</button></div>
+          <input id="bgFile" type="file" accept="image/*" class="hidden" onchange="uploadBg(event)"></div>
+        <div class="field" style="margin:0"><label>预设</label><div class="preset" id="presets"></div></div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div class="toast glass" id="toast"></div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+async function api(path, opts) {
+  const r = await fetch(path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts));
+  if (r.status === 401) { showLogin(); throw new Error('未登录'); }
+  const ct = r.headers.get('content-type') || '';
+  const body = ct.includes('json') ? await r.json() : await r.text();
+  if (!r.ok) throw new Error((body && body.error && body.error.message) || body || ('HTTP ' + r.status));
+  return body;
+}
+function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 1900); }
+function showApp() { const lg = $('#login'), app = $('#app'); if (!lg.classList.contains('hidden')) { lg.classList.add('out'); setTimeout(() => lg.classList.add('hidden'), 420); } app.classList.remove('hidden'); requestAnimationFrame(() => app.classList.add('in')); go('overview', true); }
+function showLogin() { const lg = $('#login'), app = $('#app'); app.classList.remove('in'); setTimeout(() => app.classList.add('hidden'), 360); lg.classList.remove('hidden', 'out'); }
+
+const DEFAULT_BG = "url('background.jpg')";
+function applyBg(v) { document.documentElement.style.setProperty('--bg-img', v); }
+(function initBg() { const s = localStorage.getItem('vproxy_bg'); if (s) applyBg(s); })();
+function applyBgUrl() { const u = $('#bgUrl').value.trim(); if (!u) return; const v = `url('${u}')`; applyBg(v); localStorage.setItem('vproxy_bg', v); toast('背景已更换'); }
+function uploadBg(e) { const f = e.target.files[0]; if (!f) return; const rd = new FileReader(); rd.onload = () => { const v = `url('${rd.result}')`; applyBg(v); localStorage.setItem('vproxy_bg', v); toast('背景已更换'); }; rd.readAsDataURL(f); }
+function resetBg() { localStorage.removeItem('vproxy_bg'); applyBg(DEFAULT_BG); toast('已恢复默认'); }
+
+async function login() { $('#loginErr').textContent = ''; try { await api('/api/admin/login', { method: 'POST', body: JSON.stringify({ password: $('#pw').value }) }); showApp(); } catch (e) { $('#loginErr').textContent = '密码错误或登录失败'; } }
+async function logout() { try { await api('/api/admin/logout', { method: 'POST' }); } catch (e) {} showLogin(); }
+$('#pw').addEventListener('keydown', (e) => { if (e.key === 'Enter') login(); });
+
+const LOADERS = { overview: loadOverview, settings: loadSettings, keys: loadKeys, models: loadModels, nodes: loadNodes, appearance: loadAppearance };
+let curPage = null;
+function go(page, instant) {
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('active', b.dataset.page === page));
+  const next = $('#page-' + page), cur = curPage && $('#page-' + curPage); curPage = page;
+  const enter = () => { next.classList.remove('hidden'); next.classList.add('entering'); requestAnimationFrame(() => requestAnimationFrame(() => next.classList.remove('entering'))); (LOADERS[page] || (() => {}))(); };
+  if (cur && cur !== next && !instant) { cur.classList.add('leaving'); setTimeout(() => { cur.classList.add('hidden'); cur.classList.remove('leaving'); enter(); }, 240); }
+  else { document.querySelectorAll('main section').forEach(s => { if (s !== next) s.classList.add('hidden'); }); enter(); }
+}
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => go(b.dataset.page));
+
+// 概览：从各端点取计数，不依赖详细指标
+async function loadOverview() {
+  const card = (label, value, cls, sub) => `<div class="card glass hoverable stat"><div class="label">${label}</div><div class="value ${cls||''}">${value}</div>${sub?`<div class="sub">${sub}</div>`:''}</div>`;
+  let keys = 0, models = 0, nodes = 0;
+  try { keys = ((await api('/api/admin/keys')).keys || []).length; } catch (e) {}
+  try { models = ((await api('/api/admin/models')).models || []).length; } catch (e) {}
+  try { nodes = ((await api('/api/admin/proxies')).proxies || []).length; } catch (e) {}
+  $('#ovCards').innerHTML =
+    card('服务状态', '运行中', 'green', 'OpenAI / Gemini 兼容') +
+    card('API 密钥', keys, 'gold') +
+    card('模型', models, 'blue') +
+    card('代理节点', nodes, '');
+}
+
+const SETTINGS_FIELDS = [
+  { k: 'max_retries', label: '上游重试次数', type: 'number', desc: '上游请求失败时的重试次数；总尝试 = 此值 + 1' },
+  { k: 'max_n', label: 'n 多候选上限', type: 'number', desc: 'chat 的 n（一次返回多个候选）上限' },
+  { k: 'anti429_target', label: 'anti429 注入位置', type: 'select', opts: ['system', 'user'], desc: '随机数注入到 system 指令、还是首条 user 消息前' },
+  { k: 'proxy_url', label: '单出站代理 URL', type: 'text', desc: '可选；未配置代理节点池时使用（留空直连）' },
+  { k: 'anti429_enabled', label: 'anti429 随机数注入', type: 'bool', desc: '往请求注入随机数字串，削弱上游 429 / 缓存命中' },
+  { k: 'force_no_stream', label: '强制非流式', type: 'bool', desc: '把所有流式请求降级为非流式' },
+  { k: 'anti_tracking', label: '反追踪', type: 'bool', desc: '移除可能被用于追踪的请求特征' },
+  { k: 'drop_max_tokens', label: '移除 maxOutputTokens', type: 'bool', desc: '移除输出 token 上限，让模型自由输出' },
+];
+let curSettings = {};
+async function loadSettings() {
+  const d = await api('/api/admin/settings'); curSettings = d.settings || d;
+  const fld = (f) => {
+    const v = curSettings[f.k];
+    if (f.type === 'bool') return `<div class="field bool"><div style="min-width:0"><label>${f.label}</label>${f.desc?`<div class="desc" style="margin-top:4px">${f.desc}</div>`:''}</div><label class="toggle"><input type="checkbox" id="set_${f.k}" ${v?'checked':''}><span class="track"></span></label></div>`;
+    let input;
+    if (f.type === 'select') input = `<select id="set_${f.k}">${f.opts.map(o => `<option ${o===v?'selected':''}>${o}</option>`).join('')}</select>`;
+    else input = `<input type="${f.type}" id="set_${f.k}" value="${v ?? ''}">`;
+    return `<div class="field"><label>${f.label}</label>${input}${f.desc?`<div class="desc">${f.desc}</div>`:''}</div>`;
+  };
+  const nums = SETTINGS_FIELDS.filter(f => f.type !== 'bool'), bools = SETTINGS_FIELDS.filter(f => f.type === 'bool');
+  $('#settingsForm').innerHTML =
+    '<div class="grid" style="grid-template-columns:1fr 1fr">' + nums.map(fld).join('') + '</div>' +
+    '<div style="height:6px"></div><div class="grid" style="grid-template-columns:1fr 1fr">' + bools.map(fld).join('') + '</div>' +
+    '<button class="btn" style="margin-top:14px" onclick="saveSettings()">保存设置</button>';
+}
+async function saveSettings() {
+  const out = {};
+  for (const f of SETTINGS_FIELDS) { const el = $('#set_' + f.k); if (!el) continue; if (f.type === 'bool') out[f.k] = el.checked; else if (f.type === 'number') out[f.k] = parseInt(el.value || '0', 10); else out[f.k] = el.value; }
+  await api('/api/admin/settings', { method: 'PUT', body: JSON.stringify({ settings: out }) }); toast('设置已保存');
+}
+
+async function loadKeys() {
+  const d = await api('/api/admin/keys');
+  $('#keysBody').innerHTML = (d.keys || []).map(k => `<tr><td>${esc(k.name)}</td><td><code>${esc(k.key_masked || k.key || '')}</code></td><td style="text-align:right"><button class="danger" onclick="delKey('${esc(k.name)}')">删除</button></td></tr>`).join('') || `<tr><td colspan="3" style="color:var(--text-dim)">暂无密钥</td></tr>`;
+}
+async function addKey() { const name = $('#kName').value.trim(); if (!name) return toast('请填名称'); await api('/api/admin/keys', { method: 'POST', body: JSON.stringify({ name, key: $('#kKey').value.trim() }) }); $('#kName').value = ''; $('#kKey').value = ''; loadKeys(); toast('已添加'); }
+async function delKey(name) { if (!confirm('删除密钥 ' + name + '？')) return; await api('/api/admin/keys/' + encodeURIComponent(name), { method: 'DELETE' }); loadKeys(); toast('已删除'); }
+
+async function loadModels() { const d = await api('/api/admin/models'); $('#modelsList').value = (d.models || []).join('\n'); $('#aliasMap').value = Object.entries(d.alias_map || {}).map(([a, b]) => a + '=' + b).join('\n'); }
+async function saveModels() {
+  const models = $('#modelsList').value.split('\n').map(s => s.trim()).filter(Boolean); const alias_map = {};
+  $('#aliasMap').value.split('\n').forEach(line => { const i = line.indexOf('='); if (i > 0) alias_map[line.slice(0, i).trim()] = line.slice(i + 1).trim(); });
+  await api('/api/admin/models', { method: 'PUT', body: JSON.stringify({ models, alias_map }) }); toast('模型已保存');
+}
+
+async function loadNodes() {
+  const d = await api('/api/admin/proxies');
+  $('#nodesBody').innerHTML = (d.proxies || []).map((p, i) => `<tr><td>${i + 1}</td><td><code>${esc(p)}</code></td><td style="text-align:right"><button class="danger" onclick="delNode(${i})">删除</button></td></tr>`).join('') || `<tr><td colspan="3" style="color:var(--text-dim)">暂无代理节点（直连）</td></tr>`;
+}
+async function addNode() { const u = $('#nodeUrl').value.trim(); if (!u) return toast('请填代理 URL'); await api('/api/admin/proxies', { method: 'POST', body: JSON.stringify({ url: u }) }); $('#nodeUrl').value = ''; loadNodes(); toast('已添加节点'); }
+async function delNode(i) { if (!confirm('删除该代理节点？')) return; await api('/api/admin/proxies/' + i, { method: 'DELETE' }); loadNodes(); toast('已删除'); }
+
+function loadAppearance() {
+  const presets = ['background.jpg'];
+  $('#presets').innerHTML = presets.map(p => `<div class="thumb" style="background-image:url('${p}')" onclick="applyBg(\"url('${p}')\");localStorage.setItem('vproxy_bg',\"url('${p}')\");toast('背景已更换')"></div>`).join('');
+}
+
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+(async () => { try { await api('/api/admin/keys'); showApp(); } catch (e) { showLogin(); } })();
+</script>
+</body>
+</html>
