@@ -3,12 +3,14 @@ FROM golang:1.26-alpine AS builder
 WORKDIR /build
 
 COPY go.mod go.sum* ./
+
+RUN go mod download
+
 COPY cmd/ ./cmd/
 COPY internal/ ./internal/
 
-RUN go mod tidy
-
-RUN CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags="-s -w" -o vproxy ./cmd/vproxy
+RUN CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags="-s -w" -o vproxy ./cmd/vproxy \
+    && go clean -cache -modcache -testcache
 
 FROM alpine:3.20
 

@@ -1153,14 +1153,9 @@ func convertToolsFormat(data any) any {
 				if isTruthy(v) { // Vertex AI function name 不能为空，空则剔除
 					out["name"] = v
 				}
-			case "parameters":
-				// 标准 JSON Schema → Vertex AI 原生 Schema（type 大写 + properties 转
-				// [{key,value}] 列表）。匿名 UI 端点要求原生格式，否则 400
-				// "invalid value for type google_cloud_aiplatform_ui_Type"。
+			case "parameters", "parametersJsonSchema", "parameters_json_schema":
+				// 统一拦截所有 schema 键名，转为原生 schema 格式，防止属性被误转为驼峰
 				out["parameters"] = toNativeSchema(v)
-			case "parametersJsonSchema":
-				// parametersJsonSchema 走标准 schema（上游接受标准形态），原样保留。
-				out[k] = v
 			default:
 				camelKey := k
 				if strings.Contains(k, "_") {
