@@ -3,6 +3,7 @@ package transform
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/bsfdsagfadg/vertex/internal/config"
@@ -81,7 +82,10 @@ func ConvertChatRequest(body map[string]any, cfg config.AppConfig) (string, map[
 		case "assistant":
 			var parts []any
 			if isTruthy(content) {
-				parts = append(parts, map[string]any{"text": content})
+				// assistant 文本里可能嵌着模型上一轮生成的 markdown data-URI 图片
+				// （多轮改图场景）。必须重新解析回 inlineData，否则整段 base64 markdown
+				// 作为巨型文本塞进 model 角色被上游拒。
+				parts = append(parts, splitAssistantContent(content)...)
 			}
 			// assistant.tool_calls → functionCall（穿 id 锚点，供 functionResponse 回查 name）。
 			if toolCalls, ok := msg["tool_calls"].([]any); ok {
@@ -501,6 +505,39 @@ func convertUserContent(content any) []any {
 				parts = append(parts, inlineDataPart(mime, b64))
 			}
 		}
+	}
+	return parts
+}
+
+// assistantImageMarkdownRe 匹配 assistant 文本里嵌的 markdown data-URI 图片。
+var assistantImageMarkdownRe = regexp.MustCompile(`!\[[^\]]*\]\((data:[^()\s;,]+;base64,[A-Za-z0-9+/=_\-]+)\)`)
+
+// splitAssistantContent 把 assistant 文本切成 text / inlineData 混合 parts。
+func splitAssistantContent(content any) []any {
+	s, ok := content.(string)
+	if !ok {
+		return []any{map[string]any{"text": content}}
+	}
+	locs := assistantImageMarkdownRe.FindAllStringSubmatchIndex(s, -1)
+	if len(locs) == 0 {
+		return []any{map[string]any{"text": s}}
+	}
+	var parts []any
+	last := 0
+	for _, m := range locs {
+		if pre := strings.TrimSpace(s[last:m[0]]); pre != "" {
+			parts = append(parts, map[string]any{"text": pre})
+		}
+		if mime, b64 := parseDataURI(s[m[2]:m[3]]); mime != "" && b64 != "" {
+			parts = append(parts, inlineDataPart(mime, b64))
+		}
+		last = m[1]
+	}
+	if post := strings.TrimSpace(s[last:]); post != "" {
+		parts = append(parts, map[string]any{"text": post})
+	}
+	if len(parts) == 0 {
+		parts = append(parts, map[string]any{"text": ""})
 	}
 	return parts
 }

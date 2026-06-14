@@ -410,18 +410,26 @@ func vertexErrorToOAI(e *vertex.VertexError) map[string]any {
 	default:
 		errType = "server_error"
 	}
-	msg := vertex.FriendlyErrorMessage(e)
-	if e.Message != "" {
-		msg += " | Raw: " + e.Message
-	}
-	if e.UpstreamResponse != "" {
-		msg += " | Upstream: " + e.UpstreamResponse
-	}
 	return map[string]any{"error": map[string]any{
-		"message": msg,
+		"message": withUpstreamDetail(vertex.FriendlyErrorMessage(e), e),
 		"type":    errType,
 		"code":    e.Code,
 	}}
+}
+
+// withUpstreamDetail 在友好提示后附上上游真实原因。
+func withUpstreamDetail(friendly string, e *vertex.VertexError) string {
+	detail := strings.TrimSpace(e.Message)
+	if detail == "" {
+		detail = strings.TrimSpace(e.UpstreamResponse)
+	}
+	if detail == "" || strings.Contains(friendly, detail) {
+		return friendly
+	}
+	if r := []rune(detail); len(r) > 400 {
+		detail = string(r[:400]) + "…"
+	}
+	return friendly + "（上游原因：" + detail + "）"
 }
 
 func toVertexError(err error) *vertex.VertexError {
