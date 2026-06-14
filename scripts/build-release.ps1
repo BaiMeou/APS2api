@@ -7,6 +7,7 @@ param (
 )
 
 # 强制输出支持 UTF-8，防止中文路径或日志乱码
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
 # 获取脚本所在目录并切换到项目根目录
@@ -50,7 +51,7 @@ function Build-Platform {
 
     # 执行编译
     $OutPath = Join-Path $StageDir $Bin
-    go build -trimpath -ldflags=$LdFlags -o $OutPath ./cmd/vproxy
+    go build -trimpath "-ldflags=$LdFlags" -o $OutPath ./cmd/vproxy
     $ExitCode = $LASTEXITCODE
 
     # 还原环境变量
