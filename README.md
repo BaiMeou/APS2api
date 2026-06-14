@@ -64,4 +64,4 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o ver
 
 ## License
 
-MIT
+[PolyForm Noncommercial License 1.0.0](LICENSE) — 本项目面向非商业用途（个人、公益、教育、研究等）。商业使用不在授权范围内。
