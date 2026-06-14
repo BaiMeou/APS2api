@@ -1,6 +1,11 @@
 # build-release.ps1
 # 用法: .\scripts\build-release.ps1 [版本号]
 # 示例: .\scripts\build-release.ps1 v2.0.0
+# 
+# 产物在 dist/ 下：
+#   vertex-proxy-windows-amd64.zip   (Windows x64)
+#   vertex-proxy-linux-amd64.zip     (Linux x86_64)
+#   vertex-proxy-android-arm64.zip   (Android/Termux 及 Linux ARM64)
 
 param (
     [string]$Version = "dev"
@@ -39,33 +44,23 @@ function Build-Platform {
 
     Write-Host "==> 编译 $Goos/$Goarch" -ForegroundColor Cyan
 
-    # 临时备份原有的 Go 环境变量
-    $oldCgo = $env:CGO_ENABLED
-    $oldGoos = $env:GOOS
-    $oldGoarch = $env:GOARCH
+    # 创建包内目录
+    New-Item -ItemType Directory -Path $StageDir -Force | Out-Null
+    New-Item -ItemType Directory -Path $StageConfigDir -Force | Out-Null
 
-    # 设置交叉编译环境变量
+    # 执行交叉编译
     $env:CGO_ENABLED = "0"
     $env:GOOS = $Goos
     $env:GOARCH = $Goarch
 
-    # 执行编译
     $OutPath = Join-Path $StageDir $Bin
     go build -trimpath "-ldflags=$LdFlags" -o $OutPath ./cmd/vproxy
-    $ExitCode = $LASTEXITCODE
 
-    # 还原环境变量
-    $env:CGO_ENABLED = $oldCgo
-    $env:GOOS = $oldGoos
-    $env:GOARCH = $oldGoarch
-
-    if ($ExitCode -ne 0) {
+    if ($LASTEXITCODE -ne 0) {
         Write-Error "编译失败: $Goos/$Goarch"
-        return
+        Remove-Item $StageDir -Recurse -Force -ErrorAction SilentlyContinue
+        return $false
     }
-
-    # 创建包内 config 目录
-    New-Item -ItemType Directory -Path $StageConfigDir -Force | Out-Null
 
     # 复制配置文件模板
     Copy-Item "config/config.example.json" -Destination $StageConfigDir -Force
@@ -79,12 +74,17 @@ function Build-Platform {
 
     # 复制附加的平台专用脚本/服务文件
     foreach ($file in $ExtraFiles) {
+        $fileName = Split-Path $file -Leaf
+        $destPath = Join-Path $StageDir $fileName
         if (Test-Path $file) {
-            Copy-Item $file -Destination $StageDir -Force
+            Copy-Item $file -Destination $destPath -Force
+            Write-Host "    -> 复制附加文件: $fileName" -ForegroundColor Gray
+        } else {
+            Write-Host "    [警告] 文件不存在: $file" -ForegroundColor Yellow
         }
     }
 
-    # 执行压缩包封装（包含外层同名目录）
+    # 执行压缩包封装
     Write-Host "    -> 打包中 $Pkg.zip" -ForegroundColor Gray
     $ZipPath = Join-Path $OutDir "$Pkg.zip"
     if (Test-Path $ZipPath) {
@@ -92,20 +92,24 @@ function Build-Platform {
     }
     
     Push-Location $OutDir
-    # Compress-Archive 为 PowerShell 5.0+ 自带命令
+    # 使用 -Force 覆盖已存在的 zip
     Compress-Archive -Path $Pkg -DestinationPath $ZipPath -Force
     Pop-Location
 
     # 清理未压缩的临时 Stage 文件夹
     Remove-Item $StageDir -Recurse -Force | Out-Null
-    Write-Host "    -> 已生成: $ZipPath" -ForegroundColor Green
+    Write-Host "    -> $ZipPath" -ForegroundColor Green
+    return $true
 }
 
-# 开始执行多平台构建
+# 开始执行多平台构建（与 bash 版本保持一致）
+Write-Host "`n开始构建版本: $Version" -ForegroundColor Cyan
+Write-Host ""
+
 Build-Platform -Goos "windows" -Goarch "amd64" -Bin "vertex-proxy.exe" -Pkg "vertex-proxy-windows-amd64" -ExtraFiles @("scripts/启动.bat")
 Build-Platform -Goos "linux" -Goarch "amd64" -Bin "vertex-proxy" -Pkg "vertex-proxy-linux-amd64" -ExtraFiles @("scripts/start.sh", "scripts/vertex-proxy.service")
 Build-Platform -Goos "linux" -Goarch "arm64" -Bin "vertex-proxy" -Pkg "vertex-proxy-android-arm64" -ExtraFiles @("scripts/start.sh", "scripts/vertex-proxy.service")
 
 # 打印最终产物信息
 Write-Host "`n完成。产物列表：" -ForegroundColor Green
-Get-ChildItem $OutDir | Select-Object Name, @{Name="大小(MB)"; Expression={[Math]::Round($_.Length / 1MB, 2)}}, LastWriteTime
+Get-ChildItem $OutDir -File | Select-Object Name, @{Name="大小(MB)"; Expression={[Math]::Round($_.Length / 1MB, 2)}}, LastWriteTime | Format-Table -AutoSize
