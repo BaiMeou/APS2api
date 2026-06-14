@@ -64,6 +64,9 @@ func (m *APIKeyManager) LoadKeys() bool {
 		}
 		m.keys[key] = name
 	}
+	if err := sc.Err(); err != nil {
+		return false
+	}
 	return true
 }
 
@@ -166,11 +169,14 @@ func (m *APIKeyManager) writeEntries(entries []apiKeyEntry) error {
 		if e.Name == "" || e.Key == "" {
 			continue
 		}
+		b.WriteString(e.Name)
+		b.WriteByte(':')
+		b.WriteString(e.Key)
 		if e.Description != "" {
-			b.WriteString(e.Name + ":" + e.Key + ":" + e.Description + "\n")
-		} else {
-			b.WriteString(e.Name + ":" + e.Key + "\n")
+			b.WriteByte(':')
+			b.WriteString(e.Description)
 		}
+		b.WriteByte('\n')
 	}
 	tmp := m.keysFile + ".tmp"
 	if err := os.WriteFile(tmp, []byte(b.String()), 0o600); err != nil {

@@ -120,7 +120,7 @@ func StartAdminSessionCleanup(interval time.Duration) {
 		defer t.Stop()
 		for range t.C {
 			if n := cleanupAdminSessions(); n > 0 {
-				log.Printf("[admin] 已清理 %d 个过期会话 token", n)
+				log.Printf("[Admin] 已清理 %d 个过期会话 token", n)
 			}
 		}
 	}()
@@ -136,20 +136,20 @@ func EnsureAdminPassword() {
 	}
 	b := make([]byte, 9) // 9 字节 → base64url 12 字符（无填充）
 	if _, err := cryptorand.Read(b); err != nil {
-		log.Printf("[admin] 生成管理员密码失败：%v", err)
+		log.Printf("[Admin] 生成管理员密码失败：%v", err)
 		return
 	}
 	pw := base64.RawURLEncoding.EncodeToString(b)
 	if err := config.WriteSettings(map[string]any{"admin_password": pw}); err != nil {
-		log.Printf("[admin] 写入管理员密码到 config.json 失败：%v", err)
+		log.Printf("[Admin] 写入管理员密码到 config.json 失败：%v", err)
 		return
 	}
 	bar := strings.Repeat("=", 60)
 	log.Printf("%s", bar)
-	log.Printf("[*] 首次启动，已自动生成管理员密码：")
-	log.Printf("    密码: %s", pw)
-	log.Printf("    访问: http://<host>:<port>/admin")
-	log.Printf("    密码已写入 config/config.json，登录后可在面板修改")
+	log.Printf("[Admin] 首次启动，已自动生成管理员密码：")
+	log.Printf("[Admin]     密码: %s", pw)
+	log.Printf("[Admin]     访问: http://<host>:<port>/admin")
+	log.Printf("[Admin]     密码已写入 config/config.json，登录后可在面板修改")
 	log.Printf("%s", bar)
 }
 
@@ -159,6 +159,7 @@ func EnsureAdminPassword() {
 // 除 login（公开）外的端点统一先过 requireAdmin。
 func (s *Server) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/admin")
+	log.Printf("[Server] [AdminAPI] 收到请求: %s %s", r.Method, path)
 
 	// login 是唯一不需要已登录的端点。
 	if path == "/login" {
@@ -199,11 +200,23 @@ func (s *Server) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 	case "/nodes/disabled":
 		s.adminDeleteDisabledNodes(w, r)
 		return
+	case "/nodes/import":
+		s.adminImportNodes(w, r)
+		return
 	case "/subscriptions/fetch":
 		s.adminFetchSub(w, r)
 		return
 	case "/use-node":
 		s.adminUseNode(w, r)
+		return
+	case "/nodes/batch-disable":
+		s.adminBatchDisableNodes(w, r)
+		return
+	case "/nodes/batch-enable":
+		s.adminBatchEnableNodes(w, r)
+		return
+	case "/nodes/batch-delete":
+		s.adminBatchDeleteNodes(w, r)
 		return
 	}
 

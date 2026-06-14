@@ -20,3 +20,4 @@ dist/
 
 # Test artifacts
 test-generated-*.png
+*.code-workspace

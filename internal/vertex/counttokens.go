@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"strconv"
 	"strings"
 
@@ -40,6 +41,7 @@ func (c *VertexAIClient) CountTokens(ctx context.Context, model string, contents
 	payload := buildCountTokensPayload(target, contents, token, cfg)
 	bodyBytes, err := jsonx.Marshal(payload)
 	if err != nil {
+		log.Printf("[Vertex] [CountTokens] 序列化请求体失败: %v", err)
 		return 0
 	}
 

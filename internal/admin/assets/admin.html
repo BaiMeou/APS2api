@@ -222,14 +222,41 @@
           </div>
         </div>
         <div class="card glass">
+          <!-- 追加文件导入模块，移植 demo.html 的好用功能 -->
+          <div class="field" style="margin-bottom: 20px;">
+            <label style="font-weight: 600; color: var(--gold);">文件优选导入 (V2RayN / Clash / Mihomo 优选节点)</label>
+            <div class="toolbar" style="margin:0; gap: 8px;">
+              <input type="file" id="nodeImportFile" accept=".txt,.yaml,.yml,.json,.conf,.list" style="padding: 6px 12px; flex: 1;">
+              <button class="btn ghost" onclick="importFileNodes(false)">导入追加</button>
+              <button class="btn danger" style="padding: 10px 18px;" onclick="importFileNodes(true)">清空并替换</button>
+            </div>
+            <div class="desc" style="margin-top:6px">导入本地导出的节点配置文件 (.txt / .yaml)。支持以追加或覆盖形式批量配置节点。</div>
+          </div>
+
+          <div style="border-top: 1px dashed var(--stroke); margin: 18px 0;"></div>
+
           <div class="toolbar"><input id="subUrl" placeholder="订阅链接 (vless/vmess/trojan/ss/ssr...)"><button class="btn" onclick="addAndFetchSub()">拉取并保存</button></div>
-          <div class="desc" style="margin-bottom:12px" id="nodesSummary">当前共 0 个节点</div>
-          <div class="actions" style="margin-bottom:12px">
+          <div class="desc" style="margin-bottom:12px; font-weight: 600; color: var(--gold);" id="nodesSummary">当前共 0 个节点</div>
+          <div class="actions" style="margin-bottom:12px; display: flex; gap: 8px; flex-wrap: wrap;">
             <button class="btn ghost" onclick="testAllNodes()">后台并发测速</button>
             <button class="btn ghost" onclick="dedupNodes()">一键去重</button>
             <button class="btn danger" onclick="deleteDisabledNodes()">清理失效节点</button>
+            <span style="flex: 1;"></span>
+            <!-- 节点批量操作工具 -->
+            <button class="btn ghost" style="border-color: var(--blue); color: var(--blue);" onclick="toggleSelectAllNodes()">全选/反选</button>
+            <button class="btn ghost" style="border-color: var(--green); color: var(--green);" onclick="batchEnableSelectedNodes()">批量启用</button>
+            <button class="btn ghost" style="border-color: var(--red); color: var(--red);" onclick="batchDisableSelectedNodes()">批量禁用</button>
+            <button class="btn danger" style="padding: 10px 18px;" onclick="batchDeleteSelectedNodes()">批量删除</button>
           </div>
-          <table><thead><tr><th>节点名</th><th>协议</th><th>状态/延迟</th><th>操作</th></tr></thead><tbody id="nodesBody"></tbody></table>
+          <!-- 批量测速进度显示，移植自 demo.html -->
+          <div id="testProgress" class="test-progress" style="display:none; padding: 12px; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--stroke); border-radius: 11px; margin-bottom: 14px;">
+            <div id="testProgressText" style="font-weight: 600; font-size: 13px; color: var(--gold);">准备测试...</div>
+            <div class="progress-track" style="height: 6px; background: rgba(0,0,0,0.3); border-radius: 99px; overflow: hidden; margin: 8px 0;">
+              <div id="testProgressFill" class="progress-fill" style="height: 100%; width: 0%; background: linear-gradient(90deg, var(--gold), var(--gold-deep)); transition: width 0.2s ease;"></div>
+            </div>
+            <div id="testProgressDetail" style="font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;"></div>
+          </div>
+          <table><thead><tr><th style="width: 40px; text-align: center;"><input type="checkbox" id="selectAllNodesCheckbox" onclick="toggleSelectAllNodesCheckbox(this)"></th><th>节点名 & 连接属性</th><th>协议</th><th>状态/延迟</th><th>操作</th></tr></thead><tbody id="nodesBody"></tbody></table>
         </div>
       </div>
     </section>
@@ -304,7 +331,6 @@ const SETTINGS_FIELDS = [
   { k: 'max_retries', label: '上游重试次数', type: 'number', desc: '上游请求失败时的重试次数；总尝试 = 此值 + 1' },
   { k: 'max_n', label: 'n 多候选上限', type: 'number', desc: 'chat 的 n（一次返回多个候选）上限' },
   { k: 'anti429_target', label: 'anti429 注入位置', type: 'select', opts: ['system', 'user'], desc: '随机数注入到 system 指令、还是首条 user 消息前' },
-  { k: 'proxy_url', label: '单出站代理 URL', type: 'text', desc: '可选；未配置代理节点池时使用（留空直连）' },
   { k: 'anti429_enabled', label: 'anti429 随机数注入', type: 'bool', desc: '往请求注入随机数字串，削弱上游 429 / 缓存命中' },
   { k: 'force_no_stream', label: '强制非流式', type: 'bool', desc: '把所有流式请求降级为非流式' },
   { k: 'anti_tracking', label: '反追踪', type: 'bool', desc: '移除可能被用于追踪的请求特征' },
@@ -348,20 +374,93 @@ async function saveModels() {
 }
 
 async function saveGlobalProxy() { await api('/api/admin/settings', { method: 'PUT', body: JSON.stringify({ settings: { proxy_url: $('#globalProxy').value } }) }); loadSettings(); toast('全局代理已保存'); }
+// 统一节点类型别名
+const _tmap = {
+  vless: 'VLESS',
+  vmess: 'VMess',
+  trojan: 'Trojan',
+  ss: 'Shadowsocks',
+  shadowsocks: 'Shadowsocks',
+  hysteria2: 'Hysteria2',
+  hy2: 'Hysteria2',
+  tuic: 'TUIC',
+};
+
 async function loadNodes() {
   const d = await api('/api/admin/nodes');
-  document.getElementById('nodesSummary').textContent = `当前共 ${(d.nodes || []).length} 个节点`;
-  $('#nodesBody').innerHTML = (d.nodes || []).map((n) => `
+  const nodes = d.nodes || [];
+  
+  // 更新汇总指标
+  const enabledCount = nodes.filter(n => !n.disabled).length;
+  const disabledCount = nodes.filter(n => n.disabled).length;
+  document.getElementById('nodesSummary').textContent = `当前共 ${nodes.length} 个节点（启用 ${enabledCount} / 禁用 ${disabledCount}）`;
+  
+  $('#nodesBody').innerHTML = nodes.map((n) => {
+    let statusPill = '';
+    const health = d.health[n.raw_uri];
+    const isLocked = n.raw_uri === curSettings.active_node_uri;
+    const displayType = _tmap[n.type.toLowerCase()] || n.type.toUpperCase();
+    
+    // 解析节点里的 server 与 port 方便多维度查看，从 raw_uri 获取
+    let serverInfo = '';
+    try {
+      if (n.raw_uri.startsWith('vmess://')) {
+        // 解密 vmess base64
+        const b64Str = n.raw_uri.slice(8).split(/[?#]/)[0];
+        const b = atob(b64Str.replace(/-/g, '+').replace(/_/g, '/'));
+        const info = JSON.parse(b);
+        serverInfo = `${info.add || 'unknown'}:${info.port || ''}`;
+      } else {
+        const urlObj = new URL(n.raw_uri);
+        serverInfo = `${urlObj.hostname}:${urlObj.port || '443'}`;
+      }
+    } catch(e) {
+      serverInfo = '配置格式复杂';
+    }
+
+    if (n.disabled) {
+      statusPill = '<span class="pill off" style="background: rgba(236, 138, 124, 0.16); color: var(--red);">已测试 / 禁用</span>';
+    } else if (!health || (!health.last_success_at && !health.last_fail_at)) {
+      statusPill = '<span class="pill off" style="background: rgba(195, 182, 164, 0.15); color: var(--text-dim);">未测试</span>';
+    } else {
+      const isOk = health.consecutive_failures === 0;
+      const ms = health.last_test_ms ? Math.round(health.last_test_ms) + 'ms' : '';
+      if (isOk) {
+        statusPill = `<span class="pill on" style="background: rgba(132, 214, 160, 0.16); color: var(--green); margin-right: 5px;">已测试 / 可用</span> <span style="color: var(--green); font-weight: 600;">${ms}</span>`;
+      } else {
+        const errMsg = health.last_test_error ? ` - 错误: ${health.last_test_error.slice(0, 30)}` : '';
+        statusPill = `<span class="pill off" style="background: rgba(236, 138, 124, 0.16); color: var(--red);">已测试 / 禁用${esc(errMsg)}</span>`;
+      }
+    }
+
+    // 状态样式小标
+    const nodeBadges = [];
+    if (isLocked) {
+      nodeBadges.push('<span class="pill on" style="font-size: 10px; padding: 2px 8px; margin-left: 5px;">锁定使用中</span>');
+    } else if (n.disabled) {
+      nodeBadges.push('<span class="pill off" style="font-size: 10px; padding: 2px 8px; margin-left: 5px; background: rgba(236, 138, 124, 0.16); color: var(--red);">已禁用</span>');
+    } else {
+      nodeBadges.push('<span class="pill off" style="font-size: 10px; padding: 2px 8px; margin-left: 5px; background: rgba(143, 208, 232, 0.15); color: var(--blue);">候选</span>');
+    }
+
+    return `
     <tr>
-      <td>${esc(n.name)} ${n.raw_uri === curSettings.active_node_uri ? '<span class="pill on">锁定使用中</span>' : ''}</td>
-      <td><code>${esc(n.type)}</code></td>
-      <td>${n.disabled ? '<span class="err">已禁用</span>' : (d.health[n.raw_uri]?.last_test_ms ? Math.round(d.health[n.raw_uri].last_test_ms)+'ms' : '未测试')}</td>
+      <td style="text-align: center; vertical-align: middle;">
+        <input type="checkbox" class="node-select-cb" data-uri="${esc(n.raw_uri)}">
+      </td>
+      <td>
+        <div style="font-weight: 600; font-size: 13.5px; color: var(--text);">${esc(n.name)} ${nodeBadges.join('')}</div>
+        <div style="font-size: 11px; color: var(--text-dim); margin-top: 4px;">地址: <code style="font-size: 11px; background: rgba(0,0,0,0.25); color: var(--blue); padding: 1px 4px; border-radius: 4px;">${esc(serverInfo)}</code></div>
+      </td>
+      <td><code>${esc(displayType)}</code></td>
+      <td>${statusPill}</td>
       <td style="text-align:right">
-        <button class="btn ghost" onclick="useNode('${esc(n.raw_uri)}')">锁定使用</button>
-        <button class="btn danger" onclick="delNode('${esc(n.raw_uri)}')">删除</button>
+        <button class="btn ghost" style="padding: 4px 10px; font-size: 12px; margin-right: 4px;" onclick="useNode('${esc(n.raw_uri)}')">锁定使用</button>
+        <button class="btn danger" style="padding: 4px 10px; font-size: 12px;" onclick="delNode('${esc(n.raw_uri)}')">删除</button>
       </td>
     </tr>
-  `).join('') || `<tr><td colspan="4" style="color:var(--text-dim)">暂无节点</td></tr>`;
+    `;
+  }).join('') || `<tr><td colspan="5" style="color:var(--text-dim); text-align: center;">暂无节点</td></tr>`;
 }
 async function addAndFetchSub() {
   const u = $('#subUrl').value.trim();
@@ -376,11 +475,180 @@ async function addAndFetchSub() {
     toast('拉取失败: ' + e.message);
   }
 }
-async function testAllNodes() { toast('测试中，稍后自动刷新...'); await api('/api/admin/nodes/test-all', { method: 'POST' }); let count = 0; let timer = setInterval(async () => { await loadNodes(); count++; if (count > 4) clearInterval(timer); }, 3000); }
+
+// 移植 demo.html 的批量测速进度和动态详情逻辑
+async function testAllNodes() {
+  const d = await api('/api/admin/nodes');
+  const nodes = d.nodes || [];
+  if (!nodes.length) return toast('无可测试节点');
+
+  const progressEl = document.getElementById('testProgress');
+  const progressText = document.getElementById('testProgressText');
+  const progressFill = document.getElementById('testProgressFill');
+  const progressDetail = document.getElementById('testProgressDetail');
+
+  progressEl.style.display = 'block';
+  progressText.textContent = `已开始并发测速...`;
+  progressFill.style.width = '0%';
+  progressDetail.textContent = '正在检测所有活动节点';
+
+  try {
+    await api('/api/admin/nodes/test-all', { method: 'POST' });
+    toast('测速后台已触发，开始动态同步进度...');
+
+    let checkCount = 0;
+    let timer = setInterval(async () => {
+      const live = await api('/api/admin/nodes');
+      const liveNodes = live.nodes || [];
+      await loadNodes();
+
+      // 计算已测数量（healthMap 存在对应测速数据）
+      let testedCount = 0;
+      let passes = 0;
+      let fails = 0;
+      let latestDetail = '';
+
+      liveNodes.forEach(ln => {
+        const h = live.health[ln.raw_uri];
+        if (h && (h.last_success_at > 0 || h.last_fail_at > 0)) {
+          testedCount++;
+          if (h.consecutive_failures === 0) {
+            passes++;
+          } else {
+            fails++;
+          }
+          latestDetail = `正在检测: ${ln.name} ... ${h.last_test_ms ? Math.round(h.last_test_ms)+'ms' : '连接超时'}`;
+        }
+      });
+
+      const ratio = liveNodes.length ? testedCount / liveNodes.length : 0;
+      progressFill.style.width = `${Math.round(ratio * 100)}%`;
+      progressText.textContent = `已完成 ${testedCount}/${liveNodes.length} · 通过 ${passes} · 失败 ${fails}`;
+      if (latestDetail) {
+        progressDetail.textContent = latestDetail;
+      }
+
+      checkCount++;
+      if (testedCount >= liveNodes.length || checkCount > 15) {
+        clearInterval(timer);
+        setTimeout(() => {
+          progressEl.style.display = 'none';
+          toast('测速同步完成！');
+        }, 1500);
+      }
+    }, 2500);
+  } catch (e) {
+    toast('触发测速失败: ' + e.message);
+  }
+}
+
 async function dedupNodes() { await api('/api/admin/nodes/deduplicate', { method: 'POST' }); loadNodes(); toast('去重完成'); }
 async function deleteDisabledNodes() { await api('/api/admin/nodes/disabled', { method: 'DELETE' }); loadNodes(); toast('清理完成'); }
 async function useNode(uri) { await api('/api/admin/use-node', { method: 'POST', body: JSON.stringify({ raw_uri: uri }) }); loadSettings(); loadNodes(); toast('已锁定使用该节点，并关闭并发池'); }
 async function delNode(uri) { if(!confirm('删除该节点？')) return; await api('/api/admin/nodes', { method: 'DELETE', body: JSON.stringify({ raw_uri: uri }) }); loadNodes(); toast('已删除'); }
+
+// 节点批量操作相关的前端方法
+function getSelectedNodeURIs() {
+  const cbs = document.querySelectorAll('.node-select-cb:checked');
+  const uris = [];
+  cbs.forEach(cb => uris.push(cb.getAttribute('data-uri')));
+  return uris;
+}
+
+function toggleSelectAllNodes() {
+  const cbs = document.querySelectorAll('.node-select-cb');
+  let hasUnchecked = false;
+  cbs.forEach(cb => {
+    if (!cb.checked) hasUnchecked = true;
+  });
+  cbs.forEach(cb => {
+    cb.checked = hasUnchecked;
+  });
+  const mainCb = document.getElementById('selectAllNodesCheckbox');
+  if (mainCb) mainCb.checked = hasUnchecked;
+}
+
+function toggleSelectAllNodesCheckbox(mainCb) {
+  const cbs = document.querySelectorAll('.node-select-cb');
+  cbs.forEach(cb => {
+    cb.checked = mainCb.checked;
+  });
+}
+
+async function batchEnableSelectedNodes() {
+  const uris = getSelectedNodeURIs();
+  if (!uris.length) return toast('请先勾选需要批量操作的节点');
+  toast('批量启用中...');
+  try {
+    await api('/api/admin/nodes/batch-enable', {
+      method: 'POST',
+      body: JSON.stringify({ uris: uris })
+    });
+    await loadNodes();
+    toast(`已成功启用 ${uris.length} 个节点`);
+  } catch(e) {
+    toast('操作失败: ' + e.message);
+  }
+}
+
+async function batchDisableSelectedNodes() {
+  const uris = getSelectedNodeURIs();
+  if (!uris.length) return toast('请先勾选需要批量操作的节点');
+  toast('批量禁用中...');
+  try {
+    await api('/api/admin/nodes/batch-disable', {
+      method: 'POST',
+      body: JSON.stringify({ uris: uris })
+    });
+    await loadNodes();
+    toast(`已成功禁用 ${uris.length} 个节点`);
+  } catch(e) {
+    toast('操作失败: ' + e.message);
+  }
+}
+
+async function batchDeleteSelectedNodes() {
+  const uris = getSelectedNodeURIs();
+  if (!uris.length) return toast('请先勾选需要批量操作的节点');
+  if (!confirm(`确定要批量删除这 ${uris.length} 个节点吗？`)) return;
+  toast('批量删除中...');
+  try {
+    await api('/api/admin/nodes/batch-delete', {
+      method: 'POST',
+      body: JSON.stringify({ uris: uris })
+    });
+    await loadNodes();
+    toast(`已成功删除 ${uris.length} 个节点`);
+  } catch(e) {
+    toast('操作失败: ' + e.message);
+  }
+}
+
+// 移植并实装 demo.html 优选导入功能
+function importFileNodes(replace) {
+  const fileInput = document.getElementById('nodeImportFile');
+  if (!fileInput.files.length) {
+    return toast('请先选择一个节点配置文件');
+  }
+  const file = fileInput.files[0];
+  const reader = new FileReader();
+  toast('正在读取配置文件并解析...');
+  reader.onload = async function(e) {
+    const text = e.target.result;
+    try {
+      const res = await api('/api/admin/nodes/import', {
+        method: 'POST',
+        body: JSON.stringify({ text: text, replace: replace })
+      });
+      await loadNodes();
+      fileInput.value = '';
+      toast(replace ? `替换成功，导入了 ${res.count} 个节点` : `导入成功，追加了 ${res.count} 个节点`);
+    } catch (err) {
+      toast('文件导入解析失败: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+}
 function loadAppearance() {
   const presets = ['background.jpg'];
   $('#presets').innerHTML = presets.map(p => `<div class="thumb" style="background-image:url('${p}')" onclick="applyBg(\"url('${p}')\");localStorage.setItem('vproxy_bg',\"url('${p}')\");toast('背景已更换')"></div>`).join('');

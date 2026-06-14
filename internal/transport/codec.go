@@ -81,7 +81,17 @@ func parseSimple(uri, typ string) (map[string]any, error) {
 }
 
 func parseVmess(uri string) (map[string]any, error) {
-	b, _ := base64.StdEncoding.DecodeString(padB64(uri[8:]))
+	b64Str := uri[8:]
+	if idx := strings.Index(b64Str, "?"); idx != -1 {
+		b64Str = b64Str[:idx]
+	}
+	if idx := strings.Index(b64Str, "#"); idx != -1 {
+		b64Str = b64Str[:idx]
+	}
+	b, err := base64.StdEncoding.DecodeString(padB64(b64Str))
+	if err != nil {
+		return nil, err
+	}
 	var d map[string]any
 	json.Unmarshal(b, &d)
 	portStr := fmt.Sprintf("%v", d["port"])

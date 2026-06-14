@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -93,6 +94,9 @@ func (s *Server) handleAudioSpeech(w http.ResponseWriter, r *http.Request) {
 
 	voice := ttsResolveVoice(body["voice"])
 	respFmt := strings.ToLower(firstNonEmptyStr(getStr(body, "response_format", ""), "mp3"))
+
+	log.Printf("[Server] [AudioSpeech] 收到请求: 模型=%s, 语音=%s, 格式=%s", actualModel, voice, respFmt)
+
 	fmtInfo, ok := ttsFormatInfo[respFmt]
 	if !ok {
 		fmtInfo = ttsFormat{"audio/wav", true}

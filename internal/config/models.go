@@ -6,6 +6,7 @@ package config
 
 import (
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -74,12 +75,17 @@ func loadModelsFile() *modelsFile {
 	mf := &modelsFile{Models: defaultModels, AliasMap: map[string]string{}}
 	if data, err := os.ReadFile(modelsPath()); err == nil {
 		var parsed modelsFile
-		if json.Unmarshal(data, &parsed) == nil && len(parsed.Models) > 0 {
+		if err := json.Unmarshal(data, &parsed); err != nil {
+			log.Printf("[Config] 解析 models.json 失败: %v", err)
+		} else if len(parsed.Models) > 0 {
 			mf.Models = parsed.Models
 			if parsed.AliasMap != nil {
 				mf.AliasMap = parsed.AliasMap
 			}
+			log.Printf("[Config] 成功加载模型配置文件 models.json (模型数: %d)", len(mf.Models))
 		}
+	} else if !os.IsNotExist(err) {
+		log.Printf("[Config] 读取 models.json 失败: %v", err)
 	}
 	cachedModels = mf
 	modelsCacheTime = time.Now()

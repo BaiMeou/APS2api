@@ -3,6 +3,7 @@ package vertex
 import (
 	"context"
 	"fmt"
+	"log"
 	"math"
 	"strings"
 	"sync"
@@ -136,6 +137,7 @@ func (c *VertexAIClient) completeInner(ctx context.Context, model string, gemini
 	defer sess.Close()
 
 	for attempt <= maxRetries {
+		log.Printf("[Vertex] [CompleteChat] 开始尝试 (Attempt %d/%d), 模型=%s", attempt, maxRetries, model)
 		if recaptchaToken == "" {
 			tok, _ := c.pool.GetToken()
 			recaptchaToken = tok
@@ -244,7 +246,8 @@ func (c *VertexAIClient) completeInner(ctx context.Context, model string, gemini
 }
 
 // executeCompleteRequest 执行单次非流式请求：构建→发送→解析→返回 Gemini 格式 dict。
-func (c *VertexAIClient) executeCompleteRequest(ctx context.Context, sess *transport.Session, model string, geminiPayload map[string]any, recaptchaToken string, isFirstAuth bool) (map[string]any, error) {
+func (c *VertexAIClient) executeCompleteRequest(ctx context.Context, sess *transport.Session, model string, geminiPayload map[string]any, recaptchaToken string, _ bool) (map[string]any, error) {
+	log.Printf("[Vertex] [executeCompleteRequest] 准备发送请求: 模型=%s", model)
 	cfg := config.Load()
 	newBody := buildRequestPayload(model, geminiPayload, recaptchaToken, cfg)
 	// 上游请求 payload 序列化到 spool 缓冲（大媒体自动落盘，避免与已解析 body 同占内存）。

@@ -19,15 +19,6 @@ const (
 	StatusUnknown           = "UNKNOWN"
 )
 
-// grpcToHTTP 把 gRPC 状态映射到 HTTP 状态码（gRPC 状态 → HTTP 状态码映射）。
-var grpcToHTTP = map[string]int{
-	"OK": 200, "CANCELLED": 499, "UNKNOWN": 500, "INVALID_ARGUMENT": 400,
-	"DEADLINE_EXCEEDED": 504, "NOT_FOUND": 404, "ALREADY_EXISTS": 409,
-	"PERMISSION_DENIED": 403, "RESOURCE_EXHAUSTED": 429, "FAILED_PRECONDITION": 400,
-	"ABORTED": 409, "OUT_OF_RANGE": 400, "UNIMPLEMENTED": 501, "INTERNAL": 500,
-	"UNAVAILABLE": 503, "DATA_LOSS": 500, "UNAUTHENTICATED": 401,
-}
-
 // VertexError 是统一错误类型，兼容 Gemini API 错误格式。
 //
 // Kind 用于区分语义（auth/ratelimit/invalid/...），便于 IsRetryable 判定与对外错误映射。

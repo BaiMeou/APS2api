@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"log"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -38,6 +39,8 @@ func (s *Server) handleImageGenerations(w http.ResponseWriter, r *http.Request) 
 	prompt := getStr(body, "prompt", "")
 	size := getStr(body, "size", "1024x1024")
 	respFmt := getStr(body, "response_format", "b64_json")
+
+	log.Printf("[Server] [ImageGenerations] 收到请求: 模型=%s, 尺寸=%s, 格式=%s", model, size, respFmt)
 
 	if model == "" {
 		s.writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{
@@ -132,6 +135,8 @@ func (s *Server) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 	n := coerceOAIN(formValue(r, "n"))
 	respFmt := firstNonEmptyStr(formValue(r, "response_format"), "b64_json")
 
+	log.Printf("[Server] [ImageEdits] 收到请求: 模型=%s, 格式=%s, 图片数=%d", model, respFmt, len(images))
+
 	geminiPayload := transform.BuildImagePayload(model, prompt, images, mask,
 		formValue(r, "size"), formValue(r, "quality"), formValue(r, "style"),
 		formValue(r, "background"), "edit")
@@ -167,6 +172,8 @@ func (s *Server) handleImageVariations(w http.ResponseWriter, r *http.Request) {
 	n := coerceOAIN(formValue(r, "n"))
 	respFmt := firstNonEmptyStr(formValue(r, "response_format"), "b64_json")
 
+	log.Printf("[Server] [ImageVariations] 收到请求: 模型=%s, 格式=%s, 图片数=%d", model, respFmt, len(images))
+
 	// 变体无 mask、无 background。
 	geminiPayload := transform.BuildImagePayload(model, prompt, images, nil,
 		formValue(r, "size"), formValue(r, "quality"), formValue(r, "style"), "", "variation")
@@ -180,6 +187,7 @@ func (s *Server) runOAIImageRequest(ctx context.Context, w http.ResponseWriter, 
 	wantURL := responseFormat == "url"
 	items := make([]any, 0, n)
 	for i := 0; i < n; i++ {
+		log.Printf("[Server] [runOAIImageRequest] 开始获取图片 (第 %d/%d 张)", i+1, n)
 		images, vErr := s.vc.CompleteChatImage(ctx, model, geminiPayload)
 		if vErr != nil {
 			ve := toVertexError(vErr)

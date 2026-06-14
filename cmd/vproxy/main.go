@@ -58,13 +58,13 @@ func main() {
 			if s == syscall.SIGHUP {
 				config.InvalidateCache()
 				config.InvalidateModelsCache()
-				log.Printf("收到 SIGHUP：已清配置/模型缓存，下次读取即热重载")
+				log.Printf("[vproxy] 收到 SIGHUP：已清配置/模型缓存，下次读取即热重载")
 				continue
 			}
-			log.Printf("收到 %v：开始优雅关闭，排干在途请求（最长 %s）…", s, shutdownGrace)
+			log.Printf("[vproxy] 收到 %v：开始优雅关闭，排干在途请求（最长 %s）…", s, shutdownGrace)
 			ctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 			if err := httpServer.Shutdown(ctx); err != nil {
-				log.Printf("优雅关闭超时/出错：%v（强制结束）", err)
+				log.Printf("[vproxy] 优雅关闭超时/出错：%v（强制结束）", err)
 			}
 			cancel()
 			vc.StopTokenPool()
@@ -73,11 +73,11 @@ func main() {
 		}
 	}()
 
-	log.Printf("vproxy 监听 %s（API 密钥 %d 个，max_retries=%d，token_pool=%d）",
+	log.Printf("[vproxy] 监听 %s（API 密钥 %d 个，max_retries=%d，token_pool=%d）",
 		httpServer.Addr, keys.Count(), cfg.MaxRetries, cfg.TokenPoolSize)
 	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		log.Fatalf("server error: %v", err)
+		log.Fatalf("[vproxy] server error: %v", err)
 	}
 	<-shutdownDone // 等优雅关闭流程跑完（Shutdown 返回后 ListenAndServe 才返回 ErrServerClosed）
-	log.Printf("优雅关闭完成，vproxy 退出")
+	log.Printf("[vproxy] 优雅关闭完成，vproxy 退出")
 }

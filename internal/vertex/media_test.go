@@ -75,7 +75,7 @@ func TestExtractImageResponseNoImage(t *testing.T) {
 	result := makeResult([]any{
 		map[string]any{"text": "just plain text, no image"},
 	})
-	if imgs := extractImageResponse(result); imgs != nil && len(imgs) != 0 {
+	if imgs := extractImageResponse(result); len(imgs) != 0 {
 		t.Errorf("无图应返回空，实际 %+v", imgs)
 	}
 }

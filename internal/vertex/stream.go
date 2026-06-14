@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"strings"
 	"time"
 
@@ -80,6 +81,7 @@ func (c *VertexAIClient) executeStreamingWithRetries(ctx context.Context, model 
 	// 一致——修复此前 post-switch 二次判定导致真流式少 1 次重试的 off-by-one。
 retryLoop:
 	for attempt <= maxRetries {
+		log.Printf("[Vertex] [StreamChat] 开始尝试 (Attempt %d/%d), 模型=%s", attempt, maxRetries, model)
 		if recaptchaToken == "" {
 			tok, _ := c.pool.GetToken()
 			recaptchaToken = tok
@@ -202,7 +204,8 @@ retryLoop:
 // emit 回调把清洗后的 Gemini chunk 推给上层；
 // emit 返回 false（客户端断开）时扫描正常停止、返回 nil（StreamChat 据 chunkCount>0 收尾，不重试）。
 // ctx 绑定到上游流连接：ctx 取消时 Body.Read 报错，scanStream 干净结束（返回 nil，不 panic）。
-func (c *VertexAIClient) executeStreamingAttempt(ctx context.Context, sess *transport.Session, model string, geminiPayload map[string]any, recaptchaToken string, isFirstAuth bool, emit func(map[string]any) bool) error {
+func (c *VertexAIClient) executeStreamingAttempt(ctx context.Context, sess *transport.Session, model string, geminiPayload map[string]any, recaptchaToken string, _ bool, emit func(map[string]any) bool) error {
+	log.Printf("[Vertex] [executeStreamingAttempt] 准备发送流式请求: 模型=%s", model)
 	cfg := config.Load()
 	newBody := buildRequestPayload(model, geminiPayload, recaptchaToken, cfg)
 	// 上游请求 payload 序列化到 spool 缓冲（大媒体自动落盘）。流式：请求体在 DoStream 发送期被读取，

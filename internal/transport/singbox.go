@@ -9,7 +9,6 @@ import (
 
 	tls_client "github.com/bogdanfinn/tls-client"
 	box "github.com/sagernet/sing-box"
-	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/dialer"
 	"github.com/sagernet/sing-box/option"
 	M "github.com/sagernet/sing/common/metadata"
@@ -63,7 +62,7 @@ func (d *singboxDialer) Dial(network, addr string) (net.Conn, error) {
 
 func (d *singboxDialer) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	dest := M.ParseSocksaddr(addr)
-	routerCtx := service.ContextWith[adapter.Router](ctx, d.b.Router())
+	routerCtx := service.ContextWith(ctx, d.b.Router())
 	routerDialer, err := dialer.New(routerCtx, option.DialerOptions{}, false)
 	if err != nil {
 		return nil, err

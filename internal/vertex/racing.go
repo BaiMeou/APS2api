@@ -3,6 +3,7 @@ package vertex
 import (
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"sync/atomic"
 
@@ -17,7 +18,13 @@ func RunParallel[T any](ctx context.Context, cfg config.AppConfig, op func(ctx c
 		if proxy == "" {
 			proxy = cfg.ProxyURL
 		}
+		log.Printf("[Vertex] [RunParallel] 降级为单节点运行: %s", proxy)
 		return op(ctx, proxy)
+	}
+
+	log.Printf("[Vertex] [RunParallel] 开启并发测速, %d 个节点参与", len(cands))
+	for _, c := range cands {
+		log.Printf("[Vertex] [RunParallel] 参与节点: %s", c.Name)
 	}
 
 	ctxRace, cancel := context.WithCancel(ctx)
@@ -80,6 +87,7 @@ func RunParallel[T any](ctx context.Context, cfg config.AppConfig, op func(ctx c
 		case res := <-resCh:
 			atomic.AddInt32(&active, -1)
 			if res.err == nil {
+				log.Printf("[Vertex] [RunParallel] 节点胜出: %s", res.uri)
 				nodes.RecordTest(res.uri, true, 50, "")
 				return res.val, nil
 			}
@@ -106,12 +114,17 @@ func StreamParallel(ctx context.Context, cfg config.AppConfig, op func(ctx conte
 		if proxy == "" {
 			proxy = cfg.ProxyURL
 		}
+		log.Printf("[Vertex] [StreamParallel] 降级为单节点运行: %s", proxy)
 		for chunk := range op(ctx, proxy) {
 			if !yield(chunk) {
 				return
 			}
 		}
 		return
+	}
+	log.Printf("[Vertex] [StreamParallel] 开启并发测速, %d 个节点参与", len(cands))
+	for _, c := range cands {
+		log.Printf("[Vertex] [StreamParallel] 参与节点: %s", c.Name)
 	}
 	ctxRace, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -157,6 +170,7 @@ loop:
 			atomic.AddInt32(&active, -1)
 			if r.err == nil {
 				winner = &r
+				log.Printf("[Vertex] [StreamParallel] 节点胜出: %s", r.uri)
 				nodes.RecordTest(r.uri, true, 50, "")
 				break loop
 			}

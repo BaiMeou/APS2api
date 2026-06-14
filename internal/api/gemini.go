@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"unicode/utf8"
@@ -103,6 +104,7 @@ func (s *Server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request, mo
 	if !ok {
 		return
 	}
+	log.Printf("[Server] [GeminiGenerate] 收到请求: 模型=%s, 真模型=%s", model, actualModel)
 	s.injectAnti429(body)
 
 	resp, vErr := s.vc.CompleteChat(r.Context(), actualModel, body)
@@ -126,6 +128,7 @@ func (s *Server) handleGeminiStreamGenerate(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
+	log.Printf("[Server] [GeminiStreamGenerate] 收到请求: 模型=%s, 真模型=%s, 假流式=%v", model, actualModel, useFake)
 	s.injectAnti429(body)
 
 	sw := s.newSSEWriter(w, "application/json")
@@ -191,6 +194,7 @@ func (s *Server) handleCountTokens(w http.ResponseWriter, r *http.Request, model
 	if !ok {
 		return
 	}
+	log.Printf("[Server] [CountTokens] 收到请求: 模型=%s, 真模型=%s", model, actualModel)
 
 	var contents []any
 	if reqObj, ok := body["generateContentRequest"].(map[string]any); ok {

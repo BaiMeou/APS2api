@@ -77,6 +77,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	log.Printf("[Server] [Health] 收到健康检查请求")
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"status":          "healthy",
 		"timestamp":       time.Now().Unix(),
@@ -87,6 +88,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 // handleMetrics 返回服务的实时状态，供健康检查与管理后台做存活探测。
 // 刻意不含 per-key/模型用量（那是上游网关的账本职责）。
 func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	log.Printf("[Server] [Metrics] 收到指标获取请求")
 	s.writeJSON(w, http.StatusOK, s.metricsBody())
 }
 
@@ -153,6 +155,8 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}})
 		return
 	}
+
+	log.Printf("[Server] [ChatCompletions] 收到请求: 模型=%s, 真模型=%s, 流式=%v, n=%d", rawModel, actualModel, stream, n)
 
 	// 图像分辨率控制（additive）：chat 端点也支持 image_size/imageSize/size/imageConfig 写入 imageConfig.imageSize。
 	transform.ApplyImageConfig(geminiPayload, body)
@@ -445,7 +449,7 @@ func (s *Server) withRecover(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				log.Printf("panic recovered: %v", rec)
+				log.Printf("[Server] panic recovered: %v", rec)
 				s.oaiError(w, http.StatusInternalServerError, "服务内部错误，请联系管理员 (internal error)", "server_error")
 			}
 		}()
@@ -544,7 +548,7 @@ func (s *Server) withMetrics(next http.Handler) http.Handler {
 		success := sw.status < 400
 		s.metrics.EndRequest(success, elapsed.Seconds())
 		s.metrics.RecordRequest(r.URL.Path, success, elapsed.Seconds(), start.Format("15:04:05"))
-		log.Printf("%s %s - %d (%.3fs) req=%s", r.Method, r.URL.Path, sw.status, elapsed.Seconds(), reqID)
+		log.Printf("[Server] %s %s - %d (%.3fs) req=%s", r.Method, r.URL.Path, sw.status, elapsed.Seconds(), reqID)
 	})
 }
 

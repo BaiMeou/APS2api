@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -113,7 +114,13 @@ func Load() AppConfig {
 	}
 	cfg := DefaultConfig()
 	if data, err := os.ReadFile(configPath()); err == nil {
-		_ = json.Unmarshal(data, &cfg)
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			log.Printf("[Config] 解析 config.json 失败: %v", err)
+		} else {
+			log.Printf("[Config] 成功加载配置文件 config.json")
+		}
+	} else if !os.IsNotExist(err) {
+		log.Printf("[Config] 读取 config.json 失败: %v", err)
 	}
 	cached = &cfg
 	cacheTime = time.Now()

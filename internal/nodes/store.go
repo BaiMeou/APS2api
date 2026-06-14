@@ -2,6 +2,7 @@ package nodes
 
 import (
 	"encoding/json"
+	"log"
 	"math"
 	"math/rand"
 	"os"
@@ -64,6 +65,7 @@ func LoadNodes() []Node {
 	mu.Lock()
 	defer mu.Unlock()
 	ensureLoaded()
+	log.Printf("[Nodes] 获取所有节点 (数量: %d)", len(nodeList))
 	return nodeList
 }
 
@@ -114,6 +116,42 @@ func DeleteNode(uri string) {
 	}
 	nodeList = kept
 	delete(healthMap, uri)
+	saveNodesUnsafe()
+	saveHealthUnsafe()
+}
+
+func BatchUpdateNodesDisabled(uris []string, disabled bool) {
+	mu.Lock()
+	defer mu.Unlock()
+	ensureLoaded()
+	targets := make(map[string]bool)
+	for _, u := range uris {
+		targets[u] = true
+	}
+	for i, n := range nodeList {
+		if targets[n.RawURI] {
+			nodeList[i].Disabled = disabled
+		}
+	}
+	saveNodesUnsafe()
+}
+
+func BatchDeleteNodes(uris []string) {
+	mu.Lock()
+	defer mu.Unlock()
+	ensureLoaded()
+	targets := make(map[string]bool)
+	for _, u := range uris {
+		targets[u] = true
+		delete(healthMap, u)
+	}
+	var kept []Node
+	for _, n := range nodeList {
+		if !targets[n.RawURI] {
+			kept = append(kept, n)
+		}
+	}
+	nodeList = kept
 	saveNodesUnsafe()
 	saveHealthUnsafe()
 }
@@ -229,5 +267,6 @@ func SelectForParallel(k int) []Node {
 		selected = append(selected, scored[idx].node)
 		scored = append(scored[:idx], scored[idx+1:]...)
 	}
+	log.Printf("[Nodes] 选择并行节点 (需求: %d, 实际: %d)", k, len(selected))
 	return selected
 }

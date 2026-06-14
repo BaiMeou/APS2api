@@ -7,6 +7,7 @@ package recaptcha
 import (
 	"context"
 	"fmt"
+	"log"
 	"math/rand"
 	"net/url"
 	"regexp"
@@ -49,10 +50,13 @@ func randomString(n int) string {
 // 调用方按“空则换新/重试”处理。返回非空字符串即成功。
 func FetchRecaptchaToken(net *transport.NetworkClient) (string, error) {
 	for retry := 0; retry < 3; retry++ {
+		log.Printf("[Recaptcha] 开始获取 reCAPTCHA token (尝试 %d/3)", retry+1)
 		if token, ok := fetchOnce(net); ok {
+			log.Printf("[Recaptcha] 成功获取 reCAPTCHA token")
 			return token, nil
 		}
 	}
+	log.Printf("[Recaptcha] 3次尝试后获取 reCAPTCHA token 失败")
 	return "", nil
 }
 

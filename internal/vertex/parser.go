@@ -139,9 +139,7 @@ func cleanJSONString(raw string) string {
 	if cleaned == "" {
 		return "[]"
 	}
-	if strings.HasSuffix(cleaned, ",") {
-		cleaned = cleaned[:len(cleaned)-1]
-	}
+	cleaned = strings.TrimSuffix(cleaned, ",")
 	cleaned = trailingCommaBeforeBracket.ReplaceAllString(cleaned, "]")
 	if !strings.HasPrefix(cleaned, "[") {
 		cleaned = "[" + cleaned + "]"
