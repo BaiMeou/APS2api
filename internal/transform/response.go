@@ -108,14 +108,14 @@ func ExtractParts(parts []any, forStream bool) (string, []any, string) {
 		if !ok {
 			continue
 		}
-		_, hasText := part["text"]
+		// 非空文本（而非键存在）：上游流式每个 part 会带上所有字段的空默认值
+		// （text:"" + 空 inlineData/functionCall），靠真实非空字段区分类型。必须按"值非空"
+		// 判断，否则带 text:"" 的工具/图片帧会被误判成空文本而丢弃（流式下 functionCall/
+		// inlineData 丢失的根因）。故先判非空 functionCall/inlineData，再判非空 text。
+		hasText := toString(part["text"]) != ""
 		isThought := isTruthy(part["thought"])
 
 		switch {
-		case isThought && hasText:
-			thoughts = append(thoughts, toString(part["text"]))
-		case hasText && !isThought:
-			texts = append(texts, toString(part["text"]))
 		case isFunctionCallWithName(part):
 			fc, _ := part["functionCall"].(map[string]any)
 			args := fc["args"]
@@ -141,6 +141,10 @@ func ExtractParts(parts []any, forStream bool) (string, []any, string) {
 			mime := toString(firstNonEmpty(id["mimeType"], id["mime_type"]))
 			data := toString(id["data"])
 			images = append(images, "\n![image](data:"+mime+";base64,"+data+")")
+		case isThought && hasText:
+			thoughts = append(thoughts, toString(part["text"]))
+		case hasText:
+			texts = append(texts, toString(part["text"]))
 		case hasKey(part, "executableCode"):
 			if ec, ok := part["executableCode"].(map[string]any); ok {
 				lang := strings.ToLower(toString(ec["codeLanguage"]))
