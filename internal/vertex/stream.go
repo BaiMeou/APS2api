@@ -39,7 +39,7 @@ type StreamChunk struct {
 // StreamChat 真流式入口。
 //
 // 通过 yield 回调推送增量：回调返回 false 表示客户端断开/上层要求停止，立即终止。
-// 单 session 复用 + response 排干防串流。重试逻辑与非流式对齐，但 content_yielded 后
+// 单 session复用 + response 排干防串流。重试逻辑与非流式对齐，但 content_yielded 后
 // 不再重试（已发出的内容不能重来）。ctx 取消（客户端断开/优雅关闭）时干净结束流：
 // 重试退避被打断、上游流连接中断，不再空转。
 func (c *VertexAIClient) StreamChat(ctx context.Context, model string, geminiPayload map[string]any, yield func(StreamChunk) bool) {
@@ -76,9 +76,6 @@ func (c *VertexAIClient) executeStreamingWithRetries(ctx context.Context, model 
 	isFirstAuth := true
 	attempt := 0
 
-	// 标签化循环：各重试 case 用 break retryLoop 直接终止整个循环（in-case break 只跳 switch）。
-	// 这样重试预算由 `for attempt <= maxRetries` 单独控制（总尝试=maxRetries+1），与非流式 completeInner
-	// 一致——修复此前 post-switch 二次判定导致真流式少 1 次重试的 off-by-one。
 retryLoop:
 	for attempt <= maxRetries {
 		log.Printf("[Vertex] [StreamChat] 开始尝试 (Attempt %d/%d), 模型=%s", attempt, maxRetries, model)
@@ -170,7 +167,8 @@ retryLoop:
 			if ve.Kind == "empty" {
 				metrics.Default.IncUpstreamEmpty()
 			}
-			if !ve.IsRetryable() || contentYielded || attempt >= maxRetries {
+			// 【关键改动】：如果是网络不通等内部错误，直接熔断并停止重试。
+			if ve.Kind == "internal" || !ve.IsRetryable() || contentYielded || attempt >= maxRetries {
 				break retryLoop
 			}
 			attempt++
@@ -179,14 +177,9 @@ retryLoop:
 			}
 
 		default:
+			// 【关键改动】：直接终止未知原生错误，移除了多余的 attempt 重新入圈重试。
 			lastError = NewInternalError(attemptErr.Error())
-			if contentYielded || attempt >= maxRetries {
-				break retryLoop
-			}
-			attempt++
-			if err := sleepCtx(ctx, time.Second); err != nil {
-				break retryLoop
-			}
+			break retryLoop
 		}
 	}
 
@@ -420,6 +413,7 @@ func processStreamingObject(obj map[string]any, emit func(map[string]any) bool) 
 							outerMeta[key] = v
 						}
 					}
+					// 极少数情况 inner 是 list：逐项 extract+emit，本 result 处理完跳过下方。
 					for _, itemRaw := range inner {
 						if item, ok := itemRaw.(map[string]any); ok {
 							for k, v := range outerMeta {
@@ -481,84 +475,10 @@ func chunkFinishReason(chunk map[string]any) string {
 	return toStr(c["finishReason"])
 }
 
-// cleanPart 清洗单个 Gemini part，移除内部 protobuf 空默认字段，仅保留真实内容字段。
-// 上游 batchGraphql 返回的 part 包含所有 protobuf oneof 字段的空默认值（如 data:"text"、
-// fileData:{}, functionCall:{}, functionResponse:{}, inlineData:{}），这些字段不是
-// 标准 Gemini API 格式，客户端可能无法正确处理。清理后仅保留 text/inlineData/functionCall/
-// functionResponse 等有实际内容的字段。
-func cleanPart(part map[string]any) map[string]any {
-	cleaned := shallowCopy(part)
-
-	// 移除内部 protobuf oneof 指示器（always "text" / "inlineData" / "functionCall" / "functionResponse"）
-	delete(cleaned, "data")
-
-	// fileData：仅在 uri 为空时移除
-	if fd, ok := cleaned["fileData"].(map[string]any); ok {
-		if toStr(fd["fileUri"]) == "" && toStr(fd["mimeType"]) == "" {
-			delete(cleaned, "fileData")
-		}
-	}
-
-	// functionCall：name 和 args 都为空/无意义时移除
-	if fc, ok := cleaned["functionCall"].(map[string]any); ok {
-		hasName := toStr(fc["name"]) != ""
-		hasArgs := false
-		if args, ok := fc["args"]; ok && args != nil {
-			if m, ok := args.(map[string]any); ok && len(m) > 0 {
-				hasArgs = true
-			}
-		}
-		if !hasName && !hasArgs {
-			delete(cleaned, "functionCall")
-		} else if name, ok := fc["name"].(string); ok && name != "" {
-			if argStr, ok := fc["args"].(string); ok && argStr != "" {
-				var parsed any
-				if err := json.Unmarshal([]byte(argStr), &parsed); err == nil {
-					fc["args"] = parsed
-				}
-			}
-		}
-	}
-
-	// functionResponse：name 和 response 都为空时移除
-	if fr, ok := cleaned["functionResponse"].(map[string]any); ok {
-		hasName := toStr(fr["name"]) != ""
-		hasResp := false
-		if resp, ok := fr["response"]; ok && resp != nil {
-			if m, ok := resp.(map[string]any); ok && len(m) > 0 {
-				hasResp = true
-			}
-		}
-		if !hasName && !hasResp {
-			delete(cleaned, "functionResponse")
-		} else if respStr, ok := fr["response"].(string); ok && respStr != "" {
-			fr["response"] = map[string]any{"result": respStr}
-		}
-	}
-
-	// inlineData：data 为空时移除
-	if id, ok := cleaned["inlineData"].(map[string]any); ok {
-		if toStr(id["data"]) == "" {
-			delete(cleaned, "inlineData")
-		}
-	}
-
-	// 如果只剩 thought/thoughtSignature 等非内容标记，返回 nil
-	for k := range cleaned {
-		switch k {
-		case "thought", "thoughtSignature":
-			continue
-		default:
-			return cleaned
-		}
-	}
-	return nil
-}
-
 // extractChunk 从 Gemini 数据中提取标准化 chunk，清洗畸形嵌套。
 //
 // 对齐 Python _process_streaming_object：candidates key 存在且非 nil 时保留
-//（即使空列表），总是复制 metadata 字段，仅当 chunk 完全无字段时返回 nil。
+//（即使空列表），总是复制 metadata 字段，仅当 chunk完全无字段时返回 nil。
 func extractChunk(data map[string]any) map[string]any {
 	chunk := map[string]any{}
 
@@ -640,6 +560,76 @@ func cleanStreamParts(parts []any) []any {
 		}
 	}
 	return cleaned
+}
+
+// cleanPart 清洗单个 Gemini part，移除内部 protobuf 空默认字段，仅保留真实内容字段。
+func cleanPart(part map[string]any) map[string]any {
+	cleaned := shallowCopy(part)
+
+	// 移除内部 protobuf oneof 指示器（always "text" / "inlineData" / "functionCall" / "functionResponse"）
+	delete(cleaned, "data")
+
+	// fileData：仅在 uri 为空时移除
+	if fd, ok := cleaned["fileData"].(map[string]any); ok {
+		if toStr(fd["fileUri"]) == "" && toStr(fd["mimeType"]) == "" {
+			delete(cleaned, "fileData")
+		}
+	}
+
+	// functionCall：name 和 args 都为空/无意义时移除
+	if fc, ok := cleaned["functionCall"].(map[string]any); ok {
+		hasName := toStr(fc["name"]) != ""
+		hasArgs := false
+		if args, ok := fc["args"]; ok && args != nil {
+			if m, ok := args.(map[string]any); ok && len(m) > 0 {
+				hasArgs = true
+			}
+		}
+		if !hasName && !hasArgs {
+			delete(cleaned, "functionCall")
+		} else if name, ok := fc["name"].(string); ok && name != "" {
+			if argStr, ok := fc["args"].(string); ok && argStr != "" {
+				var parsed any
+				if err := json.Unmarshal([]byte(argStr), &parsed); err == nil {
+					fc["args"] = parsed
+				}
+			}
+		}
+	}
+
+	// functionResponse：name 和 response 都为空时移除
+	if fr, ok := cleaned["functionResponse"].(map[string]any); ok {
+		hasName := toStr(fr["name"]) != ""
+		hasResp := false
+		if resp, ok := fr["response"]; ok && resp != nil {
+			if m, ok := resp.(map[string]any); ok && len(m) > 0 {
+				hasResp = true
+			}
+		}
+		if !hasName && !hasResp {
+			delete(cleaned, "functionResponse")
+		} else if respStr, ok := fr["response"].(string); ok && respStr != "" {
+			fr["response"] = map[string]any{"result": respStr}
+		}
+	}
+
+	// inlineData：data 为空时移除
+	if id, ok := cleaned["inlineData"].(map[string]any); ok {
+		if toStr(id["data"]) == "" {
+			delete(cleaned, "inlineData")
+		}
+	}
+
+	// 如果只剩 thought/thoughtSignature 等非内容标记，返回 nil
+	for k := range cleaned {
+		switch k {
+		case "thought", "thoughtSignature":
+			continue
+		default:
+			return cleaned
+		}
+	}
+	return nil
 }
 
 // extractTextRecursive 从嵌套结构中递归提取纯文本，防止无限递归（depth>20 截断）。

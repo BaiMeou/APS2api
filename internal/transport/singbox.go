@@ -5,89 +5,30 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net/netip"
+	"net"
 	"runtime/debug"
-	"strings"
 	"sync"
 	"time"
 
 	box "github.com/sagernet/sing-box"
-	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/common/dialer"
+	"github.com/sagernet/sing-box/include" // 用于构建必需的上下文注册表
 	"github.com/sagernet/sing-box/option"
-	"github.com/sagernet/sing/common/json/badoption"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+	sjson "github.com/sagernet/sing/common/json" // 命名为 sjson 以区分系统的 json
 )
 
 type boxInfo struct {
 	instance   *box.Box
-	port       int
-	closed     bool
-	refCount   int32
 	lastUsedAt time.Time
+	closed     bool
 }
 
 var (
 	boxMap   = make(map[string]*boxInfo)
 	boxMutex sync.RWMutex
 )
-
-func buildOutbound(uri string) (option.Outbound, error) {
-	outMap, err := ParseURI(uri)
-	if err != nil {
-		return option.Outbound{}, fmt.Errorf("parse URI: %w", err)
-	}
-
-	typ, _ := outMap["type"].(string)
-	outMap["tag"] = "proxy"
-
-	b, err := json.Marshal(outMap)
-	if err != nil {
-		return option.Outbound{}, fmt.Errorf("marshal outbound: %w", err)
-	}
-
-	var opts any
-	switch typ {
-	case "vless":
-		o := new(option.VLESSOutboundOptions)
-		if err := json.Unmarshal(b, o); err != nil {
-			return option.Outbound{}, fmt.Errorf("unmarshal vless: %w", err)
-		}
-		opts = o
-	case "vmess":
-		o := new(option.VMessOutboundOptions)
-		if err := json.Unmarshal(b, o); err != nil {
-			return option.Outbound{}, fmt.Errorf("unmarshal vmess: %w", err)
-		}
-		opts = o
-	case "trojan":
-		o := new(option.TrojanOutboundOptions)
-		if err := json.Unmarshal(b, o); err != nil {
-			return option.Outbound{}, fmt.Errorf("unmarshal trojan: %w", err)
-		}
-		opts = o
-	case "shadowsocks":
-		o := new(option.ShadowsocksOutboundOptions)
-		if err := json.Unmarshal(b, o); err != nil {
-			return option.Outbound{}, fmt.Errorf("unmarshal shadowsocks: %w", err)
-		}
-		opts = o
-	case "hysteria2":
-		o := new(option.Hysteria2OutboundOptions)
-		if err := json.Unmarshal(b, o); err != nil {
-			return option.Outbound{}, fmt.Errorf("unmarshal hysteria2: %w", err)
-		}
-		opts = o
-	case "tuic":
-		o := new(option.TUICOutboundOptions)
-		if err := json.Unmarshal(b, o); err != nil {
-			return option.Outbound{}, fmt.Errorf("unmarshal tuic: %w", err)
-		}
-		opts = o
-	default:
-		return option.Outbound{}, fmt.Errorf("unsupported outbound type: %s", typ)
-	}
-
-	return option.Outbound{Type: typ, Tag: "proxy", Options: opts}, nil
-}
 
 func safeNewBox(opts option.Options) (instance *box.Box, err error) {
 	defer func() {
@@ -98,125 +39,119 @@ func safeNewBox(opts option.Options) (instance *box.Box, err error) {
 	return box.New(box.Options{Context: include.Context(context.Background()), Options: opts})
 }
 
-func BuildSOCKS5Proxy(uri string) (socksAddr string, cleanup func(), err error) {
+// getOrStartBoxDialer 获取或启动节点的内部 Dialer
+func getOrStartBoxDialer(uri string) (func(ctx context.Context, network, addr string) (net.Conn, error), error) {
 	boxMutex.Lock()
-	if existing, ok := boxMap[uri]; ok {
-		existing.lastUsedAt = time.Now()
+	if info, ok := boxMap[uri]; ok && !info.closed {
+		info.lastUsedAt = time.Now()
+		b := info.instance
 		boxMutex.Unlock()
-		return fmt.Sprintf("socks5://127.0.0.1:%d", existing.port), nil, nil
+		d := &singboxDialer{b: b}
+		return d.DialContext, nil
 	}
 	boxMutex.Unlock()
 
-	lease, err := DefaultPortAllocator.Acquire()
+	outMap, err := ParseURI(uri)
 	if err != nil {
-		return "", nil, fmt.Errorf("acquire port: %w", err)
+		return nil, fmt.Errorf("parse URI: %w", err)
 	}
+	outMap["tag"] = "proxy"
+	outMap["domain_resolver"] = "dns-direct"
 
-	port := lease.Port
-	cleanup = func() {
-		DefaultPortAllocator.Release(lease)
-	}
-
-	proxyOutbound, err := buildOutbound(uri)
+	proxyOutboundBytes, err := json.Marshal(outMap)
 	if err != nil {
-		cleanup()
-		return "", nil, err
+		return nil, fmt.Errorf("marshal proxy outbound: %w", err)
 	}
 
-	addr := badoption.Addr(netip.MustParseAddr("127.0.0.1"))
-	opts := option.Options{
-		Log: &option.LogOptions{Level: "warn", Timestamp: true},
-		Inbounds: []option.Inbound{{
-			Type: "socks",
-			Tag:  "socks-in",
-			Options: &option.SocksInboundOptions{
-				ListenOptions: option.ListenOptions{
-					Listen:     &addr,
-					ListenPort: uint16(port),
+	configJSON := fmt.Sprintf(`{
+		"dns": {
+			"servers": [
+				{
+					"tag": "dns-direct",
+					"type": "udp",
+					"server": "223.5.5.5",
+					"detour": "direct"
 				},
-			},
-		}},
-		Outbounds: []option.Outbound{
-			proxyOutbound,
-			{Type: "direct", Tag: "direct"},
+				{
+					"tag": "dns-proxy",
+					"type": "udp",
+					"server": "8.8.8.8"
+				}
+			]
 		},
-		Route: &option.RouteOptions{
-			Rules: []option.Rule{{
-				DefaultOptions: option.DefaultRule{
-					RawDefaultRule: option.RawDefaultRule{
-						Inbound: badoption.Listable[string]{"socks-in"},
-					},
-				RuleAction: option.RuleAction{
-					Action: "route",
-					RouteOptions: option.RouteActionOptions{
-							Outbound: "proxy",
-						},
-					},
-				},
-			}},
-			Final: "proxy",
-		},
-	}
+		"outbounds": [
+			%s,
+			{
+				"type": "direct",
+				"tag": "direct"
+			}
+		]
+	}`, string(proxyOutboundBytes))
 
-	instance, err := safeNewBox(opts)
+	ctx := include.Context(context.Background())
+	opts, err := sjson.UnmarshalExtendedContext[option.Options](ctx, []byte(configJSON))
 	if err != nil {
-		cleanup()
-		return "", nil, fmt.Errorf("create sing-box: %w", err)
+		return nil, fmt.Errorf("unmarshal sing-box config: %w", err)
 	}
 
+	instance, err := box.New(box.Options{Context: ctx, Options: opts})
+	if err != nil {
+		return nil, err
+	}
 	if err := instance.Start(); err != nil {
-		cleanup()
-		return "", nil, fmt.Errorf("start sing-box: %w", err)
+		return nil, err
 	}
-
-	socksAddr = fmt.Sprintf("socks5://127.0.0.1:%d", port)
 
 	boxMutex.Lock()
-	if old, ok := boxMap[uri]; ok {
+	if old, ok := boxMap[uri]; ok && !old.closed {
+		old.closed = true
 		old.instance.Close()
 	}
-	boxMap[uri] = &boxInfo{instance: instance, port: port, refCount: 1, lastUsedAt: time.Now()}
+	boxMap[uri] = &boxInfo{instance: instance, lastUsedAt: time.Now()}
 	boxMutex.Unlock()
 
-	return socksAddr, cleanup, nil
+	d := &singboxDialer{b: instance}
+	return d.DialContext, nil
 }
 
-func resolveProxyURI(uri string) (proxy string, cleanup func(), err error) {
-	if uri == "" {
-		return "", nil, nil
-	}
-	if strings.HasPrefix(uri, "http://") || strings.HasPrefix(uri, "https://") || strings.HasPrefix(uri, "socks5://") {
-		return uri, nil, nil
-	}
-	return BuildSOCKS5Proxy(uri)
+type singboxDialer struct {
+	b *box.Box
 }
 
-// RemoveProxy decrements the ref count for the proxy identified by uri.
-// When the ref count reaches zero, the sing-box instance is closed and removed.
+func (d *singboxDialer) Dial(network, addr string) (net.Conn, error) {
+	return d.DialContext(context.Background(), network, addr)
+}
+
+func (d *singboxDialer) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	dest := M.ParseSocksaddr(addr)
+	routerCtx := service.ContextWith(ctx, d.b.Router())
+	
+	routerDialer, err := dialer.New(routerCtx, option.DialerOptions{}, false)
+	if err != nil {
+		return nil, err
+	}
+	return routerDialer.DialContext(ctx, network, dest)
+}
+
+// RemoveProxy 主动清理代理实例 (响应面板删除节点)
 func RemoveProxy(uri string) {
 	boxMutex.Lock()
-	defer boxMutex.Unlock()
-	info, ok := boxMap[uri]
-	if !ok {
-		return
-	}
-	info.refCount--
-	if info.refCount <= 0 {
+	if info, ok := boxMap[uri]; ok {
 		if !info.closed {
 			info.closed = true
 			info.instance.Close()
+			log.Printf("[Transport] 代理节点已清理释放: %s", uri)
 		}
-		DefaultPortAllocator.Release(&PortLease{Port: info.port})
 		delete(boxMap, uri)
-		log.Printf("[Transport] 代理已清理并释放端口: %s (port %d)", uri, info.port)
 	}
+	boxMutex.Unlock()
 }
 
-// StartProxyGC starts a background goroutine that periodically closes proxies
-// that have been idle (lastUsedAt older than maxIdle) and have no refs.
+// StartProxyGC 启动后台空闲实例垃圾回收 (每隔 interval 扫描，超时 maxIdle 回收)
 func StartProxyGC(interval, maxIdle time.Duration) {
 	go func() {
 		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
 		for range ticker.C {
 			cleanupIdleProxies(maxIdle)
 		}
@@ -228,28 +163,26 @@ func cleanupIdleProxies(maxIdle time.Duration) {
 	defer boxMutex.Unlock()
 	now := time.Now()
 	for uri, info := range boxMap {
-		if info.refCount <= 0 && now.Sub(info.lastUsedAt) > maxIdle {
+		if now.Sub(info.lastUsedAt) > maxIdle {
 			if !info.closed {
 				info.closed = true
 				info.instance.Close()
+				log.Printf("[Transport] 空闲代理已清理释放: %s", uri)
 			}
-			DefaultPortAllocator.Release(&PortLease{Port: info.port})
 			delete(boxMap, uri)
-			log.Printf("[Transport] 空闲代理已清理: %s (port %d)", uri, info.port)
 		}
 	}
 }
 
+// StopAllProxies 程序优雅退出时清理全部实例
 func StopAllProxies() {
 	boxMutex.Lock()
 	defer boxMutex.Unlock()
-
 	for _, info := range boxMap {
 		if !info.closed {
 			info.closed = true
 			info.instance.Close()
 		}
-		DefaultPortAllocator.Release(&PortLease{Port: info.port})
 	}
 	boxMap = make(map[string]*boxInfo)
 }

@@ -17,7 +17,6 @@ import (
 	"github.com/bsfdsagfadg/vertex/internal/transport"
 )
 
-// 匿名 batchGraphql 端点常量（逐字节保持既定值）。
 const (
 	anonBaseURL      = "https://cloudconsole-pa.clients6.google.com"
 	batchGraphqlPath = "/v3/entityServices/AiplatformEntityService/schemas/AIPLATFORM_GRAPHQL:batchGraphql"
@@ -26,7 +25,6 @@ const (
 
 var batchGraphqlURL = anonBaseURL + batchGraphqlPath + "?key=" + anonAPIKey + "&prettyPrint=false"
 
-// defaultSafetySettings 是 SAFETY 自动重试时注入的全 BLOCK_NONE 设置（5 类）。
 var defaultSafetySettings = []any{
 	map[string]any{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
 	map[string]any{"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -35,14 +33,12 @@ var defaultSafetySettings = []any{
 	map[string]any{"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"},
 }
 
-// VertexAIClient 是 batchGraphql 客户端（里程碑1 非流式部分；流式留里程碑2）。
 type VertexAIClient struct {
 	net        *transport.NetworkClient
 	pool       *recaptcha.TokenPool
 	maxRetries int
 }
 
-// NewVertexAIClient 构造客户端。
 func NewVertexAIClient() *VertexAIClient {
 	net := transport.NewNetworkClient()
 	cfg := config.Load()
@@ -57,35 +53,19 @@ func NewVertexAIClient() *VertexAIClient {
 	}
 }
 
-// StartTokenPool 启动后台 token 预取（main 启动时调一次）。
 func (c *VertexAIClient) StartTokenPool() { c.pool.Start() }
-
-// StopTokenPool 停止后台 token 预取并等待退出（优雅关闭时调）。
-func (c *VertexAIClient) StopTokenPool() { c.pool.Stop() }
-
-// TokenPoolStats 返回 token 池容量与当前水位（供 /metrics）。
+func (c *VertexAIClient) StopTokenPool()  { c.pool.Stop() }
 func (c *VertexAIClient) TokenPoolStats() (size, fill int) { return c.pool.Stats() }
 
-// CompleteChat 非流式请求（里程碑1 入口）。非流式请求主循环。
 func (c *VertexAIClient) CompleteChat(ctx context.Context, model string, geminiPayload map[string]any) (map[string]any, error) {
 	return RunParallel(ctx, config.Load(), func(ctx context.Context, proxyURI string) (map[string]any, error) {
 		return c.completeInner(ctx, model, geminiPayload, proxyURI)
 	})
 }
 
-// largePayloadThreshold — 超过此大小的 payload 在 CompleteChatN 中由并发降级为串行，
-// 避免 n 倍内存放大（大 payload 通常含 base64 图片，8 并发额外 7 份拷贝可达数十 MB）。
 const largePayloadThreshold = 1 << 20 // 1MB
 
-// CompleteChatN 并发发 n 次单候选请求，返回成功的响应列表（n 多候选用）。
-//
-// 大 payload（>1MB）时降级为串行以避免 n 倍内存放大。
-// 并发候选：扇出多个 complete_chat，部分失败不连累其它候选。
-//
-// 每次 CompleteChat 自带完整重试/recaptcha（复用既有机制）；部分失败不连累其它候选，
-// 只要至少一个成功就返回成功列表；全失败则返回第一个错误（保持出现顺序的确定性）。
 func (c *VertexAIClient) CompleteChatN(ctx context.Context, model string, geminiPayload map[string]any, n int) ([]map[string]any, error) {
-	// 大 payload 探测：估算 geminiPayload 序列化大小。
 	if n > 1 {
 		if b, err := json.Marshal(geminiPayload); err == nil && len(b) > largePayloadThreshold {
 			log.Printf("[Vertex] [CompleteChatN] 大 payload (%d bytes) 降级为串行", len(b))
@@ -134,7 +114,6 @@ func (c *VertexAIClient) CompleteChatN(ctx context.Context, model string, gemini
 	return ok, nil
 }
 
-// completeChatNSerial 串行执行 n 次 CompleteChat，大 payload 时替代并发扇出。
 func (c *VertexAIClient) completeChatNSerial(ctx context.Context, model string, geminiPayload map[string]any, n int) ([]map[string]any, error) {
 	var ok []map[string]any
 	var firstErr error
@@ -157,7 +136,6 @@ func (c *VertexAIClient) completeChatNSerial(ctx context.Context, model string, 
 	return ok, nil
 }
 
-// completeInner 非流式重试主循环。
 func (c *VertexAIClient) completeInner(ctx context.Context, model string, geminiPayload map[string]any, proxyURI string) (map[string]any, error) {
 	maxRetries := c.maxRetries
 	recaptchaToken := ""
@@ -166,6 +144,7 @@ func (c *VertexAIClient) completeInner(ctx context.Context, model string, gemini
 
 	sess, err := c.net.CreateSession(180, proxyURI)
 	if err != nil {
+		// 节点初始化失败，属于严重的内部网络错误，直接退出熔断
 		return nil, NewInternalError("create session: " + err.Error())
 	}
 	defer sess.Close()
@@ -189,8 +168,6 @@ func (c *VertexAIClient) completeInner(ctx context.Context, model string, gemini
 		}
 
 		result, reqErr := c.executeCompleteRequest(ctx, sess, model, geminiPayload, recaptchaToken, isFirstAuth)
-		// SAFETY 自动重试：finishReason==SAFETY 且用户未自带 safetySettings → 注入 BLOCK_NONE 重试一次。
-		// 用同 token、同 attempt 重打；retry 的结果（含可能的错误）覆盖 result/reqErr，统一走下面处理。
 		if reqErr == nil {
 			if _, hasSafety := geminiPayload["safetySettings"]; candidateFinish(result) == "SAFETY" && !hasSafety {
 				retryPayload := shallowCopy(geminiPayload)
@@ -208,15 +185,13 @@ func (c *VertexAIClient) completeInner(ctx context.Context, model string, gemini
 			isVerifyFail := strings.Contains(ve.Message, "Failed to verify action") ||
 				strings.Contains(ve.Message, "The caller does not have permission")
 			if isFirstAuth && isVerifyFail {
-				// 首次认证重试：token 不清空，同一 token 再打一次（匿名端点首帧预期 verify-fail）。
-				// 这是预期内的预热、非真故障，不计入指标。
 				isFirstAuth = false
 				if err := sleepCtx(ctx, 500*time.Millisecond); err != nil {
 					return nil, ctxCanceledError(err)
 				}
-				continue // attempt 与 token 都不变
+				continue
 			}
-			metrics.Default.IncUpstreamAuth() // 真实认证/recaptcha 失败（§5 recaptcha 健康信号）
+			metrics.Default.IncUpstreamAuth()
 			recaptchaToken = ""
 			isFirstAuth = true
 			if attempt < maxRetries {
@@ -229,11 +204,10 @@ func (c *VertexAIClient) completeInner(ctx context.Context, model string, gemini
 			return nil, ve
 
 		case ve != nil && ve.Kind == "ratelimit":
-			metrics.Default.IncUpstream429() // 上游 429 噪音（反映上游有多吵，含被重试的）
+			metrics.Default.IncUpstream429()
 			if attempt >= maxRetries {
 				return nil, ve
 			}
-			// 429：销毁旧 session 重建新的，换 token
 			sess.Close()
 			newSess, e := c.net.CreateSession(180, proxyURI)
 			if e != nil {
@@ -253,9 +227,10 @@ func (c *VertexAIClient) completeInner(ctx context.Context, model string, gemini
 
 		case ve != nil:
 			if ve.Kind == "empty" {
-				metrics.Default.IncUpstreamEmpty() // 上游 0-token 空回
+				metrics.Default.IncUpstreamEmpty()
 			}
-			if !ve.IsRetryable() || attempt >= maxRetries {
+			// 【关键改动】：如果是网络连接断开等内部错误，直接熔断不重试
+			if ve.Kind == "internal" || !ve.IsRetryable() || attempt >= maxRetries {
 				return nil, ve
 			}
 			attempt++
@@ -265,26 +240,17 @@ func (c *VertexAIClient) completeInner(ctx context.Context, model string, gemini
 			continue
 
 		default:
-			// 非 VertexError 的未预期错误
-			if attempt >= maxRetries {
-				return nil, NewInternalError("Internal error: " + reqErr.Error())
-			}
-			attempt++
-			if err := sleepCtx(ctx, time.Second); err != nil {
-				return nil, ctxCanceledError(err)
-			}
-			continue
+			// 【关键改动】：其他未预期异常，不进行重试，立刻退出
+			return nil, NewInternalError("Internal error: " + reqErr.Error())
 		}
 	}
 	return nil, NewInternalError("All retries exhausted")
 }
 
-// executeCompleteRequest 执行单次非流式请求：构建→发送→解析→返回 Gemini 格式 dict。
 func (c *VertexAIClient) executeCompleteRequest(ctx context.Context, sess *transport.Session, model string, geminiPayload map[string]any, recaptchaToken string, _ bool) (map[string]any, error) {
 	log.Printf("[Vertex] [executeCompleteRequest] 准备发送请求: 模型=%s", model)
 	cfg := config.Load()
 	newBody := buildRequestPayload(model, geminiPayload, recaptchaToken, cfg)
-	// 上游请求 payload 序列化到 spool 缓冲（大媒体自动落盘，避免与已解析 body 同占内存）。
 	buf, err := spool.EncodeJSON(newBody)
 	if err != nil {
 		return nil, NewInternalError("marshal payload: " + err.Error())
@@ -304,7 +270,6 @@ func (c *VertexAIClient) executeCompleteRequest(ctx context.Context, sess *trans
 		return nil, NewInternalError("upstream request: " + err.Error())
 	}
 
-	// HTTP 错误处理
 	if status != 200 {
 		errText := string(raw)
 		if status == 401 || status == 403 ||
@@ -319,14 +284,12 @@ func (c *VertexAIClient) executeCompleteRequest(ctx context.Context, sess *trans
 		return nil, raiseForStatus(status, "", "Upstream Error: "+errText, nil, errText)
 	}
 
-	// 空数据
 	if len(raw) == 0 {
 		return nil, NewEmptyResponseError("Upstream returned no data")
 	}
 
 	result := ParseUpstreamData(string(raw))
 
-	// 解析出的上游错误（无 parts 时才当作错误抛）
 	if result.HasError && len(result.Parts) == 0 {
 		errMsg := result.ErrorMessage
 		isAuth := strings.Contains(errMsg, "Failed to verify action") ||
@@ -352,9 +315,7 @@ func (c *VertexAIClient) executeCompleteRequest(ctx context.Context, sess *trans
 	return c.buildCompleteResponse(result)
 }
 
-// buildCompleteResponse 从解析结果构建完整的 Gemini 格式响应。
 func (c *VertexAIClient) buildCompleteResponse(r *ParseResult) (map[string]any, error) {
-	// 上游 0-token 空回（无 parts、无 error、无 promptFeedback）→ 报错让客户端重试。
 	if len(r.Parts) == 0 && !r.HasError && len(r.PromptFeedback) == 0 {
 		return nil, NewEmptyResponseError("Upstream returned empty response (no content)")
 	}
@@ -391,8 +352,6 @@ func (c *VertexAIClient) buildCompleteResponse(r *ParseResult) (map[string]any, 
 	setIfPresent(resp, "modelStatus", r.ModelStatus)
 	return resp, nil
 }
-
-// ---- 小工具 ----
 
 func candidateFinish(result map[string]any) string {
 	if cands, ok := result["candidates"].([]any); ok && len(cands) > 0 {
@@ -439,7 +398,6 @@ func setIfPresent(m map[string]any, key string, v any) {
 	m[key] = v
 }
 
-// backoff 返回 min(15, 1.5^attempt) 秒（错误退避）。
 func backoff(attempt int) time.Duration {
 	v := math.Pow(1.5, float64(attempt))
 	if v > 15 {
@@ -448,8 +406,6 @@ func backoff(attempt int) time.Duration {
 	return time.Duration(v * float64(time.Second))
 }
 
-// sleepCtx 是可被 ctx 取消打断的睡眠：正常睡满返回 nil，ctx 在睡眠期间取消则立即返回 ctx.Err()。
-// 重试循环里的退避用它替代裸 time.Sleep——客户端断开 / 优雅关闭时不再空睡到底再徒劳重试。
 func sleepCtx(ctx context.Context, d time.Duration) error {
 	t := time.NewTimer(d)
 	defer t.Stop()
@@ -461,8 +417,6 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	}
 }
 
-// ctxCanceledError 把 ctx 取消错误包成 VertexError，使其走统一的错误返回路径。
-// 客户端已断开/在关闭，响应不会被读到，这里只为干净终止重试循环。
 func ctxCanceledError(err error) error {
 	return NewInternalError("request canceled: " + err.Error())
 }

@@ -17,6 +17,7 @@ func padB64(s string) string {
 	return s
 }
 
+// ParseURI 解析各种协议的节点链接
 func ParseURI(uri string) (map[string]any, error) {
 	if strings.HasPrefix(uri, "vless://") {
 		return parseSimple(uri, "vless")
@@ -93,10 +94,75 @@ func parseVmess(uri string) (map[string]any, error) {
 		return nil, err
 	}
 	var d map[string]any
-	json.Unmarshal(b, &d)
+	if err := json.Unmarshal(b, &d); err != nil {
+		return nil, err
+	}
 	portStr := fmt.Sprintf("%v", d["port"])
 	port, _ := strconv.Atoi(portStr)
-	out := map[string]any{"type": "vmess", "server": d["add"], "server_port": port, "uuid": d["id"]}
+	
+	// 初始化 VMess 出站基本参数
+	out := map[string]any{
+		"type":        "vmess",
+		"server":      d["add"],
+		"server_port": port,
+		"uuid":        d["id"],
+		"security":    "auto",
+	}
+
+	// 1. 映射 alterId (aid)
+	if aidVal, ok := d["aid"]; ok {
+		switch v := aidVal.(type) {
+		case float64:
+			out["alter_id"] = int(v)
+		case int:
+			out["alter_id"] = v
+		case string:
+			if n, err := strconv.Atoi(v); err == nil {
+				out["alter_id"] = n
+			}
+		}
+	}
+
+	// 2. 补全 TLS 配置（极关键，修复免费-日本1等节点的 TLS 缺失）
+	tlsStr, _ := d["tls"].(string)
+	if strings.ToLower(tlsStr) == "tls" {
+		host, _ := d["host"].(string)
+		sni := host
+		if sni == "" {
+			sni, _ = d["add"].(string)
+		}
+		out["tls"] = map[string]any{
+			"enabled":     true,
+			"server_name": sni,
+		}
+	}
+
+	// 3. 补全 V2Ray 传输层配置（WS / gRPC，修复 IEPL 等节点的 WS 缺失）
+	netType, _ := d["net"].(string)
+	netType = strings.ToLower(strings.TrimSpace(netType))
+	if netType != "" && netType != "tcp" {
+		path, _ := d["path"].(string)
+		host, _ := d["host"].(string)
+		
+		transportCfg := map[string]any{
+			"type": netType,
+		}
+		
+		switch netType {
+		case "ws":
+			transportCfg["path"] = path
+			if host != "" {
+				transportCfg["headers"] = map[string]any{
+					"Host": host,
+				}
+			}
+		case "grpc":
+			transportCfg["service_name"] = path // gRPC 模式下 path 常代表 serviceName
+		}
+		
+		out["transport"] = transportCfg
+	}
+
 	return out, nil
 }
 
@@ -106,11 +172,49 @@ func parseSS(uri string) (map[string]any, error) {
 		body = body[:idx]
 	}
 	if idx := strings.Index(body, "@"); idx != -1 {
-		b, _ := base64.StdEncoding.DecodeString(padB64(body[:idx]))
-		parts := strings.SplitN(string(b), ":", 2)
+		userInfo := body[:idx]
 		hp := strings.Split(body[idx+1:], ":")
+		if len(hp) < 2 {
+			return nil, fmt.Errorf("ss parse failed: invalid host:port")
+		}
 		port, _ := strconv.Atoi(hp[1])
-		return map[string]any{"type": "shadowsocks", "server": hp[0], "server_port": port, "method": parts[0], "password": parts[1]}, nil
+
+		var method, password string
+
+		// 适配两种形式的 Shadowsocks Base64 用户信息表达
+		if colonIdx := strings.Index(userInfo, ":"); colonIdx != -1 {
+			// 形式 A: base64(method) : base64(password)
+			mBytes, errM := base64.StdEncoding.DecodeString(padB64(userInfo[:colonIdx]))
+			pBytes, errP := base64.StdEncoding.DecodeString(padB64(userInfo[colonIdx+1:]))
+			if errM == nil && errP == nil {
+				method = string(mBytes)
+				password = string(pBytes)
+			}
+		}
+
+		if method == "" || password == "" {
+			// 形式 B: 传统的整个 method:password 一起进行 base64 编码
+			b, err := base64.StdEncoding.DecodeString(padB64(userInfo))
+			if err == nil {
+				parts := strings.SplitN(string(b), ":", 2)
+				if len(parts) == 2 {
+					method = parts[0]
+					password = parts[1]
+				}
+			}
+		}
+
+		if method == "" || password == "" {
+			return nil, fmt.Errorf("ss parse failed: invalid userinfo (cannot decode method or password)")
+		}
+
+		return map[string]any{
+			"type":        "shadowsocks",
+			"server":      hp[0],
+			"server_port": port,
+			"method":      method,
+			"password":    password,
+		}, nil
 	}
 	return nil, fmt.Errorf("ss parse failed")
 }
