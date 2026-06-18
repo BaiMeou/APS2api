@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -21,7 +22,22 @@ import (
 )
 
 func (s *Server) adminGetNodes(w http.ResponseWriter, _ *http.Request) {
-	s.writeJSON(w, http.StatusOK, map[string]any{"nodes": nodes.LoadNodes(), "health": nodes.LoadHealth()})
+	list := nodes.LoadNodes()
+	var enabledCount, disabledCount int
+	for _, n := range list {
+		if n.Disabled {
+			disabledCount++
+		} else {
+			enabledCount++
+		}
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"nodes":          list,
+		"health":         nodes.LoadHealth(),
+		"total":          len(list),
+		"enabled_count":  enabledCount,
+		"disabled_count": disabledCount,
+	})
 }
 
 func (s *Server) adminFetchSub(w http.ResponseWriter, r *http.Request) {
@@ -184,6 +200,70 @@ func (s *Server) adminTestAll(w http.ResponseWriter, _ *http.Request) {
 		log.Printf("[Admin] [TestAll] 全局节点测试全部结束")
 	}()
 	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) adminTestNode(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		RawURI         string  `json:"raw_uri"`
+		AutoDisable    bool    `json:"auto_disable"`
+		TimeoutSeconds float64 `json:"timeout_seconds"`
+	}
+	if !s.decodeAdminBody(w, r, &body) {
+		return
+	}
+	if body.TimeoutSeconds <= 0 {
+		body.TimeoutSeconds = 25
+	}
+	timeout := time.Duration(body.TimeoutSeconds * float64(time.Second))
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	defer cancel()
+
+	start := time.Now()
+	sess, err := s.vc.Net().CreateSession(15, body.RawURI)
+	var testErr error
+	if err == nil {
+		testErr = fetchRecaptchaTokenWithSess(ctx, sess)
+		sess.Close()
+	} else {
+		testErr = err
+	}
+	elapsed := float64(time.Since(start).Milliseconds())
+
+	errStr := ""
+	ok := testErr == nil
+	if testErr != nil {
+		if ctx.Err() != nil || errors.Is(testErr, context.DeadlineExceeded) {
+			errStr = "timeout"
+		} else {
+			errStr = testErr.Error()
+		}
+	}
+
+	disabled := false
+	if body.AutoDisable {
+		nodes.UpdateNodeTestResult(body.RawURI, ok, elapsed, errStr)
+		disabled = !ok
+	}
+
+	log.Printf("[Admin] [TestNode] 节点测试 %s: ok=%v elapsed=%.0fms error=%q disabled=%v", body.RawURI, ok, elapsed, errStr, disabled)
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"ok":         ok,
+		"elapsed_ms": elapsed,
+		"error":      errStr,
+		"disabled":   disabled,
+	})
+}
+
+func (s *Server) adminEnableNode(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		RawURI string `json:"raw_uri"`
+	}
+	if !s.decodeAdminBody(w, r, &body) {
+		return
+	}
+	ok := nodes.EnableNode(body.RawURI)
+	log.Printf("[Admin] [EnableNode] 启用节点 %s: %v", body.RawURI, ok)
+	s.writeJSON(w, http.StatusOK, map[string]any{"ok": ok})
 }
 
 // 模拟实测 recaptchaToken

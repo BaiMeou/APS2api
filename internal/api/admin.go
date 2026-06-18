@@ -161,9 +161,13 @@ func (s *Server) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/admin")
 	log.Printf("[Server] [AdminAPI] 收到请求: %s %s", r.Method, path)
 
-	// login 是唯一不需要已登录的端点。
+	// login 和 check-auth 不需要已登录。
 	if path == "/login" {
 		s.adminLogin(w, r)
+		return
+	}
+	if path == "/check-auth" {
+		s.adminCheckAuth(w, r)
 		return
 	}
 
@@ -190,6 +194,12 @@ func (s *Server) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		case http.MethodDelete:
 			s.adminDeleteNode(w, r)
 		}
+		return
+	case "/nodes/test":
+		s.adminTestNode(w, r)
+		return
+	case "/nodes/enable":
+		s.adminEnableNode(w, r)
 		return
 	case "/nodes/test-all":
 		s.adminTestAll(w, r)
@@ -293,6 +303,7 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
+		Secure:   r.TLS != nil,
 		MaxAge:   int(adminSessionTTL / time.Second),
 	})
 	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -307,9 +318,18 @@ func (s *Server) adminLogout(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
+		Secure:   r.TLS != nil,
 		MaxAge:   -1, // 立即过期
 	})
 	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// ---- 端点：检查认证 ----
+
+// adminCheckAuth 处理 GET /api/admin/check-auth：不返回 401，避免浏览器 DevTools 红色标记。
+func (s *Server) adminCheckAuth(w http.ResponseWriter, r *http.Request) {
+	authenticated := requireAdmin(r)
+	s.writeJSON(w, http.StatusOK, map[string]any{"authenticated": authenticated})
 }
 
 // ---- 端点：设置 ----
@@ -540,6 +560,7 @@ func (s *Server) handleAdminPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", contentTypeFor(name))
+	w.Header().Set("Cache-Control", "public, max-age=3600")
 	_, _ = w.Write(data)
 }
 

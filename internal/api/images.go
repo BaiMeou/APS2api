@@ -257,17 +257,24 @@ func formUploads(r *http.Request, key string) []*multipart.FileHeader {
 }
 
 // uploadToInlineImage 把一个上传文件读成 Gemini inlineData（base64 + mime）。
+//
+// 使用流式 base64 编码避免全量原始字节常驻内存：从上传文件读取时直接经 base64 编码器写出，
+// 编码后的 string 是最终内存中的唯一完整副本。
 func uploadToInlineImage(fh *multipart.FileHeader) (transform.InlineImage, error) {
 	f, err := fh.Open()
 	if err != nil {
 		return transform.InlineImage{}, &badRequestError{msg: "无法读取上传文件 (cannot read upload)"}
 	}
 	defer f.Close()
-	data, err := io.ReadAll(f)
+
+	var buf strings.Builder
+	enc := base64.NewEncoder(base64.StdEncoding, &buf)
+	written, err := io.Copy(enc, f)
 	if err != nil {
 		return transform.InlineImage{}, &badRequestError{msg: "无法读取上传文件 (cannot read upload)"}
 	}
-	if len(data) == 0 {
+	enc.Close()
+	if written == 0 {
 		name := fh.Filename
 		if name == "" {
 			name = "image"
@@ -283,7 +290,7 @@ func uploadToInlineImage(fh *multipart.FileHeader) (transform.InlineImage, error
 	if mimeType == "" {
 		mimeType = "image/png"
 	}
-	return transform.InlineImage{MimeType: mimeType, Data: base64.StdEncoding.EncodeToString(data)}, nil
+	return transform.InlineImage{MimeType: mimeType, Data: buf.String()}, nil
 }
 
 // uploadsToInlineImages 批量转换；任一文件为空/不可读则返回该错误。
@@ -327,17 +334,8 @@ func (s *Server) oaiBadRequest(w http.ResponseWriter, message string) {
 
 // readJSONObject 读请求体并解析为 JSON 对象；失败时写出 400 并返回 ok=false。
 func (s *Server) readJSONObject(w http.ResponseWriter, r *http.Request) (map[string]any, bool) {
-	bodyBytes, err := io.ReadAll(r.Body)
-	if err != nil {
-		s.writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{
-			"message": "请求体必须是合法JSON", "type": "invalid_request_error", "code": nil}})
-		return nil, false
-	}
-	if !s.validUTF8Body(w, bodyBytes) {
-		return nil, false
-	}
 	var body map[string]any
-	if err := json.Unmarshal(bodyBytes, &body); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		s.writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{
 			"message": "请求体必须是合法JSON", "type": "invalid_request_error", "code": nil}})
 		return nil, false

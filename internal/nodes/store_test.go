@@ -97,3 +97,141 @@ func TestNodesLifecycle(t *testing.T) {
 	os.RemoveAll(filepath.Join(fileDir(), "nodes.json"))
 	os.RemoveAll(filepath.Join(fileDir(), "node_health.json"))
 }
+
+func TestParseNodeIdentity(t *testing.T) {
+	tests := []struct {
+		name     string
+		uri      string
+		wantOK   bool
+		wantS    string
+		wantUI   string
+		wantHost string
+		wantPort int
+	}{
+		{"vmess", "vmess://eyJhZGQiOiIxMjcuMC4wLjEiLCJwb3J0Ijo4ODg4LCJpZCI6InV1aWQtdmFsdWUiLCJwcyI6InRlc3QifQ==", true, "vmess", "uuid-value", "127.0.0.1", 8888},
+		{"ss", "ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ=@127.0.0.1:8888", true, "ss", "aes-256-gcm:password", "127.0.0.1", 8888},
+		{"vless", "vless://uuid@example.com:443", true, "vless", "uuid", "example.com", 443},
+		{"trojan", "trojan://password@example.com:8443", true, "trojan", "password", "example.com", 8443},
+		{"invalid", "not-a-uri://", false, "", "", "", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s, ui, host, port, ok := parseNodeIdentity(tt.uri)
+			if ok != tt.wantOK {
+				t.Errorf("parseNodeIdentity() ok = %v, want %v", ok, tt.wantOK)
+			}
+			if s != tt.wantS {
+				t.Errorf("parseNodeIdentity() scheme = %q, want %q", s, tt.wantS)
+			}
+			if ui != tt.wantUI {
+				t.Errorf("parseNodeIdentity() userinfo = %q, want %q", ui, tt.wantUI)
+			}
+			if host != tt.wantHost {
+				t.Errorf("parseNodeIdentity() host = %q, want %q", host, tt.wantHost)
+			}
+			if port != tt.wantPort {
+				t.Errorf("parseNodeIdentity() port = %d, want %d", port, tt.wantPort)
+			}
+		})
+	}
+}
+
+func TestUpdateNodeTestResult(t *testing.T) {
+	resetState()
+	defer resetState()
+
+	// Setup: one enabled node
+	n1 := Node{RawURI: "uri1", Name: "node1"}
+	MergeNodes([]Node{n1})
+
+	// Test: fail the node
+	UpdateNodeTestResult("uri1", false, 100, "timeout")
+	health := LoadHealth()
+	if health["uri1"] == nil || health["uri1"].ConsecutiveFailures != 1 {
+		t.Errorf("Expected 1 consecutive failure")
+	}
+	nodes := LoadNodes()
+	if len(nodes) != 1 || !nodes[0].Disabled {
+		t.Errorf("Expected node1 to be disabled after failed test")
+	}
+
+	// Test: succeed the node
+	UpdateNodeTestResult("uri1", true, 50, "")
+	health = LoadHealth()
+	if health["uri1"].SuccessCount != 1 {
+		t.Errorf("Expected 1 success")
+	}
+	nodes = LoadNodes()
+	if nodes[0].Disabled {
+		t.Errorf("Expected node1 to be enabled after success")
+	}
+}
+
+func TestEnableNode(t *testing.T) {
+	resetState()
+	defer resetState()
+
+	n1 := Node{RawURI: "uri1", Name: "node1", Disabled: true}
+	MergeNodes([]Node{n1})
+
+	// Also set cooldown
+	RecordTest("uri1", false, 0, "timeout")
+
+	ok := EnableNode("uri1")
+	if !ok {
+		t.Errorf("Expected EnableNode to return true")
+	}
+	nodes := LoadNodes()
+	if len(nodes) != 1 || nodes[0].Disabled {
+		t.Errorf("Expected node1 to be enabled")
+	}
+	health := LoadHealth()
+	if health["uri1"] != nil && health["uri1"].CooldownUntil != 0 {
+		t.Errorf("Expected cooldown to be cleared")
+	}
+
+	// Test enabling non-existent node
+	ok = EnableNode("nonexistent")
+	if ok {
+		t.Errorf("Expected EnableNode to return false for nonexistent node")
+	}
+}
+
+func TestDedupNodesSemantic(t *testing.T) {
+	resetState()
+	defer resetState()
+
+	// Two nodes with same identity but different raw URIs (different names/fragments)
+	n1 := Node{RawURI: "vless://uuid@example.com:443?security=tls#name1", Name: "node1"}
+	n2 := Node{RawURI: "vless://uuid@example.com:443?security=tls#name2", Name: "node2"}
+	MergeNodes([]Node{n1, n2})
+
+	removed := DedupNodes()
+	if removed != 1 {
+		t.Errorf("Expected 1 removed during semantic dedup, got %d", removed)
+	}
+	result := LoadNodes()
+	if len(result) != 1 {
+		t.Errorf("Expected 1 node after dedup, got %d", len(result))
+	}
+}
+
+func TestSelectForParallelCooldownFallback(t *testing.T) {
+	resetState()
+	defer resetState()
+
+	n1 := Node{RawURI: "uri1", Name: "node1"}
+	n2 := Node{RawURI: "uri2", Name: "node2"}
+	n3 := Node{RawURI: "uri3", Name: "node3"}
+	MergeNodes([]Node{n1, n2, n3})
+
+	// Put n1 and n2 in cooldown, leave n3 normal
+	RecordTest("uri1", false, 0, "timeout")
+	RecordTest("uri2", false, 0, "timeout")
+
+	// Request 3 nodes, should get n3 + fallback from cooldown
+	selected := SelectForParallel(3)
+	if len(selected) != 3 {
+		t.Errorf("Expected 3 selected (1 normal + 2 cooldown), got %d", len(selected))
+	}
+}

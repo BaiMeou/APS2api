@@ -13,7 +13,6 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/bsfdsagfadg/vertex/internal/config"
 	"github.com/bsfdsagfadg/vertex/internal/transport"
 )
 
@@ -48,10 +47,10 @@ func randomString(n int) string {
 // 最多 3 次重试，每次新建一个短超时 Session
 // （即用即毁，FRESH_CONNECT 语义）。全部失败返回 ("", nil) —— 返回空值表示失败，
 // 调用方按“空则换新/重试”处理。返回非空字符串即成功。
-func FetchRecaptchaToken(net *transport.NetworkClient) (string, error) {
+func FetchRecaptchaToken(net *transport.NetworkClient, proxyURI string) (string, error) {
 	for retry := 0; retry < 3; retry++ {
 		log.Printf("[Recaptcha] 开始获取 reCAPTCHA token (尝试 %d/3)", retry+1)
-		if token, ok := fetchOnce(net); ok {
+		if token, ok := fetchOnce(net, proxyURI); ok {
 			log.Printf("[Recaptcha] 成功获取 reCAPTCHA token")
 			return token, nil
 		}
@@ -60,8 +59,8 @@ func FetchRecaptchaToken(net *transport.NetworkClient) (string, error) {
 	return "", nil
 }
 
-func fetchOnce(net *transport.NetworkClient) (string, bool) {
-	sess, err := net.CreateSession(15, config.Load().ProxyURL)
+func fetchOnce(net *transport.NetworkClient, proxyURI string) (string, bool) {
+	sess, err := net.CreateSession(15, proxyURI)
 	if err != nil {
 		return "", false
 	}

@@ -18,6 +18,15 @@ func buildRequestPayload(model string, geminiPayload map[string]any, recaptchaTo
 	vars["region"] = "global"
 	vars["recaptchaToken"] = recaptchaToken
 	return map[string]any{
+		"requestContext": map[string]any{
+			"clientVersion": "boq_cloud-boq-clientweb-vertexaistudio_20260402.09_p0",
+			"pagePath":      "/vertex-ai/studio/multimodal",
+			"jurisdiction":  "global",
+			"localizationData": map[string]any{
+				"locale":   "zh_CN",
+				"timezone": "Asia/Shanghai",
+			},
+		},
 		"querySignature": querySignature,
 		"operationName":  operationName,
 		"variables":      vars,

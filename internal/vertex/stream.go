@@ -83,7 +83,7 @@ retryLoop:
 	for attempt <= maxRetries {
 		log.Printf("[Vertex] [StreamChat] 开始尝试 (Attempt %d/%d), 模型=%s", attempt, maxRetries, model)
 		if recaptchaToken == "" {
-			tok, _ := c.pool.GetToken()
+			tok, _ := c.pool.GetTokenWithProxy(proxyURI)
 			recaptchaToken = tok
 			isFirstAuth = true
 		}
@@ -273,10 +273,19 @@ func scanStream(body io.Reader, onObject func(map[string]any) (bool, error)) err
 	inString := false
 	escape := false
 
+	const maxBufferSize = 512 * 1024
+
 	for {
 		n, readErr := reader.Read(readBuf)
 		if n > 0 {
 			buffer = append(buffer, readBuf[:n]...)
+
+			if len(buffer) > maxBufferSize {
+				log.Printf("[DEBUG-scan] buffer exceeded %d bytes, resetting from scanPos=%d", maxBufferSize, scanPos)
+				buffer = buffer[scanPos:]
+				scanPos = 0
+				startIdx = 0
+			}
 
 			for {
 				if scanPos == 0 {
@@ -405,9 +414,19 @@ func processStreamingObject(obj map[string]any, emit func(map[string]any) bool) 
 				case map[string]any:
 					data = inner
 				case []any:
-					// 极少数情况 inner 是 list：逐项 extract+emit，本 result 处理完跳过下方。
+					outerMeta := map[string]any{}
+					for _, key := range []string{"usageMetadata", "modelVersion", "responseId", "promptFeedback"} {
+						if v, ok := data[key]; ok && isTruthyAny(v) {
+							outerMeta[key] = v
+						}
+					}
 					for _, itemRaw := range inner {
 						if item, ok := itemRaw.(map[string]any); ok {
+							for k, v := range outerMeta {
+								if _, exists := item[k]; !exists {
+									item[k] = v
+								}
+							}
 							if chunk := extractChunk(item); chunk != nil {
 								if _, done := emitAndCheckFinish(chunk, emit); done {
 									return true, nil
@@ -462,56 +481,138 @@ func chunkFinishReason(chunk map[string]any) string {
 	return toStr(c["finishReason"])
 }
 
+// cleanPart 清洗单个 Gemini part，移除内部 protobuf 空默认字段，仅保留真实内容字段。
+// 上游 batchGraphql 返回的 part 包含所有 protobuf oneof 字段的空默认值（如 data:"text"、
+// fileData:{}, functionCall:{}, functionResponse:{}, inlineData:{}），这些字段不是
+// 标准 Gemini API 格式，客户端可能无法正确处理。清理后仅保留 text/inlineData/functionCall/
+// functionResponse 等有实际内容的字段。
+func cleanPart(part map[string]any) map[string]any {
+	cleaned := shallowCopy(part)
+
+	// 移除内部 protobuf oneof 指示器（always "text" / "inlineData" / "functionCall" / "functionResponse"）
+	delete(cleaned, "data")
+
+	// fileData：仅在 uri 为空时移除
+	if fd, ok := cleaned["fileData"].(map[string]any); ok {
+		if toStr(fd["fileUri"]) == "" && toStr(fd["mimeType"]) == "" {
+			delete(cleaned, "fileData")
+		}
+	}
+
+	// functionCall：name 和 args 都为空/无意义时移除
+	if fc, ok := cleaned["functionCall"].(map[string]any); ok {
+		hasName := toStr(fc["name"]) != ""
+		hasArgs := false
+		if args, ok := fc["args"]; ok && args != nil {
+			if m, ok := args.(map[string]any); ok && len(m) > 0 {
+				hasArgs = true
+			}
+		}
+		if !hasName && !hasArgs {
+			delete(cleaned, "functionCall")
+		} else if name, ok := fc["name"].(string); ok && name != "" {
+			if argStr, ok := fc["args"].(string); ok && argStr != "" {
+				var parsed any
+				if err := json.Unmarshal([]byte(argStr), &parsed); err == nil {
+					fc["args"] = parsed
+				}
+			}
+		}
+	}
+
+	// functionResponse：name 和 response 都为空时移除
+	if fr, ok := cleaned["functionResponse"].(map[string]any); ok {
+		hasName := toStr(fr["name"]) != ""
+		hasResp := false
+		if resp, ok := fr["response"]; ok && resp != nil {
+			if m, ok := resp.(map[string]any); ok && len(m) > 0 {
+				hasResp = true
+			}
+		}
+		if !hasName && !hasResp {
+			delete(cleaned, "functionResponse")
+		} else if respStr, ok := fr["response"].(string); ok && respStr != "" {
+			fr["response"] = map[string]any{"result": respStr}
+		}
+	}
+
+	// inlineData：data 为空时移除
+	if id, ok := cleaned["inlineData"].(map[string]any); ok {
+		if toStr(id["data"]) == "" {
+			delete(cleaned, "inlineData")
+		}
+	}
+
+	// 如果只剩 thought/thoughtSignature 等非内容标记，返回 nil
+	for k := range cleaned {
+		switch k {
+		case "thought", "thoughtSignature":
+			continue
+		default:
+			return cleaned
+		}
+	}
+	return nil
+}
+
 // extractChunk 从 Gemini 数据中提取标准化 chunk，清洗畸形嵌套。
 //
-// 无 candidates → nil（跳过）。每个 candidate 的 content.parts 经 cleanStreamParts 清洗，
-// 再附带 usageMetadata/modelVersion/responseId/promptFeedback/createTime（非空时）。
+// 对齐 Python _process_streaming_object：candidates key 存在且非 nil 时保留
+//（即使空列表），总是复制 metadata 字段，仅当 chunk 完全无字段时返回 nil。
 func extractChunk(data map[string]any) map[string]any {
-	candidatesRaw, _ := data["candidates"].([]any)
-	if len(candidatesRaw) == 0 {
-		return nil
-	}
+	chunk := map[string]any{}
 
-	cleanedCandidates := make([]any, 0, len(candidatesRaw))
-	for _, cRaw := range candidatesRaw {
-		candidate, ok := cRaw.(map[string]any)
-		if !ok {
-			continue
-		}
-		content, hasContent := candidate["content"].(map[string]any)
-		if hasContent {
-			parts, ok := content["parts"].([]any)
-			if ok {
-				cleanedParts := cleanStreamParts(parts)
-				cleanedCandidate := shallowCopy(candidate)
-				role := toStr(content["role"])
-				if role == "" {
-					role = "model"
+	if raw, ok := data["candidates"]; ok && raw != nil {
+		candidatesRaw, _ := raw.([]any)
+		if len(candidatesRaw) > 0 {
+			cleaned := make([]any, 0, len(candidatesRaw))
+			for _, cRaw := range candidatesRaw {
+				candidate, ok := cRaw.(map[string]any)
+				if !ok {
+					continue
 				}
-				cleanedCandidate["content"] = map[string]any{"role": role, "parts": cleanedParts}
-				cleanedCandidates = append(cleanedCandidates, cleanedCandidate)
+				content, hasContent := candidate["content"].(map[string]any)
+				if hasContent {
+					parts, ok := content["parts"].([]any)
+					if ok {
+						cleanedParts := cleanStreamParts(parts)
+						cc := shallowCopy(candidate)
+						role := toStr(content["role"])
+						if role == "" {
+							role = "model"
+						}
+						cc["content"] = map[string]any{"role": role, "parts": cleanedParts}
+						cleaned = append(cleaned, cc)
+					} else {
+						cleaned = append(cleaned, candidate)
+					}
+				} else {
+					cleaned = append(cleaned, candidate)
+				}
+			}
+			if len(cleaned) > 0 {
+				chunk["candidates"] = cleaned
 			} else {
-				cleanedCandidates = append(cleanedCandidates, candidate)
+				chunk["candidates"] = candidatesRaw
 			}
 		} else {
-			cleanedCandidates = append(cleanedCandidates, candidate)
+			chunk["candidates"] = candidatesRaw
 		}
 	}
 
-	if len(cleanedCandidates) == 0 {
-		return nil
-	}
-
-	chunk := map[string]any{"candidates": cleanedCandidates}
 	for _, key := range []string{"usageMetadata", "modelVersion", "responseId", "promptFeedback", "createTime"} {
 		if v, ok := data[key]; ok && isTruthyAny(v) {
 			chunk[key] = v
 		}
 	}
+
+	if len(chunk) == 0 {
+		return nil
+	}
 	return chunk
 }
 
-// cleanStreamParts 清洗 parts 列表，展开畸形嵌套，确保每个 part 的 text 是字符串。
+// cleanStreamParts 清洗 parts 列表，展开畸形嵌套 + 移除 protobuf 空默认字段。
 func cleanStreamParts(parts []any) []any {
 	cleaned := make([]any, 0, len(parts))
 	for _, pRaw := range parts {
@@ -525,14 +626,18 @@ func cleanStreamParts(parts []any) []any {
 				// 畸形嵌套：text 值是 list/dict 而非字符串，递归提取真正文本。
 				extracted := extractTextRecursive(textVal, 0)
 				if extracted != "" {
-					newPart := shallowCopy(part)
-					newPart["text"] = extracted
-					cleaned = append(cleaned, newPart)
+					newPart := cleanPart(part)
+					if newPart != nil {
+						newPart["text"] = extracted
+						cleaned = append(cleaned, newPart)
+					}
 				}
 				continue
 			}
 		}
-		cleaned = append(cleaned, part)
+		if cp := cleanPart(part); cp != nil {
+			cleaned = append(cleaned, cp)
+		}
 	}
 	return cleaned
 }

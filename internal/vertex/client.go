@@ -2,6 +2,7 @@ package vertex
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"math"
@@ -72,12 +73,26 @@ func (c *VertexAIClient) CompleteChat(ctx context.Context, model string, geminiP
 	})
 }
 
+// largePayloadThreshold — 超过此大小的 payload 在 CompleteChatN 中由并发降级为串行，
+// 避免 n 倍内存放大（大 payload 通常含 base64 图片，8 并发额外 7 份拷贝可达数十 MB）。
+const largePayloadThreshold = 1 << 20 // 1MB
+
 // CompleteChatN 并发发 n 次单候选请求，返回成功的响应列表（n 多候选用）。
+//
+// 大 payload（>1MB）时降级为串行以避免 n 倍内存放大。
 // 并发候选：扇出多个 complete_chat，部分失败不连累其它候选。
 //
 // 每次 CompleteChat 自带完整重试/recaptcha（复用既有机制）；部分失败不连累其它候选，
 // 只要至少一个成功就返回成功列表；全失败则返回第一个错误（保持出现顺序的确定性）。
 func (c *VertexAIClient) CompleteChatN(ctx context.Context, model string, geminiPayload map[string]any, n int) ([]map[string]any, error) {
+	// 大 payload 探测：估算 geminiPayload 序列化大小。
+	if n > 1 {
+		if b, err := json.Marshal(geminiPayload); err == nil && len(b) > largePayloadThreshold {
+			log.Printf("[Vertex] [CompleteChatN] 大 payload (%d bytes) 降级为串行", len(b))
+			return c.completeChatNSerial(ctx, model, geminiPayload, n)
+		}
+	}
+
 	type res struct {
 		resp map[string]any
 		err  error
@@ -88,15 +103,11 @@ func (c *VertexAIClient) CompleteChatN(ctx context.Context, model string, gemini
 	for i := 0; i < n; i++ {
 		go func(idx int) {
 			defer wg.Done()
-			// 子 goroutine 必须自带 recover：HTTP 中间件的 withRecover 只兜请求 goroutine，
-			// 这些扇出 goroutine 里任何 panic 会直接崩整个进程（掉全部在途请求）。
-			// panic 转成该候选的 err。
 			defer func() {
 				if rec := recover(); rec != nil {
 					results[idx] = res{err: NewInternalError(fmt.Sprintf("candidate panic: %v", rec))}
 				}
 			}()
-			// 共享请求 ctx：客户端断开则所有候选的上游请求与重试一并中止。
 			r, err := c.CompleteChat(ctx, model, geminiPayload)
 			results[idx] = res{resp: r, err: err}
 		}(i)
@@ -123,6 +134,29 @@ func (c *VertexAIClient) CompleteChatN(ctx context.Context, model string, gemini
 	return ok, nil
 }
 
+// completeChatNSerial 串行执行 n 次 CompleteChat，大 payload 时替代并发扇出。
+func (c *VertexAIClient) completeChatNSerial(ctx context.Context, model string, geminiPayload map[string]any, n int) ([]map[string]any, error) {
+	var ok []map[string]any
+	var firstErr error
+	for i := 0; i < n; i++ {
+		r, err := c.CompleteChat(ctx, model, geminiPayload)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		ok = append(ok, r)
+	}
+	if len(ok) == 0 {
+		if firstErr == nil {
+			firstErr = NewInternalError("All candidates failed")
+		}
+		return nil, firstErr
+	}
+	return ok, nil
+}
+
 // completeInner 非流式重试主循环。
 func (c *VertexAIClient) completeInner(ctx context.Context, model string, geminiPayload map[string]any, proxyURI string) (map[string]any, error) {
 	maxRetries := c.maxRetries
@@ -139,7 +173,7 @@ func (c *VertexAIClient) completeInner(ctx context.Context, model string, gemini
 	for attempt <= maxRetries {
 		log.Printf("[Vertex] [CompleteChat] 开始尝试 (Attempt %d/%d), 模型=%s", attempt, maxRetries, model)
 		if recaptchaToken == "" {
-			tok, _ := c.pool.GetToken()
+			tok, _ := c.pool.GetTokenWithProxy(proxyURI)
 			recaptchaToken = tok
 			isFirstAuth = true
 		}

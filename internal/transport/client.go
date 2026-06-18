@@ -125,8 +125,13 @@ func (c *NetworkClient) CreateSession(timeoutSec int, proxyURI string) (*Session
 		tls_client.WithClientProfile(pickProfile()),
 		tls_client.WithCookieJar(tls_client.NewCookieJar()),
 	}
-	opts = injectProxy(opts, proxyURI)
-	// remove old pickProxy
+	proxyURL, _, err := resolveProxyURI(proxyURI)
+	if err != nil {
+		return nil, err
+	}
+	if proxyURL != "" {
+		opts = append(opts, tls_client.WithProxyUrl(proxyURL))
+	}
 
 	client, err := tls_client.NewHttpClient(tls_client.NewNoopLogger(), opts...)
 	if err != nil {

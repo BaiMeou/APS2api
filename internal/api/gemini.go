@@ -3,11 +3,9 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"log"
 	"net/http"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/bsfdsagfadg/vertex/internal/jsonx"
 	"github.com/bsfdsagfadg/vertex/internal/vertex"
@@ -79,17 +77,12 @@ func (s *Server) requirePost(w http.ResponseWriter, r *http.Request, fn func()) 
 
 // readGeminiBody 读取并解析 Gemini 端点请求体（JSON 对象）。返回 (body, ok)；ok=false 时已写出 400。
 func (s *Server) readGeminiBody(w http.ResponseWriter, r *http.Request) (map[string]any, bool) {
-	raw, err := io.ReadAll(r.Body)
-	if err != nil {
-		s.geminiError(w, http.StatusBadRequest, "请求体读取失败 (failed to read body)", "INVALID_ARGUMENT")
-		return nil, false
-	}
-	if !utf8.Valid(raw) {
-		s.geminiError(w, http.StatusBadRequest, "请求体编码错误，需为 UTF-8 (request body must be UTF-8 encoded)", "INVALID_ARGUMENT")
-		return nil, false
-	}
 	var body map[string]any
-	if err := json.Unmarshal(raw, &body); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if _, ok := err.(*json.SyntaxError); ok && strings.Contains(err.Error(), "invalid UTF-8") {
+			s.geminiError(w, http.StatusBadRequest, "请求体编码错误，需为 UTF-8 (request body must be UTF-8 encoded)", "INVALID_ARGUMENT")
+			return nil, false
+		}
 		s.geminiError(w, http.StatusBadRequest, "请求格式错误，JSON 解析失败 (invalid JSON)", "INVALID_ARGUMENT")
 		return nil, false
 	}
@@ -103,6 +96,10 @@ func (s *Server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request, mo
 	body, ok := s.readGeminiBody(w, r)
 	if !ok {
 		return
+	}
+	// 兼容 generateContentRequest 包裹（某些 SDK 如 google-genai-sdk 会发这种格式）。
+	if reqObj, ok := body["generateContentRequest"].(map[string]any); ok {
+		body = reqObj
 	}
 	log.Printf("[Server] [GeminiGenerate] 收到请求: 模型=%s, 真模型=%s", model, actualModel)
 	s.injectAnti429(body)
@@ -121,17 +118,21 @@ func (s *Server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request, mo
 }
 
 // handleGeminiStreamGenerate 处理 Gemini 流式 streamGenerateContent。
-// 含 use_fake 假流式分支。media_type=application/json。
+// 含 use_fake 假流式分支。
 func (s *Server) handleGeminiStreamGenerate(w http.ResponseWriter, r *http.Request, model string) {
 	actualModel, useFake := stripFakePrefix(model)
 	body, ok := s.readGeminiBody(w, r)
 	if !ok {
 		return
 	}
+	// 兼容 generateContentRequest 包裹（某些 SDK 如 google-genai-sdk 会发这种格式）。
+	if reqObj, ok := body["generateContentRequest"].(map[string]any); ok {
+		body = reqObj
+	}
 	log.Printf("[Server] [GeminiStreamGenerate] 收到请求: 模型=%s, 真模型=%s, 假流式=%v", model, actualModel, useFake)
 	s.injectAnti429(body)
 
-	sw := s.newSSEWriter(w, "application/json")
+	sw := s.newSSEWriter(w, "text/event-stream")
 
 	if useFake {
 		s.geminiFakeStream(r.Context(), sw, actualModel, body)
@@ -139,6 +140,7 @@ func (s *Server) handleGeminiStreamGenerate(w http.ResponseWriter, r *http.Reque
 	}
 
 	gotChunk := false
+	hasFinish := false
 	s.vc.StreamChat(r.Context(), actualModel, body, func(ch vertex.StreamChunk) bool {
 		if ch.Err != nil {
 			// 安全拦截走 Gemini 标准格式（空 candidates + promptFeedback.blockReason）；其余走 error 事件。
@@ -152,9 +154,29 @@ func (s *Server) handleGeminiStreamGenerate(w http.ResponseWriter, r *http.Reque
 			return false
 		}
 		gotChunk = true
+		if fr := chunkFinishReasonFromData(ch.Data); fr != "" {
+			hasFinish = true
+		}
 		return sw.write(s.geminiSSE(ch.Data))
 	})
-	_ = gotChunk // Gemini 流不在末尾补 finish/DONE（逐 chunk 透传即结束）
+
+	if !gotChunk {
+		_ = sw.write(s.geminiSSE(map[string]any{
+			"error": map[string]any{
+				"code": 500, "message": "Upstream returned empty response (no content)", "status": "INTERNAL",
+			},
+		}))
+		return
+	}
+	if !hasFinish {
+		_ = sw.write(s.geminiSSE(map[string]any{
+			"candidates": []any{map[string]any{
+				"content":      map[string]any{"parts": []any{}, "role": "model"},
+				"finishReason": "STOP",
+				"index":        0,
+			}},
+		}))
+	}
 }
 
 // geminiFakeStream 处理 Gemini 假流式：完整非流式生成 → 抽文本 → 切片按 Gemini chunk 推。
@@ -211,6 +233,20 @@ func (s *Server) handleCountTokens(w http.ResponseWriter, r *http.Request, model
 }
 
 // ---- Gemini 响应/错误辅助 ----
+
+// chunkFinishReasonFromData 从 Gemini chunk data 中提取 candidates[0].finishReason。
+func chunkFinishReasonFromData(data map[string]any) string {
+	cands, ok := data["candidates"].([]any)
+	if !ok || len(cands) == 0 {
+		return ""
+	}
+	c, ok := cands[0].(map[string]any)
+	if !ok {
+		return ""
+	}
+	fr, _ := c["finishReason"].(string)
+	return fr
+}
 
 // geminiSSE 把对象序列化为一条 Gemini SSE 行（data: {json}\n\n，关 HTML 转义）。
 func (s *Server) geminiSSE(obj map[string]any) string {

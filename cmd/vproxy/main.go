@@ -14,7 +14,9 @@ import (
 	"github.com/bsfdsagfadg/vertex/internal/api"
 	"github.com/bsfdsagfadg/vertex/internal/config"
 	"github.com/bsfdsagfadg/vertex/internal/metrics"
+	"github.com/bsfdsagfadg/vertex/internal/nodes"
 	"github.com/bsfdsagfadg/vertex/internal/spool"
+	"github.com/bsfdsagfadg/vertex/internal/transport"
 	"github.com/bsfdsagfadg/vertex/internal/vertex"
 )
 
@@ -25,6 +27,11 @@ func main() {
 	cfg := config.Load()
 	metrics.Default.SetStart(time.Now().Unix())
 	spool.SetMaxSpillBytes(int64(cfg.MaxSpillMB) << 20) // 大请求/媒体序列化的磁盘溢出配额上限
+
+	// 节点删除时同步清理对应的 sing-box 代理实例。
+	nodes.DeleteNodeCallback = transport.RemoveProxy
+	// 后台清理空闲 >30min 的 sing-box 实例（每 5min 扫描一次）。
+	transport.StartProxyGC(5*time.Minute, 30*time.Minute)
 
 	keys := api.NewAPIKeyManager()
 	keys.LoadKeys()
@@ -67,6 +74,7 @@ func main() {
 				log.Printf("[vproxy] 优雅关闭超时/出错：%v（强制结束）", err)
 			}
 			cancel()
+			transport.StopAllProxies()
 			vc.StopTokenPool()
 			close(shutdownDone)
 			return

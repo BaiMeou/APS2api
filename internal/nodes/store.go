@@ -1,13 +1,18 @@
 package nodes
 
 import (
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"log"
 	"math"
 	"math/rand"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -31,10 +36,11 @@ type NodeHealth struct {
 }
 
 var (
-	mu        sync.Mutex
-	nodeList  []Node
-	healthMap = make(map[string]*NodeHealth)
-	loaded    bool
+	mu                 sync.Mutex
+	nodeList           []Node
+	healthMap          = make(map[string]*NodeHealth)
+	loaded             bool
+	DeleteNodeCallback func(uri string)
 )
 
 func fileDir() string {
@@ -118,6 +124,9 @@ func DeleteNode(uri string) {
 	delete(healthMap, uri)
 	saveNodesUnsafe()
 	saveHealthUnsafe()
+	if DeleteNodeCallback != nil {
+		DeleteNodeCallback(uri)
+	}
 }
 
 func BatchUpdateNodesDisabled(uris []string, disabled bool) {
@@ -154,25 +163,36 @@ func BatchDeleteNodes(uris []string) {
 	nodeList = kept
 	saveNodesUnsafe()
 	saveHealthUnsafe()
+	if DeleteNodeCallback != nil {
+		for _, u := range uris {
+			DeleteNodeCallback(u)
+		}
+	}
 }
 
 func DedupNodes() int {
 	mu.Lock()
 	defer mu.Unlock()
 	ensureLoaded()
-	seen := make(map[string]bool)
+	keepMap := make(map[string]bool)
 	var kept []Node
 	removed := 0
 	for _, n := range nodeList {
-		if !seen[n.RawURI] {
+		key := n.RawURI
+		if scheme, userinfo, host, port, ok := parseNodeIdentity(n.RawURI); ok {
+			key = scheme + "://" + userinfo + "@" + host + ":" + strconv.Itoa(port)
+		}
+		if !keepMap[key] {
+			keepMap[key] = true
 			kept = append(kept, n)
-			seen[n.RawURI] = true
 		} else {
 			removed++
+			delete(healthMap, n.RawURI)
 		}
 	}
 	nodeList = kept
 	saveNodesUnsafe()
+	saveHealthUnsafe()
 	return removed
 }
 
@@ -194,6 +214,66 @@ func DeleteDisabled() int {
 	saveNodesUnsafe()
 	saveHealthUnsafe()
 	return removed
+}
+
+func padB64(s string) string {
+	s = strings.ReplaceAll(strings.ReplaceAll(s, "-", "+"), "_", "/")
+	if pad := len(s) % 4; pad != 0 {
+		s += strings.Repeat("=", 4-pad)
+	}
+	return s
+}
+
+func parseNodeIdentity(rawURI string) (scheme, userinfo, host string, port int, ok bool) {
+	if strings.HasPrefix(rawURI, "vmess://") {
+		b64Str := rawURI[8:]
+		if idx := strings.Index(b64Str, "?"); idx != -1 {
+			b64Str = b64Str[:idx]
+		}
+		if idx := strings.Index(b64Str, "#"); idx != -1 {
+			b64Str = b64Str[:idx]
+		}
+		b64Str = padB64(b64Str)
+		if b, err := base64.StdEncoding.DecodeString(b64Str); err == nil {
+			var d map[string]any
+			if err := json.Unmarshal(b, &d); err == nil {
+				id, _ := d["id"].(string)
+				add, _ := d["add"].(string)
+				portStr := fmt.Sprintf("%v", d["port"])
+				p, _ := strconv.Atoi(portStr)
+				return "vmess", id, add, p, true
+			}
+		}
+		return "", "", "", 0, false
+	}
+	if strings.HasPrefix(rawURI, "ss://") {
+		body := rawURI[5:]
+		if idx := strings.Index(body, "#"); idx != -1 {
+			body = body[:idx]
+		}
+		if idx := strings.Index(body, "@"); idx != -1 {
+			b, err := base64.StdEncoding.DecodeString(padB64(body[:idx]))
+			if err == nil {
+				parts := strings.SplitN(string(b), ":", 2)
+				hp := strings.Split(body[idx+1:], ":")
+				p, _ := strconv.Atoi(hp[1])
+				return "ss", parts[0] + ":" + parts[1], hp[0], p, true
+			}
+		}
+		return "", "", "", 0, false
+	}
+	u, err := url.Parse(rawURI)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "", "", "", 0, false
+	}
+	scheme = u.Scheme
+	userinfo = u.User.Username()
+	host = u.Hostname()
+	port, _ = strconv.Atoi(u.Port())
+	if port == 0 {
+		port = 443
+	}
+	return scheme, userinfo, host, port, true
 }
 
 func RecordTest(uri string, ok bool, ms float64, errStr string) {
@@ -222,6 +302,60 @@ func RecordTest(uri string, ok bool, ms float64, errStr string) {
 	saveHealthUnsafe()
 }
 
+func UpdateNodeTestResult(uri string, ok bool, ms float64, errStr string) {
+	mu.Lock()
+	defer mu.Unlock()
+	ensureLoaded()
+	h, exists := healthMap[uri]
+	if !exists {
+		h = &NodeHealth{}
+		healthMap[uri] = h
+	}
+	h.LastTestMs = ms
+	h.LastTestError = errStr
+	if ok {
+		h.SuccessCount++
+		h.ConsecutiveFailures = 0
+		h.LastSuccessAt = time.Now().Unix()
+		h.CooldownUntil = 0
+	} else {
+		h.FailCount++
+		h.ConsecutiveFailures++
+		h.LastFailAt = time.Now().Unix()
+		h.CooldownUntil = time.Now().Unix() + 300
+	}
+	for i, n := range nodeList {
+		if n.RawURI == uri {
+			nodeList[i].Disabled = !ok
+			break
+		}
+	}
+	saveNodesUnsafe()
+	saveHealthUnsafe()
+}
+
+func EnableNode(uri string) bool {
+	mu.Lock()
+	defer mu.Unlock()
+	ensureLoaded()
+	found := false
+	for i, n := range nodeList {
+		if n.RawURI == uri {
+			nodeList[i].Disabled = false
+			if h, exists := healthMap[uri]; exists {
+				h.CooldownUntil = 0
+			}
+			found = true
+			break
+		}
+	}
+	if found {
+		saveNodesUnsafe()
+		saveHealthUnsafe()
+	}
+	return found
+}
+
 type scoredNode struct {
 	node  Node
 	score float64
@@ -233,12 +367,14 @@ func SelectForParallel(k int) []Node {
 	ensureLoaded()
 	now := time.Now().Unix()
 	var scored []scoredNode
+	var cooldownNodes []scoredNode
 	for _, n := range nodeList {
 		if n.Disabled {
 			continue
 		}
 		h := healthMap[n.RawURI]
 		if h != nil && h.CooldownUntil > now {
+			cooldownNodes = append(cooldownNodes, scoredNode{n, float64(h.CooldownUntil)})
 			continue
 		}
 		score := 100.0
@@ -258,12 +394,20 @@ func SelectForParallel(k int) []Node {
 		scored = append(scored, scoredNode{n, math.Max(1.0, score)})
 	}
 	sort.Slice(scored, func(i, j int) bool { return scored[i].score > scored[j].score })
+	if len(scored) < k && len(cooldownNodes) > 0 {
+		sort.Slice(cooldownNodes, func(i, j int) bool { return cooldownNodes[i].score < cooldownNodes[j].score })
+		needed := k - len(scored)
+		if needed > len(cooldownNodes) {
+			needed = len(cooldownNodes)
+		}
+		scored = append(scored, cooldownNodes[:needed]...)
+	}
 	if len(scored) > k*3 {
 		scored = scored[:k*3]
 	}
 	var selected []Node
 	for i := 0; i < k && len(scored) > 0; i++ {
-		idx := rand.Intn(len(scored)) // 简单随机回退
+		idx := rand.Intn(len(scored))
 		selected = append(selected, scored[idx].node)
 		scored = append(scored[:idx], scored[idx+1:]...)
 	}

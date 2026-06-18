@@ -37,6 +37,7 @@ type AppConfig struct {
 	ParallelPoolEnabled   bool   `json:"parallel_pool_enabled"`
 	ParallelPoolSize      int    `json:"parallel_pool_size"`
 	ParallelPoolMaxRounds int    `json:"parallel_pool_max_rounds"`
+	DebugPprof            bool   `json:"debug_pprof"`
 }
 
 func DefaultConfig() AppConfig {

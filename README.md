@@ -39,6 +39,7 @@
 
 ```bash
 go build -o vertex-proxy ./cmd/vproxy
+go build -o vertex-proxy.exe ./cmd/vproxy
 ```
 
 交叉编译（比如在 Mac/Windows 上编译 Linux 版本）：

@@ -9,7 +9,7 @@ import (
 // TestTokenPoolRealtime 验证每次 GetToken 都实时获取，且 Start/Stop 不阻塞、Stats 返回 0,0。
 func TestTokenPoolRealtime(t *testing.T) {
 	var calls int32
-	p := &TokenPool{fetch: func() (string, error) {
+	p := &TokenPool{fetch: func(_ string) (string, error) {
 		n := atomic.AddInt32(&calls, 1)
 		return fmt.Sprintf("tok-%d", n), nil
 	}}

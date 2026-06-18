@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
-	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -63,17 +62,8 @@ func (s *Server) handleAudioSpeech(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bodyBytes, err := io.ReadAll(r.Body)
-	if err != nil {
-		s.writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{
-			"message": "请求体必须是合法JSON (invalid JSON)", "type": "invalid_request_error", "code": 400}})
-		return
-	}
-	if !s.validUTF8Body(w, bodyBytes) {
-		return
-	}
 	var body map[string]any
-	if err := json.Unmarshal(bodyBytes, &body); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		s.writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{
 			"message": "请求体必须是合法JSON (invalid JSON)", "type": "invalid_request_error", "code": 400}})
 		return

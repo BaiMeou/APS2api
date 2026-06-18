@@ -55,6 +55,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/metrics", s.handleMetrics)
 	// 管理后台：静态面板（/admin、/admin/ 子树）+ JSON 接口（/api/admin/ 子树）。
 	// 二者有独立的 session 鉴权（见 admin.go），故在 withAPIKey/withMetrics 里被排除。
+	mux.HandleFunc("/favicon.ico", s.handleFavicon)
 	mux.HandleFunc("/admin", s.handleAdminPage)
 	mux.HandleFunc("/admin/", s.handleAdminPage)
 	mux.HandleFunc("/api/admin/", s.handleAdminAPI)
@@ -63,10 +64,29 @@ func (s *Server) Handler() http.Handler {
 	// 故对 /v1beta/models/ 与 /v1/models/ 前缀走自定义分发器。
 	mux.HandleFunc("/v1beta/models/", s.handleModelsSubtree)
 	mux.HandleFunc("/v1/models/", s.handleModelsSubtree)
+
+	// pprof 调试端点（通过配置 debug_pprof 启用）。
+	if s.cfg.DebugPprof {
+		mux.HandleFunc("/debug/pprof/", pprofIndex)
+		mux.HandleFunc("/debug/pprof/cmdline", pprintCmdline)
+		mux.HandleFunc("/debug/pprof/profile", pprofProfile)
+		mux.HandleFunc("/debug/pprof/symbol", pprofSymbol)
+		mux.HandleFunc("/debug/pprof/trace", pprofTrace)
+		mux.HandleFunc("/debug/pprof/goroutine", pprofGoroutine)
+		mux.HandleFunc("/debug/pprof/heap", pprofHeap)
+		mux.HandleFunc("/debug/pprof/threadcreate", pprofThreadcreate)
+		mux.HandleFunc("/debug/pprof/block", pprofBlock)
+		mux.HandleFunc("/debug/pprof/mutex", pprofMutex)
+	}
+
 	return s.withRecover(s.withCORS(s.withMetrics(s.withAPIKey(s.withBodyLimit(mux)))))
 }
 
 // ---- 端点 ----
+
+func (s *Server) handleFavicon(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusNoContent)
+}
 
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/" {
@@ -98,16 +118,12 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	bodyBytes, err := io.ReadAll(r.Body)
-	if err != nil {
-		s.oaiError(w, http.StatusBadRequest, "请求体读取失败 (failed to read body)", "invalid_request_error")
-		return
-	}
-	if !s.validUTF8Body(w, bodyBytes) {
-		return
-	}
 	var body map[string]any
-	if err := json.Unmarshal(bodyBytes, &body); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if _, ok := err.(*json.SyntaxError); ok && strings.Contains(err.Error(), "invalid UTF-8") {
+			s.oaiError(w, http.StatusBadRequest, "请求体编码错误，需为 UTF-8 (request body must be UTF-8 encoded)", "invalid_request_error")
+			return
+		}
 		s.oaiError(w, http.StatusBadRequest, "请求格式错误，JSON 解析失败 (invalid JSON)", "invalid_request_error")
 		return
 	}
@@ -558,7 +574,7 @@ func isAdminPath(path string) bool {
 }
 
 func (s *Server) withAPIKey(next http.Handler) http.Handler {
-	excluded := map[string]bool{"/": true, "/health": true}
+	excluded := map[string]bool{"/": true, "/health": true, "/favicon.ico": true}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if excluded[r.URL.Path] || isAdminPath(r.URL.Path) {
 			next.ServeHTTP(w, r)
@@ -593,12 +609,12 @@ func (s *Server) writeJSON(w http.ResponseWriter, status int, body any) {
 	}
 	data, err := jsonx.Marshal(body)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte(`{"error":{"message":"序列化失败 (internal error)","type":"server_error","code":500}}`))
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_, _ = w.Write(data)
 }

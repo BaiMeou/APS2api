@@ -156,10 +156,36 @@ func TestProcessStreamingObject_RealError(t *testing.T) {
 	}
 }
 
-// _extract_chunk: 空 candidates → nil（跳过该帧，不 emit）。
+// _extract_chunk: 无 candidates 但有 metadata → 保留 metadata（对齐 Python：空 candidates 帧传递元数据）。
 func TestExtractChunk_NoCandidates(t *testing.T) {
-	if chunk := extractChunk(map[string]any{"usageMetadata": map[string]any{"totalTokenCount": float64(5)}}); chunk != nil {
-		t.Errorf("无 candidates 应返回 nil, got %v", chunk)
+	chunk := extractChunk(map[string]any{"usageMetadata": map[string]any{"totalTokenCount": float64(5)}})
+	if chunk == nil {
+		t.Fatal("有 usageMetadata 应返回 chunk，不应为 nil")
+	}
+	if _, ok := chunk["usageMetadata"]; !ok {
+		t.Error("usageMetadata 应保留")
+	}
+	if _, ok := chunk["candidates"]; ok {
+		t.Error("不应有 candidates key")
+	}
+}
+
+// _extract_chunk: candidates 为空列表 → 保留空列表（对齐 Python）。
+func TestExtractChunk_EmptyCandidatesList(t *testing.T) {
+	chunk := extractChunk(map[string]any{"candidates": []any{}})
+	if chunk == nil {
+		t.Fatal("空 candidates 列表应返回 chunk，不应为 nil")
+	}
+	cands, ok := chunk["candidates"].([]any)
+	if !ok || len(cands) != 0 {
+		t.Errorf("candidates=%v, want empty list", chunk["candidates"])
+	}
+}
+
+// _extract_chunk: 完全空帧 → nil。
+func TestExtractChunk_CompletelyEmpty(t *testing.T) {
+	if chunk := extractChunk(map[string]any{}); chunk != nil {
+		t.Errorf("空帧应返回 nil, got %v", chunk)
 	}
 }
 
@@ -203,6 +229,88 @@ func TestCleanStreamParts_NormalText(t *testing.T) {
 	cleaned := cleanStreamParts(parts)
 	if len(cleaned) != 1 || cleaned[0].(map[string]any)["text"] != "plain" {
 		t.Errorf("normal text 被改动: %v", cleaned)
+	}
+}
+
+func TestCleanPart_EmptyDefaults(t *testing.T) {
+	part := map[string]any{
+		"data":             "text",
+		"fileData":         map[string]any{},
+		"functionCall":     map[string]any{},
+		"functionResponse": map[string]any{},
+		"inlineData":       map[string]any{},
+	}
+	if got := cleanPart(part); got != nil {
+		t.Errorf("empty defaults should return nil, got %v", got)
+	}
+}
+
+func TestCleanPart_FunctionCallStringArgs(t *testing.T) {
+	part := map[string]any{
+		"functionCall": map[string]any{
+			"name": "search",
+			"args": `{"q":"hello"}`,
+		},
+	}
+	got := cleanPart(part)
+	if got == nil {
+		t.Fatal("expected non-nil part")
+	}
+	fc, ok := got["functionCall"].(map[string]any)
+	if !ok {
+		t.Fatal("expected functionCall in cleaned part")
+	}
+	if fc["name"] != "search" {
+		t.Errorf("name=%v, want search", fc["name"])
+	}
+	args, ok := fc["args"].(map[string]any)
+	if !ok {
+		t.Fatalf("args should be map after normalization, got %T", fc["args"])
+	}
+	if args["q"] != "hello" {
+		t.Errorf("args.q=%v, want hello", args["q"])
+	}
+}
+
+func TestCleanPart_FunctionResponseStringResponse(t *testing.T) {
+	part := map[string]any{
+		"functionResponse": map[string]any{
+			"name":     "search",
+			"response": "result text",
+		},
+	}
+	got := cleanPart(part)
+	if got == nil {
+		t.Fatal("expected non-nil part")
+	}
+	fr, ok := got["functionResponse"].(map[string]any)
+	if !ok {
+		t.Fatal("expected functionResponse in cleaned part")
+	}
+	if fr["name"] != "search" {
+		t.Errorf("name=%v, want search", fr["name"])
+	}
+	resp, ok := fr["response"].(map[string]any)
+	if !ok {
+		t.Fatalf("response should be map after normalization, got %T", fr["response"])
+	}
+	if resp["result"] != "result text" {
+		t.Errorf("response.result=%v, want 'result text'", resp["result"])
+	}
+}
+
+func TestCleanStreamParts_SkipsEmpty(t *testing.T) {
+	parts := []any{
+		map[string]any{"data": "text", "fileData": map[string]any{}, "text": "hi"},
+		map[string]any{"data": "text", "fileData": map[string]any{}, "functionCall": map[string]any{}, "functionResponse": map[string]any{}},
+	}
+	cleaned := cleanStreamParts(parts)
+	if len(cleaned) != 1 {
+		t.Fatalf("cleaned len=%d, want 1 (only first part should survive)", len(cleaned))
+	}
+	p := cleaned[0].(map[string]any)
+	if p["text"] != "hi" {
+		t.Errorf("text=%q, want 'hi'", p["text"])
 	}
 }
 
