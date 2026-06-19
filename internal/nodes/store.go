@@ -59,11 +59,11 @@ func ensureLoaded() {
 		var d struct {
 			Nodes []Node `json:"nodes"`
 		}
-		json.Unmarshal(b, &d)
+		_ = json.Unmarshal(b, &d)
 		nodeList = d.Nodes
 	}
 	if b, err := os.ReadFile(filepath.Join(fileDir(), "node_health.json")); err == nil {
-		json.Unmarshal(b, &healthMap)
+		_ = json.Unmarshal(b, &healthMap)
 	}
 }
 
@@ -85,12 +85,12 @@ func LoadHealth() map[string]*NodeHealth {
 func saveNodesUnsafe() {
 	d := map[string]any{"nodes": nodeList}
 	b, _ := json.MarshalIndent(d, "", "  ")
-	os.WriteFile(filepath.Join(fileDir(), "nodes.json"), b, 0644)
+	_ = os.WriteFile(filepath.Join(fileDir(), "nodes.json"), b, 0644)
 }
 
 func saveHealthUnsafe() {
 	b, _ := json.MarshalIndent(healthMap, "", "  ")
-	os.WriteFile(filepath.Join(fileDir(), "node_health.json"), b, 0644)
+	_ = os.WriteFile(filepath.Join(fileDir(), "node_health.json"), b, 0644)
 }
 
 func MergeNodes(newNodes []Node) {

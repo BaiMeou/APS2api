@@ -40,7 +40,7 @@ func ParseURI(uri string) (map[string]any, error) {
 	if strings.HasPrefix(uri, "clash://") {
 		b, _ := base64.StdEncoding.DecodeString(padB64(uri[8:]))
 		var d map[string]any
-		json.Unmarshal(b, &d)
+		_ = json.Unmarshal(b, &d)
 		return d, nil
 	}
 	safeURI := uri
@@ -60,7 +60,7 @@ func parseSimple(uri, typ string) (map[string]any, error) {
 		port = 443
 	}
 	q := u.Query()
-	out := map[string]any{"type": typ, "server": u.Hostname(), "server_port": port}
+	out := map[string]any{"name": u.Fragment, "type": typ, "server": u.Hostname(), "port": port}
 	if typ == "trojan" || typ == "hysteria2" {
 		out["password"] = u.User.Username()
 	} else {
@@ -69,14 +69,14 @@ func parseSimple(uri, typ string) (map[string]any, error) {
 
 	sec := strings.ToLower(q.Get("security"))
 	if sec == "tls" || sec == "reality" || typ == "trojan" || typ == "hysteria2" || typ == "tuic" {
-		tls := map[string]any{"enabled": true, "server_name": u.Hostname()}
+		out["tls"] = true
+		out["sni"] = u.Hostname()
 		if sni := q.Get("sni"); sni != "" {
-			tls["server_name"] = sni
+			out["sni"] = sni
 		}
 		if q.Get("allowInsecure") == "1" {
-			tls["insecure"] = true
+			out["skip-cert-verify"] = true
 		}
-		out["tls"] = tls
 	}
 	return out, nil
 }
@@ -99,26 +99,27 @@ func parseVmess(uri string) (map[string]any, error) {
 	}
 	portStr := fmt.Sprintf("%v", d["port"])
 	port, _ := strconv.Atoi(portStr)
-	
+
 	// 初始化 VMess 出站基本参数
 	out := map[string]any{
-		"type":        "vmess",
-		"server":      d["add"],
-		"server_port": port,
-		"uuid":        d["id"],
-		"security":    "auto",
+		"name":   d["ps"],
+		"type":   "vmess",
+		"server": d["add"],
+		"port":   port,
+		"uuid":   d["id"],
+		"cipher": "auto",
 	}
 
 	// 1. 映射 alterId (aid)
 	if aidVal, ok := d["aid"]; ok {
 		switch v := aidVal.(type) {
 		case float64:
-			out["alter_id"] = int(v)
+			out["alterId"] = int(v)
 		case int:
-			out["alter_id"] = v
+			out["alterId"] = v
 		case string:
 			if n, err := strconv.Atoi(v); err == nil {
-				out["alter_id"] = n
+				out["alterId"] = n
 			}
 		}
 	}
@@ -131,10 +132,9 @@ func parseVmess(uri string) (map[string]any, error) {
 		if sni == "" {
 			sni, _ = d["add"].(string)
 		}
-		out["tls"] = map[string]any{
-			"enabled":     true,
-			"server_name": sni,
-		}
+		out["tls"] = true
+		out["sni"] = sni
+		out["skip-cert-verify"] = false
 	}
 
 	// 3. 补全 V2Ray 传输层配置（WS / gRPC，修复 IEPL 等节点的 WS 缺失）
@@ -143,24 +143,22 @@ func parseVmess(uri string) (map[string]any, error) {
 	if netType != "" && netType != "tcp" {
 		path, _ := d["path"].(string)
 		host, _ := d["host"].(string)
-		
-		transportCfg := map[string]any{
-			"type": netType,
-		}
-		
+
+		out["network"] = netType
+
 		switch netType {
 		case "ws":
-			transportCfg["path"] = path
-			if host != "" {
-				transportCfg["headers"] = map[string]any{
+			out["ws-opts"] = map[string]any{
+				"path": path,
+				"headers": map[string]any{
 					"Host": host,
-				}
+				},
 			}
 		case "grpc":
-			transportCfg["service_name"] = path // gRPC 模式下 path 常代表 serviceName
+			out["grpc-opts"] = map[string]any{
+				"grpc-service-name": path,
+			}
 		}
-		
-		out["transport"] = transportCfg
 	}
 
 	return out, nil
@@ -208,12 +206,22 @@ func parseSS(uri string) (map[string]any, error) {
 			return nil, fmt.Errorf("ss parse failed: invalid userinfo (cannot decode method or password)")
 		}
 
+		name := ""
+		if parts := strings.Split(hp[1], "#"); len(parts) > 1 {
+			if dec, err := url.QueryUnescape(parts[1]); err == nil {
+				name = dec
+			} else {
+				name = parts[1]
+			}
+		}
+
 		return map[string]any{
-			"type":        "shadowsocks",
-			"server":      hp[0],
-			"server_port": port,
-			"method":      method,
-			"password":    password,
+			"name":     name,
+			"type":     "ss",
+			"server":   hp[0],
+			"port":     port,
+			"cipher":   method,
+			"password": password,
 		}, nil
 	}
 	return nil, fmt.Errorf("ss parse failed")

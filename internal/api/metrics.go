@@ -16,11 +16,11 @@ func (s *Server) metricsBody() map[string]any {
 	return map[string]any{
 		"status": "ok",
 		"memory": map[string]any{
-			"alloc_mb":    bToMb(m.Alloc),
-			"heap_inuse":  bToMb(m.HeapInuse),
-			"num_gc":      m.NumGC,
-			"goroutines":  runtime.NumGoroutine(),
-			"spilled_mb":  bToMb(uint64(spool.SpilledBytes())),
+			"alloc_mb":   bToMb(m.Alloc),
+			"heap_inuse": bToMb(m.HeapInuse),
+			"num_gc":     m.NumGC,
+			"goroutines": runtime.NumGoroutine(),
+			"spilled_mb": bToMb(uint64(spool.SpilledBytes())),
 		},
 		"requests": map[string]any{
 			"total":          snap.Total,

@@ -97,7 +97,7 @@ func WriteSettings(updates map[string]any) error {
 
 func writeJSONFile(path string, v any) error {
 	if dir := filepath.Dir(path); dir != "" {
-		os.MkdirAll(dir, 0o755)
+		_ = os.MkdirAll(dir, 0o755)
 	}
 	data, _ := json.MarshalIndent(v, "", "  ")
 	tmp := path + ".tmp"

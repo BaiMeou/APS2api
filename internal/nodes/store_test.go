@@ -94,8 +94,8 @@ func TestNodesLifecycle(t *testing.T) {
 
 	// Cleanup state
 	resetState()
-	os.RemoveAll(filepath.Join(fileDir(), "nodes.json"))
-	os.RemoveAll(filepath.Join(fileDir(), "node_health.json"))
+	_ = os.RemoveAll(filepath.Join(fileDir(), "nodes.json"))
+	_ = os.RemoveAll(filepath.Join(fileDir(), "node_health.json"))
 }
 
 func TestParseNodeIdentity(t *testing.T) {

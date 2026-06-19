@@ -15,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/bsfdsagfadg/vertex/internal/config"
 	"github.com/bsfdsagfadg/vertex/internal/jsonx"
@@ -623,18 +622,4 @@ func (s *Server) oaiError(w http.ResponseWriter, status int, msg, errType string
 	s.writeJSON(w, status, map[string]any{"error": map[string]any{
 		"message": msg, "type": errType, "code": status,
 	}})
-}
-
-// validUTF8Body 校验请求体是合法 UTF-8；非法（如 GBK 编码）时写 400 并返回 false。
-// 显式处理非法编码——Go 的 json 库对非法 UTF-8 会静默替换为
-// U+FFFD，故需在解析前显式校验，给客户端可操作的"需 UTF-8"提示而非乱码/泛化 JSON 错误。
-func (s *Server) validUTF8Body(w http.ResponseWriter, body []byte) bool {
-	if utf8.Valid(body) {
-		return true
-	}
-	s.writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{
-		"message": "请求体编码错误，需为 UTF-8 (request body must be UTF-8 encoded)",
-		"type":    "invalid_request_error", "code": 400,
-	}})
-	return false
 }

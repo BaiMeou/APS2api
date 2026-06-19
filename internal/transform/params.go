@@ -385,8 +385,8 @@ func cleanFunctionParameters(schema any) any {
 			if !geminiAllowedSchemaFields[key] {
 				continue
 			}
-			switch {
-			case key == "properties":
+			switch key {
+			case "properties":
 				if vm, ok := value.(map[string]any); ok {
 					props := map[string]any{}
 					for k, v := range vm {
@@ -396,13 +396,13 @@ func cleanFunctionParameters(schema any) any {
 					continue
 				}
 				cleaned[key] = value
-			case key == "items":
+			case "items":
 				if _, ok := value.(map[string]any); ok {
 					cleaned[key] = cleanFunctionParameters(value)
 					continue
 				}
 				cleaned[key] = value
-			case key == "anyOf":
+			case "anyOf":
 				if vl, ok := value.([]any); ok {
 					out := make([]any, len(vl))
 					for i, item := range vl {

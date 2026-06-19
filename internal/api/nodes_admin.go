@@ -64,7 +64,7 @@ func (s *Server) adminFetchSub(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusBadRequest, adminErr("拉取失败: "+err.Error()))
 		return
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		log.Printf("[Admin] [FetchSub] 服务器返回非200状态码: %d", resp.StatusCode)
 		s.writeJSON(w, http.StatusBadRequest, adminErr("拉取失败: 服务器返回状态码 "+strconv.Itoa(resp.StatusCode)))
@@ -136,8 +136,14 @@ func (s *Server) adminFetchSub(w http.ResponseWriter, r *http.Request) {
 			}
 
 			if nodeName == "" {
+				if n, ok := out["name"].(string); ok {
+					nodeName = n
+				}
+			}
+			if nodeName == "" {
 				nodeName = line[:min(len(line), 40)]
 			}
+			out["name"] = nodeName
 			newNodes = append(newNodes, nodes.Node{Type: t, Name: nodeName, RawURI: line})
 		}
 	}
@@ -435,7 +441,7 @@ func (s *Server) adminUseNode(w http.ResponseWriter, r *http.Request) {
 	if !s.decodeAdminBody(w, r, &body) {
 		return
 	}
-	config.WriteSettings(map[string]any{"active_node_uri": body.RawURI, "parallel_pool_enabled": false})
+	_ = config.WriteSettings(map[string]any{"active_node_uri": body.RawURI, "parallel_pool_enabled": false})
 	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

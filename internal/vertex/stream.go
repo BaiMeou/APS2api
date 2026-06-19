@@ -207,7 +207,7 @@ func (c *VertexAIClient) executeStreamingAttempt(ctx context.Context, sess *tran
 	if err != nil {
 		return NewInternalError("marshal payload: " + err.Error())
 	}
-	defer buf.Close()
+	defer func() { _ = buf.Close() }()
 	reader, err := buf.Reader()
 	if err != nil {
 		return NewInternalError("spool reader: " + err.Error())
@@ -478,7 +478,7 @@ func chunkFinishReason(chunk map[string]any) string {
 // extractChunk 从 Gemini 数据中提取标准化 chunk，清洗畸形嵌套。
 //
 // 对齐 Python _process_streaming_object：candidates key 存在且非 nil 时保留
-//（即使空列表），总是复制 metadata 字段，仅当 chunk完全无字段时返回 nil。
+// （即使空列表），总是复制 metadata 字段，仅当 chunk完全无字段时返回 nil。
 func extractChunk(data map[string]any) map[string]any {
 	chunk := map[string]any{}
 

@@ -47,7 +47,7 @@ func TestAdminFetchSub_Yaml(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/yaml")
 		w.WriteHeader(http.StatusOK)
-		w.Write(yamlContent)
+		_, _ = w.Write(yamlContent)
 	}))
 	defer ts.Close()
 
@@ -63,7 +63,7 @@ func TestAdminFetchSub_Yaml(t *testing.T) {
 	s.adminFetchSub(w, req)
 
 	resp := w.Result()
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
@@ -113,7 +113,7 @@ func TestAdminFetchSub_Base64NodeTxt(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
-		w.Write(content)
+		_, _ = w.Write(content)
 	}))
 	defer ts.Close()
 
@@ -129,7 +129,7 @@ func TestAdminFetchSub_Base64NodeTxt(t *testing.T) {
 	s.adminFetchSub(w, req)
 
 	resp := w.Result()
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
@@ -181,7 +181,7 @@ proxies:
 	s.adminImportNodes(w, req)
 
 	resp := w.Result()
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode != http.StatusOK {
@@ -222,7 +222,7 @@ proxies:
 	s.adminImportNodes(wR, reqR)
 
 	respR := wR.Result()
-	defer respR.Body.Close()
+	defer func() { _ = respR.Body.Close() }()
 	bodyR, _ := io.ReadAll(respR.Body)
 
 	if respR.StatusCode != http.StatusOK {

@@ -265,7 +265,7 @@ func uploadToInlineImage(fh *multipart.FileHeader) (transform.InlineImage, error
 	if err != nil {
 		return transform.InlineImage{}, &badRequestError{msg: "无法读取上传文件 (cannot read upload)"}
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var buf strings.Builder
 	enc := base64.NewEncoder(base64.StdEncoding, &buf)
@@ -273,7 +273,7 @@ func uploadToInlineImage(fh *multipart.FileHeader) (transform.InlineImage, error
 	if err != nil {
 		return transform.InlineImage{}, &badRequestError{msg: "无法读取上传文件 (cannot read upload)"}
 	}
-	enc.Close()
+	_ = enc.Close()
 	if written == 0 {
 		name := fh.Filename
 		if name == "" {

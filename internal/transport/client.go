@@ -40,7 +40,7 @@ func (s *Session) DoAndRead(ctx context.Context, method, url string, header http
 	if err != nil {
 		return 0, nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	data, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
 		return resp.StatusCode, nil, readErr
@@ -96,7 +96,7 @@ func injectProxy(opts []tls_client.HttpClientOption, proxyURI string) ([]tls_cli
 	}
 
 	// 订阅节点，获取并挂载内部 Dialer
-	dialCtx, err := getOrStartBoxDialer(proxyURI)
+	dialCtx, err := getOrStartProxyDialer(proxyURI)
 	if err != nil {
 		return nil, fmt.Errorf("节点内部 Dialer 启动失败: %w", err)
 	}

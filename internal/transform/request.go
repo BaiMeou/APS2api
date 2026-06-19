@@ -290,7 +290,7 @@ func appendFunctionResponse(contents []any, part map[string]any) []any {
 // 要求的 JSON object：字符串先尝试 JSON 解析；非对象（数字/布尔/数组/字符串）包成 {"result":...}。
 // 处理 tool/function 分支的返回值规范化。
 func coerceFunctionResponse(raw any) map[string]any {
-	var obj any = raw
+	obj := raw
 	if s, ok := raw.(string); ok {
 		var parsed any
 		if err := json.Unmarshal([]byte(s), &parsed); err == nil {
@@ -877,8 +877,8 @@ func handleInlineDataCase(contents any) any {
 		out := map[string]any{}
 		for k, v := range c {
 			camelK := SnakeToCamel(k)
-			switch {
-			case camelK == "inlineData":
+			switch camelK {
+			case "inlineData":
 				if vm, ok := v.(map[string]any); ok {
 					nid := map[string]any{}
 					for ik, iv := range vm {
@@ -888,13 +888,13 @@ func handleInlineDataCase(contents any) any {
 					continue
 				}
 				out[camelK] = handleInlineDataCase(v)
-			case camelK == "functionCall":
+			case "functionCall":
 				if vm, ok := v.(map[string]any); ok {
 					out["functionCall"] = camelizeFunctionRef(vm, "args")
 					continue
 				}
 				out[camelK] = handleInlineDataCase(v)
-			case camelK == "functionResponse":
+			case "functionResponse":
 				if vm, ok := v.(map[string]any); ok {
 					out["functionResponse"] = camelizeFunctionRef(vm, "response")
 					continue

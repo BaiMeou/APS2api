@@ -41,7 +41,7 @@ func (m *APIKeyManager) LoadKeys() bool {
 	if err != nil {
 		return false
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -134,7 +134,7 @@ func (m *APIKeyManager) readEntries() ([]apiKeyEntry, error) {
 		}
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var out []apiKeyEntry
 	sc := bufio.NewScanner(f)

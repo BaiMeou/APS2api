@@ -53,8 +53,8 @@ func NewVertexAIClient() *VertexAIClient {
 	}
 }
 
-func (c *VertexAIClient) StartTokenPool() { c.pool.Start() }
-func (c *VertexAIClient) StopTokenPool()  { c.pool.Stop() }
+func (c *VertexAIClient) StartTokenPool()                  { c.pool.Start() }
+func (c *VertexAIClient) StopTokenPool()                   { c.pool.Stop() }
 func (c *VertexAIClient) TokenPoolStats() (size, fill int) { return c.pool.Stats() }
 
 func (c *VertexAIClient) CompleteChat(ctx context.Context, model string, geminiPayload map[string]any) (map[string]any, error) {
@@ -255,7 +255,7 @@ func (c *VertexAIClient) executeCompleteRequest(ctx context.Context, sess *trans
 	if err != nil {
 		return nil, NewInternalError("marshal payload: " + err.Error())
 	}
-	defer buf.Close()
+	defer func() { _ = buf.Close() }()
 	reader, err := buf.Reader()
 	if err != nil {
 		return nil, NewInternalError("spool reader: " + err.Error())
