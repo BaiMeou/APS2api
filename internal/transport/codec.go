@@ -74,8 +74,51 @@ func parseSimple(uri, typ string) (map[string]any, error) {
 		if sni := q.Get("sni"); sni != "" {
 			out["sni"] = sni
 		}
-		if q.Get("allowInsecure") == "1" {
+		if sec != "reality" && q.Get("allowInsecure") == "1" {
 			out["skip-cert-verify"] = true
+		}
+		out["servername"] = out["sni"]
+	}
+
+	if sec == "reality" {
+		if pubKey := q.Get("pbk"); pubKey != "" {
+			out["reality-opts"] = map[string]any{"public-key": pubKey, "short-id": q.Get("sid")}
+		}
+	}
+
+	if typ == "vless" || typ == "trojan" {
+		if flow := q.Get("flow"); flow != "" {
+			out["flow"] = flow
+		}
+		network := q.Get("type")
+		if network == "ws" || network == "grpc" || network == "http" || network == "xhttp" {
+			out["network"] = network
+			switch network {
+			case "ws":
+				path := q.Get("path")
+				if path == "" {
+					path = "/"
+				}
+				host := q.Get("host")
+				wsOpts := map[string]any{"path": path}
+				if host != "" {
+					wsOpts["headers"] = map[string]any{"Host": host}
+				}
+				out["ws-opts"] = wsOpts
+			case "grpc":
+				if serviceName := q.Get("serviceName"); serviceName != "" {
+					out["grpc-opts"] = map[string]any{"grpc-service-name": serviceName}
+				}
+			}
+		}
+		if alpn := q.Get("alpn"); alpn != "" {
+			out["alpn"] = strings.Split(alpn, ",")
+		}
+		if q.Get("packetAddr") == "true" {
+			out["packet-addr"] = true
+		}
+		if q.Get("xudp") == "true" {
+			out["xudp"] = true
 		}
 	}
 	return out, nil
@@ -134,7 +177,14 @@ func parseVmess(uri string) (map[string]any, error) {
 		}
 		out["tls"] = true
 		out["sni"] = sni
-		out["skip-cert-verify"] = false
+		out["servername"] = sni
+		if insecure, ok := d["skip-cert-verify"].(bool); ok {
+			out["skip-cert-verify"] = insecure
+		} else if allowInsecure, ok := d["allowInsecure"].(string); ok && allowInsecure == "1" {
+			out["skip-cert-verify"] = true
+		} else {
+			out["skip-cert-verify"] = false
+		}
 	}
 
 	// 3. 补全 V2Ray 传输层配置（WS / gRPC，修复 IEPL 等节点的 WS 缺失）
@@ -157,6 +207,16 @@ func parseVmess(uri string) (map[string]any, error) {
 		case "grpc":
 			out["grpc-opts"] = map[string]any{
 				"grpc-service-name": path,
+			}
+		case "http", "h2":
+			hPath := path
+			if hPath == "" {
+				hPath = "/"
+			}
+			out["http-opts"] = map[string]any{
+				"method": "GET",
+				"path":   []string{hPath},
+				"headers": map[string][]string{"Host": {host}},
 			}
 		}
 	}

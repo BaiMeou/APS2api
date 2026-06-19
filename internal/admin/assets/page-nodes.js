@@ -126,10 +126,12 @@ async function loadNodes() {
         pill.style.cssText = 'background:rgba(236,138,124,0.16);color:var(--red);margin-right:5px;';
         pill.textContent = '\u6D4B\u8BD5\u5931\u8D25' + (errMsg ? ' ' + errMsg : '');
         statusTd.appendChild(pill);
-        var dis = document.createElement('span');
-        dis.style.cssText = 'color:var(--red);font-size:11px;';
-        dis.textContent = '\u7981\u7528';
-        statusTd.appendChild(dis);
+        if (health.last_test_error) {
+          var errSpan = document.createElement('div');
+          errSpan.style.cssText = 'color:var(--red);font-size:11px;margin-top:2px;';
+          errSpan.textContent = health.last_test_error.slice(0, 90);
+          statusTd.appendChild(errSpan);
+        }
       }
       tr.appendChild(statusTd);
 
@@ -212,10 +214,13 @@ async function testAllNodes() {
   progressText.textContent = '\u6D4B\u8BD5\u4E2D...';
   progressDetail.textContent = '';
 
+  function formatRecentTest(node, ok, elapsed_ms, error) {
+    if (ok) { return '\u6700\u8FD1\uFF1A' + node.name + ' \u00B7 \u6D4B\u8BD5\u901A\u8FC7 ' + Math.round(elapsed_ms) + 'ms'; }
+    return '\u6700\u8FD1\uFF1A' + node.name + ' \u00B7 \u6D4B\u8BD5\u5931\u8D25' + (error ? ' ' + error : '');
+  }
   async function worker() {
     while (next < total) {
       const node = enabled[next++];
-      progressDetail.textContent = '\u6B63\u5728\u6D4B\u8BD5: ' + node.name;
       let result;
       try {
         result = await API.nodes.test(node.raw_uri, { auto_disable: true });
@@ -224,12 +229,9 @@ async function testAllNodes() {
       }
       done++;
       if (result.ok) ok++; else failed++;
-      const detail = result.ok
-        ? node.name + ' \u00B7 \u6D4B\u8BD5\u901A\u8FC7 ' + Math.round(result.elapsed_ms) + 'ms'
-        : node.name + ' \u00B7 \u6D4B\u8BD5\u5931\u8D25 ' + (result.error || '');
       progressFill.style.width = Math.round(done / total * 100) + '%';
       progressText.textContent = '\u5DF2\u5B8C\u6210 ' + done + '/' + total + ' \u00B7 \u901A\u8FC7 ' + ok + ' \u00B7 \u5931\u8D25 ' + failed;
-      progressDetail.textContent = detail;
+      progressDetail.textContent = formatRecentTest(node, result.ok, result.elapsed_ms, result.error);
     }
   }
 

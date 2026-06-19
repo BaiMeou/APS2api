@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/bsfdsagfadg/vertex/internal/config"
 )
 
 type Node struct {
@@ -276,6 +278,27 @@ func parseNodeIdentity(rawURI string) (scheme, userinfo, host string, port int, 
 	return scheme, userinfo, host, port, true
 }
 
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
 func RecordTest(uri string, ok bool, ms float64, errStr string) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -296,7 +319,9 @@ func RecordTest(uri string, ok bool, ms float64, errStr string) {
 		h.FailCount++
 		h.ConsecutiveFailures++
 		h.LastFailAt = time.Now().Unix()
-		h.CooldownUntil = time.Now().Unix() + 300
+		failures := maxInt(1, h.ConsecutiveFailures)
+		cooldown := minInt(1800, 30*(1<<minInt(failures-1, 6)))
+		h.CooldownUntil = time.Now().Unix() + int64(cooldown)
 	}
 	saveNodesUnsafe()
 	saveHealthUnsafe()
@@ -322,13 +347,9 @@ func UpdateNodeTestResult(uri string, ok bool, ms float64, errStr string) {
 		h.FailCount++
 		h.ConsecutiveFailures++
 		h.LastFailAt = time.Now().Unix()
-		h.CooldownUntil = time.Now().Unix() + 300
-	}
-	for i, n := range nodeList {
-		if n.RawURI == uri {
-			nodeList[i].Disabled = !ok
-			break
-		}
+		failures := maxInt(1, h.ConsecutiveFailures)
+		cooldown := minInt(1800, 30*(1<<minInt(failures-1, 6)))
+		h.CooldownUntil = time.Now().Unix() + int64(cooldown)
 	}
 	saveNodesUnsafe()
 	saveHealthUnsafe()
@@ -385,8 +406,11 @@ func SelectForParallel(k int) []Node {
 			if h.LastTestMs > 0 {
 				score -= math.Min(h.LastTestMs/1000.0, 30.0)
 			}
-			if h.LastSuccessAt == 0 {
+			lastSeen := maxInt64(h.LastSuccessAt, h.LastFailAt)
+			if lastSeen == 0 {
 				score += 20
+			} else if now-lastSeen > 3600 {
+				score += 10
 			}
 		} else {
 			score += 20
@@ -402,13 +426,37 @@ func SelectForParallel(k int) []Node {
 		}
 		scored = append(scored, cooldownNodes[:needed]...)
 	}
-	if len(scored) > k*3 {
-		scored = scored[:k*3]
+	topK := config.Load().ParallelNodeTopK
+	if topK <= 0 {
+		topK = 80
+	}
+	if len(scored) > topK {
+		scored = scored[:topK]
+	}
+	weights := make([]float64, len(scored))
+	totalWeight := 0.0
+	for i, s := range scored {
+		w := s.score + 120.0
+		if w < 1 {
+			w = 1
+		}
+		weights[i] = w
+		totalWeight += w
 	}
 	var selected []Node
 	for i := 0; i < k && len(scored) > 0; i++ {
-		idx := rand.Intn(len(scored))
+		r := rand.Float64() * totalWeight
+		idx := 0
+		for j, w := range weights {
+			r -= w
+			if r <= 0 {
+				idx = j
+				break
+			}
+		}
 		selected = append(selected, scored[idx].node)
+		totalWeight -= weights[idx]
+		weights = append(weights[:idx], weights[idx+1:]...)
 		scored = append(scored[:idx], scored[idx+1:]...)
 	}
 	log.Printf("[Nodes] 选择并行节点 (需求: %d, 实际: %d)", k, len(selected))

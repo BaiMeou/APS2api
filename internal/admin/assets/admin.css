@@ -174,11 +174,30 @@ td code { background: rgba(0, 0, 0, .3); padding: 2px 9px; border-radius: 8px; f
 .field-mb-20px { margin-bottom: 20px; }
 .field-heading { display: block; color: var(--text-dim); font-size: 12.5px; margin-bottom: 7px; }
 
-.test-progress { display: none; padding: 12px; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--stroke); border-radius: 11px; margin-bottom: 14px; }
+.test-progress { display: none; padding: 12px; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--stroke); border-radius: 11px; margin-bottom: 14px; overflow: hidden; }
 .test-progress-text { font-weight: 600; font-size: 13px; color: var(--gold); }
 .progress-track { height: 6px; background: rgba(0,0,0,0.3); border-radius: 99px; overflow: hidden; margin: 8px 0; }
 .progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--gold), var(--gold-deep)); transition: width 0.2s ease; }
 .test-progress-detail { font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.key-input-wrap { display: flex; gap: 0; align-items: stretch; }
+.key-input-wrap input { border-radius: 11px 0 0 11px; border-right: none; }
+.key-gen-btn {
+  width: 40px; display: flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,.05); border: 1px solid var(--stroke);
+  border-radius: 0 11px 11px 0; color: var(--text-dim); cursor: pointer;
+  transition: all .2s var(--ease); flex-shrink: 0;
+}
+.key-gen-btn:hover { color: var(--gold); border-color: rgba(240,189,92,.4); background: var(--gold-soft); }
+.masked { color: var(--text-dim); letter-spacing: 0.04em; }
+.key-cell { white-space: nowrap; }
+.key-cell:hover .action-copy-btn { opacity: 1; }
+.action-copy-btn {
+  background: transparent; border: none; cursor: pointer; padding: 4px;
+  margin-left: 8px; color: var(--text-dim); opacity: 0.55;
+  display: inline-flex; align-items: center; border-radius: 6px;
+  transition: opacity .2s var(--ease);
+}
+.action-copy-btn:hover { opacity: 1; color: var(--gold); }
 .th-center { width: 40px; text-align: center; }
 
 /* ── mobile responsive ── */

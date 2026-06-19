@@ -199,8 +199,12 @@ func (s *Server) adminTestAll(w http.ResponseWriter, _ *http.Request) {
 				} else {
 					log.Printf("[Admin] [TestAll] 节点 %s 测试成功, recaptcha 耗时: %.0fms", node.Name, duration)
 				}
-				nodes.RecordTest(node.RawURI, testErr == nil, duration, errToStr(testErr))
-			}(n)
+			success := testErr == nil
+			nodes.RecordTest(node.RawURI, success, duration, errToStr(testErr))
+			if !success {
+				nodes.BatchUpdateNodesDisabled([]string{node.RawURI}, true)
+			}
+		}(n)
 		}
 		wg.Wait()
 		log.Printf("[Admin] [TestAll] 全局节点测试全部结束")
@@ -249,6 +253,9 @@ func (s *Server) adminTestNode(w http.ResponseWriter, r *http.Request) {
 	if body.AutoDisable {
 		nodes.UpdateNodeTestResult(body.RawURI, ok, elapsed, errStr)
 		disabled = !ok
+		if !ok {
+			nodes.BatchUpdateNodesDisabled([]string{body.RawURI}, true)
+		}
 	}
 
 	log.Printf("[Admin] [TestNode] 节点测试 %s: ok=%v elapsed=%.0fms error=%q disabled=%v", body.RawURI, ok, elapsed, errStr, disabled)

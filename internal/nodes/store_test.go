@@ -151,8 +151,11 @@ func TestUpdateNodeTestResult(t *testing.T) {
 		t.Errorf("Expected 1 consecutive failure")
 	}
 	nodes := LoadNodes()
-	if len(nodes) != 1 || !nodes[0].Disabled {
-		t.Errorf("Expected node1 to be disabled after failed test")
+	if len(nodes) != 1 || nodes[0].Disabled {
+		t.Errorf("Expected node1 to NOT be disabled after failed test (cooldown replaces disable)")
+	}
+	if health["uri1"].CooldownUntil == 0 {
+		t.Errorf("Expected cooldown to be set after failed test")
 	}
 
 	// Test: succeed the node
@@ -160,6 +163,9 @@ func TestUpdateNodeTestResult(t *testing.T) {
 	health = LoadHealth()
 	if health["uri1"].SuccessCount != 1 {
 		t.Errorf("Expected 1 success")
+	}
+	if health["uri1"].CooldownUntil != 0 {
+		t.Errorf("Expected cooldown to be cleared after success")
 	}
 	nodes = LoadNodes()
 	if nodes[0].Disabled {
