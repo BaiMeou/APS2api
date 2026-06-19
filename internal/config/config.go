@@ -39,6 +39,7 @@ type AppConfig struct {
 	ParallelPoolMaxRounds int    `json:"parallel_pool_max_rounds"`
 	DebugPprof            bool   `json:"debug_pprof"`
 	ParallelNodeTopK      int    `json:"parallel_node_top_k"`
+	DebugMode             bool   `json:"debug_mode"`
 }
 
 func DefaultConfig() AppConfig {
@@ -54,7 +55,7 @@ func DefaultConfig() AppConfig {
 		MaxSpillMB:                2048,
 		ParallelPoolEnabled:       true,
 		ParallelPoolSize:          4,
-		ParallelNodeTopK:           80,
+		ParallelNodeTopK:          80,
 	}
 }
 

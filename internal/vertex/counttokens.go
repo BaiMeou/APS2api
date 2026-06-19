@@ -23,7 +23,8 @@ import (
 func (c *VertexAIClient) CountTokens(ctx context.Context, model string, contents []any) int {
 	cfg := config.Load()
 
-	sess, err := c.net.CreateSession(60, config.Load().ProxyURL)
+	reqID, _ := ctx.Value("reqID").(string)
+	sess, err := c.net.CreateSession(60, config.Load().ProxyURL, reqID)
 	if err != nil {
 		return 0
 	}
@@ -51,6 +52,7 @@ func (c *VertexAIClient) CountTokens(ctx context.Context, model string, contents
 
 	status, raw, err := sess.DoAndRead(ctx, "POST", batchGraphqlURL, header, bytes.NewReader(bodyBytes))
 	if err != nil || status != 200 {
+		log.Printf("[Vertex] [CountTokens] 上游请求失败, status=%d, err=%v, resp=%s", status, err, string(raw))
 		return 0
 	}
 	return parseCountTokensResponse(string(raw))

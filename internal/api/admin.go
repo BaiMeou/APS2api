@@ -292,9 +292,11 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	// 常量时间比较，防计时侧信道泄漏密码长度/前缀匹配信息。
 	if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(body.Password)), []byte(expected)) != 1 {
+		log.Printf("[Security] 警告：后台登录失败，密码错误。来源 IP: %s", r.RemoteAddr)
 		s.writeJSON(w, http.StatusUnauthorized, adminErr("密码错误 (invalid password)"))
 		return
 	}
+	log.Printf("[Admin] 管理后台登录成功。来源 IP: %s", r.RemoteAddr)
 	cleanupAdminSessions() // 登录时顺手清过期，避免内存里堆死 token
 	tok := issueAdminToken()
 	http.SetCookie(w, &http.Cookie{

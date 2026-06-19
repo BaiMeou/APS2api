@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/bsfdsagfadg/vertex/internal/transport"
 )
@@ -48,19 +49,22 @@ func randomString(n int) string {
 // （即用即毁，FRESH_CONNECT 语义）。全部失败返回 ("", nil) —— 返回空值表示失败，
 // 调用方按“空则换新/重试”处理。返回非空字符串即成功。
 func FetchRecaptchaToken(net *transport.NetworkClient, proxyURI string) (string, error) {
+	start := time.Now()
 	for retry := 0; retry < 3; retry++ {
 		log.Printf("[Recaptcha] 开始获取 reCAPTCHA token (尝试 %d/3)", retry+1)
 		if token, ok := fetchOnce(net, proxyURI); ok {
-			log.Printf("[Recaptcha] 成功获取 reCAPTCHA token")
+			elapsed := time.Since(start)
+			log.Printf("[Recaptcha] 成功获取 reCAPTCHA token, 耗时: %d ms", elapsed.Milliseconds())
 			return token, nil
 		}
 	}
-	log.Printf("[Recaptcha] 3次尝试后获取 reCAPTCHA token 失败")
+	elapsed := time.Since(start)
+	log.Printf("[Recaptcha] 3次尝试后获取 reCAPTCHA token 失败, 耗时: %d ms", elapsed.Milliseconds())
 	return "", nil
 }
 
 func fetchOnce(net *transport.NetworkClient, proxyURI string) (string, bool) {
-	sess, err := net.CreateSession(15, proxyURI)
+	sess, err := net.CreateSession(15, proxyURI, "recaptcha")
 	if err != nil {
 		return "", false
 	}
@@ -79,6 +83,11 @@ func fetchOnce(net *transport.NetworkClient, proxyURI string) (string, bool) {
 	}
 	m := tokenRe.FindSubmatch(anchorBody)
 	if m == nil {
+		bodyStr := string(anchorBody)
+		if len(bodyStr) > 500 {
+			bodyStr = bodyStr[:500] + "..."
+		}
+		log.Printf("[Recaptcha] anchor token正则匹配失败, body前缀: %s", bodyStr)
 		return "", false
 	}
 	baseToken := string(m[1])
@@ -101,9 +110,12 @@ func fetchOnce(net *transport.NetworkClient, proxyURI string) (string, bool) {
 		recaptchaBase, anchorURL, "same-origin",
 	)
 
-	_, reloadBody, err := sess.DoAndRead(context.Background(), "POST", reloadURL, header, strings.NewReader(form.Encode()))
+	status, reloadBody, err := sess.DoAndRead(context.Background(), "POST", reloadURL, header, strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", false
+	}
+	if status != 200 {
+		log.Printf("[Recaptcha] Reload 失败, HTTP 状态码: %d, 返回内容: %s", status, string(reloadBody))
 	}
 	rm := rrespRe.FindSubmatch(reloadBody)
 	if rm == nil {

@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -216,6 +217,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		if vErr != nil {
 			ve := toVertexError(vErr)
 			if isSafetyBlock(ve) {
+				log.Printf("[Vertex] 请求被 Google 安全审查拦截, req=%s, 原因: %s", RequestIDFromContext(r.Context()), ve.Status)
 				s.writeJSON(w, http.StatusOK, oaiSafetyResponse(model))
 				return
 			}
@@ -230,6 +232,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if vErr != nil {
 		ve := toVertexError(vErr)
 		if isSafetyBlock(ve) {
+			log.Printf("[Vertex] 请求被 Google 安全审查拦截, req=%s, 原因: %s", RequestIDFromContext(r.Context()), ve.Status)
 			// 安全拦截以错误形式抛出时，返回 200 + content_filter（而非错误码）。
 			s.writeJSON(w, http.StatusOK, oaiSafetyResponse(model))
 			return
@@ -293,6 +296,7 @@ func (s *Server) streamChatCompletions(ctx context.Context, w http.ResponseWrite
 	// write 写一条 SSE 行并立即 flush（避免代理/客户端攒包）。返回 false 表示客户端断开。
 	write := func(line string) bool {
 		if _, err := io.WriteString(w, line); err != nil {
+			log.Printf("[Server] [Stream] req=%s 客户端已主动断开连接", requestID)
 			return false
 		}
 		if canFlush {
@@ -304,8 +308,12 @@ func (s *Server) streamChatCompletions(ctx context.Context, w http.ResponseWrite
 	isFirst := true
 	hasFinish := false
 	gotContent := false
+	startTime := time.Now()
 
 	s.vc.StreamChat(ctx, model, geminiPayload, func(ch vertex.StreamChunk) bool {
+		if isFirst && ch.Err == nil {
+			log.Printf("[Server] [Stream] req=%s 首字响应耗时: %.2fs", requestID, time.Since(startTime).Seconds())
+		}
 		// 错误 chunk（重试耗尽）：发 OAI error 事件 + [DONE] 后终止。
 		if ch.Err != nil {
 			s.writeStreamError(write, ch.Err, requestID, model)
@@ -464,7 +472,7 @@ func (s *Server) withRecover(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
-				log.Printf("[Server] panic recovered: %v", rec)
+				log.Printf("[Server] panic recovered: %v\n%s", rec, debug.Stack())
 				s.oaiError(w, http.StatusInternalServerError, "服务内部错误，请联系管理员 (internal error)", "server_error")
 			}
 		}()
@@ -491,7 +499,7 @@ type requestIDKey struct{}
 
 // RequestIDFromContext 取请求上下文里的 request-id（无则空串）。供需要追踪的下游代码用。
 func RequestIDFromContext(ctx context.Context) string {
-	if v, ok := ctx.Value(requestIDKey{}).(string); ok {
+	if v, ok := ctx.Value("reqID").(string); ok {
 		return v
 	}
 	return ""
@@ -553,7 +561,7 @@ func (s *Server) withMetrics(next http.Handler) http.Handler {
 		reqID := reqID24()
 		w.Header().Set("X-Request-Id", reqID)
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
-		ctx := context.WithValue(r.Context(), requestIDKey{}, reqID)
+		ctx := context.WithValue(r.Context(), "reqID", reqID)
 
 		start := time.Now()
 		s.metrics.StartRequest()

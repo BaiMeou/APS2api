@@ -183,7 +183,7 @@ func (s *Server) adminTestAll(w http.ResponseWriter, _ *http.Request) {
 				log.Printf("[Admin] [TestAll] 开始测试节点: %s (%s)", node.Name, node.Type)
 
 				// 1. 创建节点专用的 Session
-				sess, err := s.vc.Net().CreateSession(15, node.RawURI)
+				sess, err := s.vc.Net().CreateSession(15, node.RawURI, "admin-test-all")
 				var testErr error
 				if err == nil {
 					// 2. 模拟 recaptcha 完整的 token 获取流程，将其作为获取速度的实际指标
@@ -229,7 +229,7 @@ func (s *Server) adminTestNode(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	start := time.Now()
-	sess, err := s.vc.Net().CreateSession(15, body.RawURI)
+	sess, err := s.vc.Net().CreateSession(15, body.RawURI, "admin-test-node")
 	var testErr error
 	if err == nil {
 		testErr = fetchRecaptchaTokenWithSess(ctx, sess)

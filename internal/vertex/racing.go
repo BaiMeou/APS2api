@@ -100,6 +100,14 @@ func RunParallel[T any](ctx context.Context, cfg config.AppConfig, op func(ctx c
 			}
 			lastErr = res.err
 			if ctx.Err() == nil && res.err != context.Canceled {
+				name := res.uri
+				for _, c := range cands {
+					if c.RawURI == res.uri {
+						name = c.Name
+						break
+					}
+				}
+				log.Printf("[Racing] 节点 %s 失败，原因: %s", name, res.err.Error())
 				nodes.RecordTest(res.uri, false, 0, res.err.Error())
 			}
 			startNext()
@@ -189,6 +197,14 @@ loop:
 				break loop
 			}
 			if ctx.Err() == nil && r.err != context.Canceled {
+				name := r.uri
+				for _, c := range cands {
+					if c.RawURI == r.uri {
+						name = c.Name
+						break
+					}
+				}
+				log.Printf("[Racing] 节点 %s 失败，原因: %s", name, r.err.Error())
 				nodes.RecordTest(r.uri, false, 0, r.err.Error())
 			}
 		case <-ctx.Done():

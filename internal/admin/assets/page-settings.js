@@ -8,6 +8,7 @@ const SETTINGS_FIELDS = [
   { k: 'force_no_stream', label: '强制非流式', type: 'bool', desc: '把所有流式请求降级为非流式' },
   { k: 'anti_tracking', label: '反追踪', type: 'bool', desc: '移除可能被用于追踪的请求特征' },
   { k: 'drop_max_tokens', label: '移除 maxOutputTokens', type: 'bool', desc: '移除输出 token 上限，让模型自由输出' },
+  { k: 'debug_mode', label: 'Debug 日志', type: 'bool', desc: '开启更详细的错误与负载调试日志' },
 ];
 let curSettings = {};
 async function loadSettings() {

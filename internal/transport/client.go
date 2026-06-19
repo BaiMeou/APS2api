@@ -20,7 +20,8 @@ type Response = http.Response
 
 // Session 封装一个独立的 tls-client，服务于单次逻辑请求。
 type Session struct {
-	client tls_client.HttpClient
+	client   tls_client.HttpClient
+	ProxyURI string
 }
 
 func (s *Session) Do(ctx context.Context, method, url string, header http.Header, body io.Reader) (*http.Response, error) {
@@ -86,7 +87,7 @@ func pickProfile() profiles.ClientProfile {
 }
 
 // injectProxy 统一处理网络代理挂载，如果代理初始化失败，返回 error
-func injectProxy(opts []tls_client.HttpClientOption, proxyURI string) ([]tls_client.HttpClientOption, error) {
+func injectProxy(opts []tls_client.HttpClientOption, proxyURI string, reqID string) ([]tls_client.HttpClientOption, error) {
 	if proxyURI == "" {
 		return opts, nil
 	}
@@ -96,7 +97,7 @@ func injectProxy(opts []tls_client.HttpClientOption, proxyURI string) ([]tls_cli
 	}
 
 	// 订阅节点，获取并挂载内部 Dialer
-	dialCtx, err := getOrStartProxyDialer(proxyURI)
+	dialCtx, err := getOrStartProxyDialer(proxyURI, reqID)
 	if err != nil {
 		return nil, fmt.Errorf("节点内部 Dialer 启动失败: %w", err)
 	}
@@ -106,7 +107,7 @@ func injectProxy(opts []tls_client.HttpClientOption, proxyURI string) ([]tls_cli
 }
 
 // CreateSession 创建一个新 Session：随机 Chrome 指纹 + 可选代理 + 独立 cookie jar。
-func (c *NetworkClient) CreateSession(timeoutSec int, proxyURI string) (*Session, error) {
+func (c *NetworkClient) CreateSession(timeoutSec int, proxyURI string, reqID string) (*Session, error) {
 	opts := []tls_client.HttpClientOption{
 		tls_client.WithTimeoutSeconds(timeoutSec),
 		tls_client.WithClientProfile(pickProfile()),
@@ -115,7 +116,7 @@ func (c *NetworkClient) CreateSession(timeoutSec int, proxyURI string) (*Session
 
 	// 使用 injectProxy 挂载代理，失败则直接熔断，坚决不走静默直连！
 	var err error
-	opts, err = injectProxy(opts, proxyURI)
+	opts, err = injectProxy(opts, proxyURI, reqID)
 	if err != nil {
 		return nil, err
 	}
@@ -124,5 +125,5 @@ func (c *NetworkClient) CreateSession(timeoutSec int, proxyURI string) (*Session
 	if err != nil {
 		return nil, err
 	}
-	return &Session{client: client}, nil
+	return &Session{client: client, ProxyURI: proxyURI}, nil
 }

@@ -142,7 +142,8 @@ func (c *VertexAIClient) completeInner(ctx context.Context, model string, gemini
 	isFirstAuth := true
 	attempt := 0
 
-	sess, err := c.net.CreateSession(180, proxyURI)
+	reqID, _ := ctx.Value("reqID").(string)
+	sess, err := c.net.CreateSession(180, proxyURI, reqID)
 	if err != nil {
 		// 节点初始化失败，属于严重的内部网络错误，直接退出熔断
 		return nil, NewInternalError("create session: " + err.Error())
@@ -209,7 +210,7 @@ func (c *VertexAIClient) completeInner(ctx context.Context, model string, gemini
 				return nil, ve
 			}
 			sess.Close()
-			newSess, e := c.net.CreateSession(180, proxyURI)
+			newSess, e := c.net.CreateSession(180, proxyURI, reqID)
 			if e != nil {
 				return nil, NewInternalError("recreate session: " + e.Error())
 			}
@@ -248,7 +249,8 @@ func (c *VertexAIClient) completeInner(ctx context.Context, model string, gemini
 }
 
 func (c *VertexAIClient) executeCompleteRequest(ctx context.Context, sess *transport.Session, model string, geminiPayload map[string]any, recaptchaToken string, _ bool) (map[string]any, error) {
-	log.Printf("[Vertex] [executeCompleteRequest] 准备发送请求: 模型=%s", model)
+	reqID, _ := ctx.Value("reqID").(string)
+	log.Printf("[Vertex] [executeCompleteRequest] 准备发送请求: 模型=%s, reqID=%s, proxyURI=%s", model, reqID, sess.ProxyURI)
 	cfg := config.Load()
 	newBody := buildRequestPayload(model, geminiPayload, recaptchaToken, cfg)
 	buf, err := spool.EncodeJSON(newBody)
@@ -271,6 +273,10 @@ func (c *VertexAIClient) executeCompleteRequest(ctx context.Context, sess *trans
 	}
 
 	if status != 200 {
+		if status == 400 {
+			debugBody, _ := json.Marshal(newBody["variables"])
+			log.Printf("[Vertex] 收到 400 Bad Request, Variables Payload: %s", string(debugBody))
+		}
 		errText := string(raw)
 		if status == 401 || status == 403 ||
 			strings.Contains(errText, "Failed to verify action") ||
@@ -292,6 +298,12 @@ func (c *VertexAIClient) executeCompleteRequest(ctx context.Context, sess *trans
 
 	if result.HasError && len(result.Parts) == 0 {
 		errMsg := result.ErrorMessage
+
+		if cfg.DebugMode {
+			geminiPayloadStr, _ := json.Marshal(geminiPayload)
+			log.Printf("[DEBUG] Payload 打印: executeCompleteRequest 报错 400, geminiPayload: %s", string(geminiPayloadStr))
+		}
+
 		isAuth := strings.Contains(errMsg, "Failed to verify action") ||
 			strings.Contains(errMsg, "The caller does not have permission")
 		if isAuth {
