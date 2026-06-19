@@ -221,6 +221,7 @@ async function testAllNodes() {
   async function worker() {
     while (next < total) {
       const node = enabled[next++];
+      progressDetail.textContent = '正在测试: ' + node.name;
       let result;
       try {
         result = await API.nodes.test(node.raw_uri, { auto_disable: true });

@@ -16,7 +16,7 @@ const API = {
   },
   keys: {
     list() { return API.raw('/api/admin/keys'); },
-    add(n, k) { return API.raw('/api/admin/keys', { method: 'POST', body: JSON.stringify({ name: n, key: k }) }); },
+    add(n, k, desc) { return API.raw('/api/admin/keys', { method: 'POST', body: JSON.stringify({ name: n, key: k, description: desc }) }); },
     del(n) { return API.raw('/api/admin/keys/' + encodeURIComponent(n), { method: 'DELETE' }); },
   },
   models: {
