@@ -328,6 +328,16 @@ func (s *Server) streamChatCompletions(ctx context.Context, w http.ResponseWrite
 		return true
 	})
 
+	writeSilent := func(line string) bool {
+		if _, err := io.WriteString(w, line); err != nil {
+			return false
+		}
+		if canFlush {
+			flusher.Flush()
+		}
+		return true
+	}
+
 	// 流式正常结束后：空响应检测 + 兜底 finish + [DONE]。
 	if !gotContent {
 		// 上游 0-token 空回 → 明确报错让客户端重试，而非正常空结束（EmptyResponseError 分支）。
@@ -338,9 +348,9 @@ func (s *Server) streamChatCompletions(ctx context.Context, w http.ResponseWrite
 	if !hasFinish {
 		base := s.streamChunkBase(model, requestID)
 		base["choices"] = []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}}
-		_ = write(s.sseEvent(base))
+		writeSilent(s.sseEvent(base))
 	}
-	_ = write("data: [DONE]\n\n")
+	writeSilent("data: [DONE]\n\n")
 }
 
 // writeStreamError 发一条 OAI 错误事件 + [DONE]。安全拦截 → finish_reason=content_filter（不报错）；

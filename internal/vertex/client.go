@@ -3,6 +3,7 @@ package vertex
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -267,6 +268,9 @@ func (c *VertexAIClient) executeCompleteRequest(ctx context.Context, sess *trans
 
 	status, raw, err := sess.DoAndRead(ctx, "POST", batchGraphqlURL, header, reader)
 	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil, err
+		}
 		return nil, NewInternalError("upstream request: " + err.Error())
 	}
 
