@@ -423,19 +423,24 @@ func cleanFunctionParameters(schema any) any {
 }
 
 // schemaUnsupportedKeys 是 Vertex AI 原生 Schema 不支持、需剥离的 JSON-Schema 关键字。
+// 注意：Gemini API 原生支持 default/nullable/examples（官方 Schema 规范有定义），
+// 只删真正不支持的 $schema/$defs/allOf 等 JSON-Schema 元关键字，否则会丢失参数语义。
 var schemaUnsupportedKeys = map[string]bool{
 	"$schema": true, "$id": true, "$defs": true, "$ref": true, "definitions": true,
 	"additionalProperties": true, "patternProperties": true, "unevaluatedProperties": true,
 	"dependentSchemas": true, "if": true, "then": true, "else": true,
 	"allOf": true, "anyOf": true, "oneOf": true, "not": true,
-	"examples": true, "default": true, "nullable": true,
+	"title": true,
 }
 
 // toNativeSchema 把标准 JSON Schema 转为 Vertex AI 匿名 UI 端点要求的原生 Map-style Schema。
-// 三处关键差异（不这么转上游会 400）：
-//   - type 必须大写枚举（STRING/OBJECT/INTEGER...）；type 联合（["string","null"]）取首个非 null。
+// 关键差异（不这么转上游会 400 或忽略 schema）：
+//   - type 必须大写枚举（STRING/OBJECT/INTEGER...）；type 联合（["string","null"]）取首个非 null；
+//     未知类型兜底 STRING（防上游静默忽略整个工具声明）。
 //   - properties 从 dict 转为 [{key, value}] 列表（递归 value）。
-//   - items 递归转换；剥离 $schema/additionalProperties 等不支持关键字。
+//   - items 递归转换；剥离不支持关键字。
+//   - 数值约束（minItems/maxItems/minLength/maxLength/minProperties/maxProperties）转字符串
+//     （原生 schema 规范要求 string，不转会被静默忽略导致参数约束丢失、模型不调工具）。
 func toNativeSchema(schema any) any {
 	m, ok := schema.(map[string]any)
 	if !ok {
@@ -449,7 +454,7 @@ func toNativeSchema(schema any) any {
 		out[k] = v
 	}
 
-	// type：联合归一 + 大写。
+	// type：联合归一 + 大写 + 未知值兜底 STRING。
 	switch t := out["type"].(type) {
 	case []any:
 		picked := "string"
@@ -462,6 +467,16 @@ func toNativeSchema(schema any) any {
 		out["type"] = strings.ToUpper(picked)
 	case string:
 		out["type"] = strings.ToUpper(t)
+	default:
+		out["type"] = "OBJECT"
+	}
+	// 未知类型兜底 STRING（只接受 6 种合法枚举，其余一律 STRING）。
+	validTypes := map[string]bool{
+		"STRING": true, "INTEGER": true, "NUMBER": true,
+		"BOOLEAN": true, "ARRAY": true, "OBJECT": true,
+	}
+	if !validTypes[out["type"].(string)] {
+		out["type"] = "STRING"
 	}
 
 	// properties：dict → [{key, value}] 列表（递归）。
@@ -482,6 +497,24 @@ func toNativeSchema(schema any) any {
 	if items, ok := out["items"].(map[string]any); ok {
 		out["items"] = toNativeSchema(items)
 	}
+
+	// 数值约束 → 字符串（原生 schema 规范要求 string）。
+	numericConstraints := []string{"minItems", "maxItems", "minProperties", "maxProperties", "minLength", "maxLength"}
+	for _, field := range numericConstraints {
+		if v, ok := out[field]; ok && v != nil {
+			switch n := v.(type) {
+			case float64:
+				out[field] = strconv.FormatFloat(n, 'f', 0, 64)
+			case int:
+				out[field] = strconv.Itoa(n)
+			case int64:
+				out[field] = strconv.FormatInt(n, 10)
+			case string:
+				// 已经是字符串，保持
+			}
+		}
+	}
+
 	return out
 }
 

@@ -628,12 +628,13 @@ func BuildVertexVariables(model string, geminiPayload map[string]any, cfg config
 	handleSystemInstruction(vars)
 
 	// contents 归一链（两次 normalize 夹 inlineData 归一，
-	// 再 base64 规范化 / 过滤空 parts / thoughtSignature 编码）
+	// 再 base64 规范化 / 连续同角色合并 / 过滤空 parts / thoughtSignature 编码）
 	if c, ok := vars["contents"]; ok {
 		c = normalizeContents(c)
 		c = handleInlineDataCase(c)
 		c = normalizeContents(c)
 		c = HandleBase64InContents(c)
+		c = mergeContiguousRoles(c) // 相邻同 role 的 content 合并为一个（多轮工具结果防 400）
 		c = filterEmptyContents(c)
 		c = EncodeThoughtSignature(c, 0)
 		vars["contents"] = c
@@ -1006,6 +1007,46 @@ func filterEmptyContents(contents any) any {
 		}
 	}
 	return filtered
+}
+
+// mergeContiguousRoles 合并相邻同 role 的 content。
+//
+// OpenAI 多轮工具调用天然产生连续同角色结构：
+//
+//	role=model:    [functionCall_A, functionCall_B]   ← 一次两个工具调用
+//	role=function: [functionResponse_A]               ← 工具 A 结果（独立 message）
+//	role=function: [functionResponse_B]               ← 工具 B 结果（独立 message，连续同 role！）
+//
+// Vertex AI 要求相邻 content 的 role 必须交替，连续同 role 会 400。
+// 此函数把相邻同 role 的 parts 合并到第一个 content 里，删除后续重复 content。
+func mergeContiguousRoles(contents any) any {
+	list, ok := contents.([]any)
+	if !ok || len(list) == 0 {
+		return contents
+	}
+
+	merged := []any{list[0]}
+	for _, c := range list[1:] {
+		cm, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		prev, ok := merged[len(merged)-1].(map[string]any)
+		if !ok {
+			merged = append(merged, cm)
+			continue
+		}
+		role, _ := cm["role"].(string)
+		prevRole, _ := prev["role"].(string)
+		if role == prevRole {
+			prevParts := asAnySlice(prev["parts"])
+			curParts := asAnySlice(cm["parts"])
+			prev["parts"] = append(prevParts, curParts...)
+		} else {
+			merged = append(merged, cm)
+		}
+	}
+	return merged
 }
 
 // buildGenerationConfig 构建 generationConfig（里程碑1 无 kwargs）。
