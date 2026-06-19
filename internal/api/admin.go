@@ -437,7 +437,7 @@ func (s *Server) adminGetKeys(w http.ResponseWriter, _ *http.Request) {
 	}
 	out := make([]any, 0, len(entries))
 	for _, e := range entries {
-		out = append(out, map[string]any{"name": e.Name, "key_masked": maskKey(e.Key)})
+		out = append(out, map[string]any{"name": e.Name, "key": e.Key, "key_masked": maskKey(e.Key)})
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"keys": out})
 }
@@ -472,7 +472,7 @@ func (s *Server) adminAddKey(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusInternalServerError, adminErr("写入密钥失败 (failed to write keys)"))
 		return
 	}
-	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true, "key": key})
 }
 
 // adminDeleteKey 处理 DELETE /api/admin/keys/{name}：删除并持久化；未找到返回 404。
