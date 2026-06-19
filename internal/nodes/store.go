@@ -446,7 +446,7 @@ func SelectForParallel(k int) []Node {
 	var selected []Node
 	for i := 0; i < k && len(scored) > 0; i++ {
 		r := rand.Float64() * totalWeight
-		idx := 0
+		idx := len(weights) - 1
 		for j, w := range weights {
 			r -= w
 			if r <= 0 {

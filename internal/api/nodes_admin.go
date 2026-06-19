@@ -199,12 +199,12 @@ func (s *Server) adminTestAll(w http.ResponseWriter, _ *http.Request) {
 				} else {
 					log.Printf("[Admin] [TestAll] 节点 %s 测试成功, recaptcha 耗时: %.0fms", node.Name, duration)
 				}
-			success := testErr == nil
-			nodes.RecordTest(node.RawURI, success, duration, errToStr(testErr))
-			if !success {
-				nodes.BatchUpdateNodesDisabled([]string{node.RawURI}, true)
-			}
-		}(n)
+				success := testErr == nil
+				nodes.RecordTest(node.RawURI, success, duration, errToStr(testErr))
+				if !success {
+					nodes.BatchUpdateNodesDisabled([]string{node.RawURI}, true)
+				}
+			}(n)
 		}
 		wg.Wait()
 		log.Printf("[Admin] [TestAll] 全局节点测试全部结束")
