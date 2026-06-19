@@ -37,7 +37,15 @@ build() {
   # 附带的启动脚本/服务文件（按平台传入）
   for f in "$@"; do cp "$f" "$stage/"; done
 
-  (cd "$stage" && zip -rq "../$pkg.zip" ./* && cd .. && rm -rf "$pkg")
+  # 优先用 zip，没有则退回 7z（Windows 装了 7-Zip 即可）
+  if command -v zip >/dev/null 2>&1; then
+    (cd "$stage" && zip -rq "../$pkg.zip" ./* && cd .. && rm -rf "$pkg")
+  elif command -v 7z >/dev/null 2>&1; then
+    (cd "$stage" && 7z a -tzip -mx=9 "../$pkg.zip" ./* >/dev/null && cd .. && rm -rf "$pkg")
+  else
+    echo "错误：找不到 zip 也没有 7z，无法打包" >&2
+    exit 1
+  fi
   echo "    -> $OUT/$pkg.zip"
 }
 
