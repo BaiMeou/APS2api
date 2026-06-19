@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"strings"
@@ -247,10 +248,14 @@ func (c *VertexAIClient) executeStreamingAttempt(ctx context.Context, sess *tran
 	}
 
 	// 增量扫描上游流，逐个完整 JSON 对象提取 chunk。
-	return scanStream(sr.Body, func(obj map[string]any) (stop bool, err error) {
+	scanErr := scanStream(sr.Body, func(obj map[string]any) (stop bool, err error) {
 		// 从单个上游对象提取（可能多个）chunk，逐个 emit；命中真实 finishReason 即结束。
 		return processStreamingObject(obj, emit)
 	})
+	if errors.Is(scanErr, context.Canceled) {
+		return scanErr
+	}
+	return scanErr
 }
 
 // scanStream 跨 chunk 增量扫描花括号配对，逐个完整 JSON 对象回调 onObject（O(n)）。
@@ -356,6 +361,9 @@ func scanStream(body io.Reader, onObject func(map[string]any) (bool, error)) err
 		}
 
 		if readErr != nil {
+			if errors.Is(readErr, context.Canceled) || errors.Is(readErr, context.DeadlineExceeded) {
+				return readErr
+			}
 			// EOF 或读错误：流结束（正常 EOF 直接返回 nil，上层会按 got_content 判定空响应）。
 			return nil
 		}

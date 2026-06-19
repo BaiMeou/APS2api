@@ -2,6 +2,7 @@ package vertex
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -86,32 +87,29 @@ func RunParallel[T any](ctx context.Context, cfg config.AppConfig, op func(ctx c
 		select {
 		case res := <-resCh:
 			atomic.AddInt32(&active, -1)
-			if res.err == nil {
-				name := res.uri
-				for _, c := range cands {
-					if c.RawURI == res.uri {
-						name = c.Name
-						break
-					}
+			name := res.uri
+			for _, c := range cands {
+				if c.RawURI == res.uri {
+					name = c.Name
+					break
 				}
-				log.Printf("[Vertex] [RunParallel] 节点胜出: %s", name)
+			}
+			if res.err == nil {
+				log.Printf("[Racing] 节点 %s 成功", name)
 				nodes.RecordTest(res.uri, true, 50, "")
-				return res.val, nil
+				if ctx.Err() == nil {
+					return res.val, nil
+				}
+			} else if res.err != context.Canceled && !errors.Is(res.err, context.Canceled) {
+				log.Printf("[Racing] 节点 %s 失败: %s", name, res.err.Error())
+				nodes.RecordTest(res.uri, false, 0, res.err.Error())
+			} else {
+				log.Printf("[Racing] 节点 %s 被取消", name)
 			}
 			lastErr = res.err
-			if ctx.Err() == nil && res.err != context.Canceled {
-				name := res.uri
-				for _, c := range cands {
-					if c.RawURI == res.uri {
-						name = c.Name
-						break
-					}
-				}
-				log.Printf("[Racing] 节点 %s 失败，原因: %s", name, res.err.Error())
-				nodes.RecordTest(res.uri, false, 0, res.err.Error())
-			}
 			startNext()
 		case <-ctx.Done():
+			log.Printf("[Racing] 客户端断开，停止并行竞争")
 			return zero, ctx.Err()
 		}
 	}
@@ -183,31 +181,27 @@ loop:
 		select {
 		case r := <-resCh:
 			atomic.AddInt32(&active, -1)
-			if r.err == nil {
-				winner = &r
-				name := r.uri
-				for _, c := range cands {
-					if c.RawURI == r.uri {
-						name = c.Name
-						break
-					}
+			name := r.uri
+			for _, c := range cands {
+				if c.RawURI == r.uri {
+					name = c.Name
+					break
 				}
-				log.Printf("[Vertex] [StreamParallel] 节点胜出: %s", name)
-				nodes.RecordTest(r.uri, true, 50, "")
-				break loop
 			}
-			if ctx.Err() == nil && r.err != context.Canceled {
-				name := r.uri
-				for _, c := range cands {
-					if c.RawURI == r.uri {
-						name = c.Name
-						break
-					}
+			if r.err == nil {
+				if winner == nil {
+					winner = &r
+					log.Printf("[Vertex] [StreamParallel] 节点胜出: %s", name)
+					nodes.RecordTest(r.uri, true, 50, "")
+					break loop
 				}
-				log.Printf("[Racing] 节点 %s 失败，原因: %s", name, r.err.Error())
+				log.Printf("[Vertex] [StreamParallel] 节点备用成功: %s", name)
+			} else if ctx.Err() == nil && r.err != context.Canceled && !errors.Is(r.err, context.Canceled) {
+				log.Printf("[Racing] 节点 %s 失败: %s", name, r.err.Error())
 				nodes.RecordTest(r.uri, false, 0, r.err.Error())
 			}
 		case <-ctx.Done():
+			log.Printf("[Racing] 客户端断开，停止并行竞争")
 			return
 		}
 	}
