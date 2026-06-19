@@ -66,7 +66,8 @@ func (c *VertexAIClient) executeStreamingWithRetries(ctx context.Context, model 
 	contentYielded := false
 	var lastError *VertexError
 
-	sess, err := c.net.CreateSession(180, proxyURI)
+	reqID, _ := ctx.Value("reqID").(string)
+	sess, err := c.net.CreateSession(180, proxyURI, reqID)
 	if err != nil {
 		yield(StreamChunk{Err: NewInternalError("create session: " + err.Error())})
 		return
@@ -150,7 +151,7 @@ retryLoop:
 			}
 			// 429：销毁旧 session 重建新的，换 token。
 			sess.Close()
-			newSess, e := c.net.CreateSession(180, proxyURI)
+			newSess, e := c.net.CreateSession(180, proxyURI, reqID)
 			if e != nil {
 				yield(StreamChunk{Err: NewInternalError("recreate session: " + e.Error())})
 				return
@@ -199,7 +200,8 @@ retryLoop:
 // emit 返回 false（客户端断开）时扫描正常停止、返回 nil（StreamChat 据 chunkCount>0 收尾，不重试）。
 // ctx 绑定到上游流连接：ctx 取消时 Body.Read 报错，scanStream 干净结束（返回 nil，不 panic）。
 func (c *VertexAIClient) executeStreamingAttempt(ctx context.Context, sess *transport.Session, model string, geminiPayload map[string]any, recaptchaToken string, _ bool, emit func(map[string]any) bool) error {
-	log.Printf("[Vertex] [executeStreamingAttempt] 准备发送流式请求: 模型=%s", model)
+	reqID, _ := ctx.Value("reqID").(string)
+	log.Printf("[Vertex] [executeStreamingAttempt] 准备发送流式请求: 模型=%s, reqID=%s, proxyURI=%s", model, reqID, sess.ProxyURI)
 	cfg := config.Load()
 	newBody := buildRequestPayload(model, geminiPayload, recaptchaToken, cfg)
 	// 上游请求 payload 序列化到 spool 缓冲（大媒体自动落盘）。流式：请求体在 DoStream 发送期被读取，
@@ -226,6 +228,10 @@ func (c *VertexAIClient) executeStreamingAttempt(ctx context.Context, sess *tran
 
 	// HTTP 错误：读完 error body 后按状态映射（与非流式 executeCompleteRequest 一致）。
 	if sr.StatusCode != 200 {
+		if sr.StatusCode == 400 {
+			debugBody, _ := json.Marshal(newBody["variables"])
+			log.Printf("[Vertex] [Stream] 收到 400 Bad Request, Variables Payload: %s", string(debugBody))
+		}
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(sr.Body)
 		errText := buf.String()
@@ -460,6 +466,7 @@ func processStreamingObject(obj map[string]any, emit func(map[string]any) bool) 
 func emitAndCheckFinish(chunk map[string]any, emit func(map[string]any) bool) (stopByClient bool, done bool) {
 	if !emit(chunk) {
 		// 客户端断开 / 上层要求停止。
+		log.Printf("[Stream] 客户端主动断开，导致流结束")
 		return true, true
 	}
 	fr := chunkFinishReason(chunk)

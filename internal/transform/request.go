@@ -3,6 +3,7 @@ package transform
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"regexp"
 	"strings"
 
@@ -38,6 +39,11 @@ var supportedVarFields = []string{
 // 出错（messages 空、max_tokens<1、tool_choice 校验）返回普通 error，由 api 层映射为 400。
 func ConvertChatRequest(body map[string]any, cfg config.AppConfig) (string, map[string]any, error) {
 	model, _ := body["model"].(string)
+
+	if cfg.DebugMode {
+		geminiPayloadStr, _ := json.Marshal(body)
+		log.Printf("[DEBUG] Payload 打印: ConvertChatRequest 转换前 payload: %s", string(geminiPayloadStr))
+	}
 
 	messagesRaw, ok := body["messages"].([]any)
 	if !ok || len(messagesRaw) == 0 {

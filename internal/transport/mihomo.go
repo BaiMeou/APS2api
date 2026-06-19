@@ -25,7 +25,7 @@ var (
 	proxyMutex sync.RWMutex
 )
 
-func getOrStartProxyDialer(uri string) (func(ctx context.Context, network, addr string) (net.Conn, error), error) {
+func getOrStartProxyDialer(uri string, reqID string) (func(ctx context.Context, network, addr string) (net.Conn, error), error) {
 	proxyMutex.Lock()
 	if info, ok := proxyMap[uri]; ok && !info.closed {
 		info.lastUsedAt = time.Now()
@@ -34,6 +34,8 @@ func getOrStartProxyDialer(uri string) (func(ctx context.Context, network, addr 
 		return makeDialer(p), nil
 	}
 	proxyMutex.Unlock()
+
+	log.Printf("[Transport] reqID=%s 触发代理初始化: %s", reqID, uri)
 
 	outMap, err := ParseURI(uri)
 	if err != nil {
@@ -73,6 +75,7 @@ func makeDialer(p constant.Proxy) func(ctx context.Context, network, addr string
 
 		conn, err := p.DialContext(ctx, metadata)
 		if err != nil {
+			log.Printf("[Transport] Mihomo 拨号失败 [%s:%d]: %v", host, portInt, err)
 			return nil, err
 		}
 
