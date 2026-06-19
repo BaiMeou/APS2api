@@ -87,7 +87,14 @@ func RunParallel[T any](ctx context.Context, cfg config.AppConfig, op func(ctx c
 		case res := <-resCh:
 			atomic.AddInt32(&active, -1)
 			if res.err == nil {
-				log.Printf("[Vertex] [RunParallel] 节点胜出: %s", res.uri)
+				name := res.uri
+				for _, c := range cands {
+					if c.RawURI == res.uri {
+						name = c.Name
+						break
+					}
+				}
+				log.Printf("[Vertex] [RunParallel] 节点胜出: %s", name)
 				nodes.RecordTest(res.uri, true, 50, "")
 				return res.val, nil
 			}
@@ -170,7 +177,14 @@ loop:
 			atomic.AddInt32(&active, -1)
 			if r.err == nil {
 				winner = &r
-				log.Printf("[Vertex] [StreamParallel] 节点胜出: %s", r.uri)
+				name := r.uri
+				for _, c := range cands {
+					if c.RawURI == r.uri {
+						name = c.Name
+						break
+					}
+				}
+				log.Printf("[Vertex] [StreamParallel] 节点胜出: %s", name)
 				nodes.RecordTest(r.uri, true, 50, "")
 				break loop
 			}

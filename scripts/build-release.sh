@@ -32,7 +32,7 @@ build() {
   # 附带的启动脚本/服务文件（按平台传入）
   for f in "$@"; do cp "$f" "$stage/"; done
 
-  (cd "$OUT" && zip -rq "$pkg.zip" "$pkg" && rm -rf "$pkg")
+  (cd "$stage" && zip -rq "../$pkg.zip" ./* && cd .. && rm -rf "$pkg")
   echo "    -> $OUT/$pkg.zip"
 }
 

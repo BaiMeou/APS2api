@@ -91,9 +91,9 @@ function Build-Platform {
         Remove-Item $ZipPath -Force
     }
     
-    Push-Location $OutDir
+    Push-Location $StageDir
     # 使用 -Force 覆盖已存在的 zip
-    Compress-Archive -Path $Pkg -DestinationPath $ZipPath -Force
+    Compress-Archive -Path * -DestinationPath $ZipPath -Force
     Pop-Location
 
     # 清理未压缩的临时 Stage 文件夹
