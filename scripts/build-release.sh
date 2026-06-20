@@ -16,7 +16,9 @@ cd "$(dirname "$0")/.."
 
 VERSION="${1:-dev}"
 OUT="dist"
-LDFLAGS="-s -w -X main.version=${VERSION}"
+COMMIT="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+LDFLAGS="-s -w -X main.version=${VERSION} -X main.buildCommit=${COMMIT} -X main.buildTime=${BUILD_TIME}"
 
 rm -rf "$OUT"
 mkdir -p "$OUT"

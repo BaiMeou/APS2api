@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"syscall"
 	"time"
@@ -20,14 +21,31 @@ import (
 	"github.com/bsfdsagfadg/vertex/internal/metrics"
 	"github.com/bsfdsagfadg/vertex/internal/nodes"
 	"github.com/bsfdsagfadg/vertex/internal/spool"
+	"github.com/bsfdsagfadg/vertex/internal/telemetry"
 	"github.com/bsfdsagfadg/vertex/internal/transport"
 	"github.com/bsfdsagfadg/vertex/internal/vertex"
+)
+
+// version / buildCommit / buildTime 由构建脚本通过 -ldflags 注入。
+var (
+	version     = "dev"
+	buildCommit = "unknown"
+	buildTime   = "unknown"
 )
 
 // shutdownGrace 是优雅关闭时排干在途请求的最长等待。超时则强制结束（避免卡死部署）。
 const shutdownGrace = 25 * time.Second
 
 func main() {
+	// ---- 启动版权横幅 ----
+	log.Printf("╔══════════════════════════════════════════════════════════════╗")
+	log.Printf("║  Vertex AI Proxy  %-42s ║", version)
+	log.Printf("║  Copyright (c) 2026 BaiMeow. All rights reserved.          ║")
+	log.Printf("║  PolyForm Noncommercial License 1.0.0                      ║")
+	log.Printf("║  Build: %s / %s                                  ║", buildCommit, buildTime)
+	log.Printf("║  Platform: %s/%s                                       ║", runtime.GOOS, runtime.GOARCH)
+	log.Printf("╚══════════════════════════════════════════════════════════════╝")
+
 	cfg := config.Load()
 	metrics.Default.SetStart(time.Now().Unix())
 	spool.SetMaxSpillBytes(int64(cfg.MaxSpillMB) << 20) // 大请求/媒体序列化的磁盘溢出配额上限
@@ -46,6 +64,9 @@ func main() {
 
 	vc := vertex.NewVertexAIClient()
 	vc.StartTokenPool() // 启动 recaptcha token 获取器
+
+	// 启动匿名统计（默认开启，config 可关闭）。轻量心跳，不含用户隐私。
+	telemetry.Start(version, runtime.GOOS+"/"+runtime.GOARCH)
 
 	srv := api.NewServer(vc, keys, cfg)
 	httpServer := &http.Server{
@@ -80,6 +101,7 @@ func main() {
 			cancel()
 			transport.StopAllProxies()
 			vc.StopTokenPool()
+			telemetry.Stop()
 			close(shutdownDone)
 			return
 		}
