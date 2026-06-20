@@ -37,13 +37,16 @@ type AppConfig struct {
 	MaxRequestMB              int               `json:"max_request_mb"`
 
 	// 并发池与节点锁定配置
-	ActiveNodeURI         string `json:"active_node_uri"`
-	ParallelPoolEnabled   bool   `json:"parallel_pool_enabled"`
-	ParallelPoolSize      int    `json:"parallel_pool_size"`
-	ParallelPoolMaxRounds int    `json:"parallel_pool_max_rounds"`
-	DebugPprof            bool   `json:"debug_pprof"`
-	ParallelNodeTopK      int    `json:"parallel_node_top_k"`
-	DebugMode             bool   `json:"debug_mode"`
+	ActiveNodeURI            string `json:"active_node_uri"`
+	ParallelPoolEnabled      bool   `json:"parallel_pool_enabled"`
+	ParallelPoolSize         int    `json:"parallel_pool_size"`
+	ParallelPoolMaxRounds    int    `json:"parallel_pool_max_rounds"`
+	DebugPprof               bool   `json:"debug_pprof"`
+	ParallelNodeTopK         int    `json:"parallel_node_top_k"`
+	DebugMode                bool   `json:"debug_mode"`
+	ParallelPoolDelayDynamic bool   `json:"parallel_pool_delay_dynamic"`
+	ParallelPoolDelayMs      int    `json:"parallel_pool_delay_ms"`
+	RecaptchaExpireSeconds   int    `json:"recaptcha_expire_seconds"`
 
 	// 匿名遥测：仅发送实例 ID + 版本 + 平台，不含任何用户/网络/隐私数据。
 	// 用于了解软件的版本分布和活跃数。指针类型区分"未设置"和"显式 false"，未设置时默认开启。
@@ -64,6 +67,9 @@ func DefaultConfig() AppConfig {
 		ParallelPoolEnabled:       true,
 		ParallelPoolSize:          4,
 		ParallelNodeTopK:          80,
+		ParallelPoolDelayDynamic:  true,
+		ParallelPoolDelayMs:       500,
+		RecaptchaExpireSeconds:    60,
 	}
 }
 

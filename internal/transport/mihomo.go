@@ -6,6 +6,7 @@ package transport
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -55,6 +56,9 @@ func getOrStartProxyDialer(uri string, reqID string) (func(ctx context.Context, 
 	proxyMutex.Lock()
 	if old, ok := proxyMap[uri]; ok && !old.closed {
 		old.closed = true
+		if closer, ok := old.proxy.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
 	}
 	proxyMap[uri] = &proxyInfo{proxy: proxy, lastUsedAt: time.Now()}
 	proxyMutex.Unlock()
@@ -80,6 +84,10 @@ func makeDialer(p constant.Proxy) func(ctx context.Context, network, addr string
 
 		conn, err := p.DialContext(ctx, metadata)
 		if err != nil {
+			// 若是因为上下文取消导致拨号中止，属于并发竞速中的正常现象，直接退出，不打印误报
+			if ctx.Err() != nil || errors.Is(err, context.Canceled) {
+				return nil, err
+			}
 			log.Printf("[Transport] Mihomo 拨号失败 [%s:%d]: %v", host, portInt, err)
 			return nil, err
 		}
@@ -94,6 +102,9 @@ func RemoveProxy(uri string) {
 	if info, ok := proxyMap[uri]; ok {
 		if !info.closed {
 			info.closed = true
+			if closer, ok := info.proxy.(interface{ Close() error }); ok {
+				_ = closer.Close()
+			}
 			log.Printf("[Transport] 代理节点已清理释放: %s", nodes.GetNodeName(uri))
 		}
 		delete(proxyMap, uri)
@@ -125,6 +136,9 @@ func cleanupIdleProxies(maxIdle time.Duration) {
 		if now.Sub(info.lastUsedAt) > maxIdle {
 			if !info.closed {
 				info.closed = true
+				if closer, ok := info.proxy.(interface{ Close() error }); ok {
+					_ = closer.Close()
+				}
 				log.Printf("[Transport] 空闲代理已清理释放: %s", nodes.GetNodeName(uri))
 			}
 			delete(proxyMap, uri)
@@ -139,6 +153,9 @@ func StopAllProxies() {
 	for _, info := range proxyMap {
 		if !info.closed {
 			info.closed = true
+			if closer, ok := info.proxy.(interface{ Close() error }); ok {
+				_ = closer.Close()
+			}
 		}
 	}
 	proxyMap = make(map[string]*proxyInfo)

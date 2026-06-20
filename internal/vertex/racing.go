@@ -11,10 +11,22 @@ import (
 	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/bsfdsagfadg/vertex/internal/config"
 	"github.com/bsfdsagfadg/vertex/internal/nodes"
 )
+
+// safeResetTimer 安全重置定时器并排空通道，防止未读取的过期事件残留导致对冲轮询提前抢跑
+func safeResetTimer(t *time.Timer, d time.Duration) {
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
+	}
+	t.Reset(d)
+}
 
 func RunParallel[T any](ctx context.Context, cfg config.AppConfig, op func(ctx context.Context, proxyURI string) (T, error)) (T, error) {
 	cands := nodes.SelectForParallel(cfg.ParallelPoolSize)
@@ -27,7 +39,7 @@ func RunParallel[T any](ctx context.Context, cfg config.AppConfig, op func(ctx c
 		return op(ctx, proxy)
 	}
 
-	log.Printf("[Vertex] [RunParallel] 开启并发测速, %d 个节点参与", len(cands))
+	log.Printf("[Vertex] [RunParallel] 开启对冲延迟竞速, %d 个节点参与", len(cands))
 	for _, c := range cands {
 		log.Printf("[Vertex] [RunParallel] 参与节点: %s", c.Name)
 	}
@@ -41,63 +53,61 @@ func RunParallel[T any](ctx context.Context, cfg config.AppConfig, op func(ctx c
 		err error
 	}
 
-	resCh := make(chan result, cfg.ParallelPoolSize)
+	resCh := make(chan result, len(cands)+20)
 	var active int32
-	var mu sync.Mutex
 	activeKeys := make(map[string]bool)
-	round := 0
+	var mu sync.Mutex
 
-	startNext := func() {
+	launchNode := func(uri string) {
 		mu.Lock()
-		defer mu.Unlock()
-		if cfg.ParallelPoolMaxRounds > 0 && round >= cfg.ParallelPoolMaxRounds {
+		if activeKeys[uri] {
+			mu.Unlock()
 			return
 		}
-		roundCands := nodes.SelectForParallel(1)
-		for _, c := range roundCands {
-			if !activeKeys[c.RawURI] {
-				activeKeys[c.RawURI] = true
-				atomic.AddInt32(&active, 1)
-				go func(u string) {
-					v, err := op(ctxRace, u)
-					select {
-					case resCh <- result{u, v, err}:
-					case <-ctxRace.Done():
-					}
-				}(c.RawURI)
-				return
-			}
-		}
-		round++
-	}
-
-	for i := 0; i < cfg.ParallelPoolSize && i < len(cands); i++ {
-		mu.Lock()
-		activeKeys[cands[i].RawURI] = true
-		atomic.AddInt32(&active, 1)
+		activeKeys[uri] = true
 		mu.Unlock()
+
+		atomic.AddInt32(&active, 1)
 		go func(u string) {
 			v, err := op(ctxRace, u)
 			select {
 			case resCh <- result{u, v, err}:
 			case <-ctxRace.Done():
 			}
-		}(cands[i].RawURI)
+		}(uri)
 	}
 
+	// Start the first candidate immediately
+	launchNode(cands[0].RawURI)
+
+	// Determine Hedging Delay
+	hedgingDelay := 500 * time.Millisecond
+	if cfg.ParallelPoolDelayDynamic {
+		avgLat := nodes.GetAverageLatency()
+		hedgingDelay = time.Duration(avgLat) * time.Millisecond
+		if hedgingDelay < 100*time.Millisecond {
+			hedgingDelay = 100 * time.Millisecond
+		}
+		if hedgingDelay > 2000*time.Millisecond {
+			hedgingDelay = 2000 * time.Millisecond
+		}
+	} else if cfg.ParallelPoolDelayMs > 0 {
+		hedgingDelay = time.Duration(cfg.ParallelPoolDelayMs) * time.Millisecond
+	}
+
+	timer := time.NewTimer(hedgingDelay)
+	defer timer.Stop()
+
+	candIdx := 1
 	var lastErr error
 	var zero T
-	for atomic.LoadInt32(&active) > 0 {
+
+	for {
 		select {
 		case res := <-resCh:
 			atomic.AddInt32(&active, -1)
-			name := res.uri
-			for _, c := range cands {
-				if c.RawURI == res.uri {
-					name = c.Name
-					break
-				}
-			}
+			name := nodes.GetNodeName(res.uri)
+
 			if res.err == nil {
 				log.Printf("[Racing] 节点 %s 成功", name)
 				nodes.RecordTest(res.uri, true, 50, "")
@@ -107,21 +117,43 @@ func RunParallel[T any](ctx context.Context, cfg config.AppConfig, op func(ctx c
 			} else if res.err != context.Canceled && !errors.Is(res.err, context.Canceled) {
 				log.Printf("[Racing] 节点 %s 失败: %s", name, res.err.Error())
 				nodes.RecordTest(res.uri, false, 0, res.err.Error())
+				if ve := asVertexError(res.err); ve != nil && !ve.IsRetryable() {
+					log.Printf("[Racing] 节点 %s 触发不可重试的硬性错误，终止竞速", name)
+					cancel()
+					return zero, res.err
+				}
+
+				// Fast-path hedging: launch next candidate immediately on failure without waiting for timer
+				if candIdx < len(cands) {
+					launchNode(cands[candIdx].RawURI)
+					candIdx++
+					safeResetTimer(timer, hedgingDelay)
+				}
 			} else {
 				log.Printf("[Racing] 节点 %s 被取消", name)
 			}
 			lastErr = res.err
-			startNext()
+
+			if atomic.LoadInt32(&active) == 0 && candIdx >= len(cands) {
+				if lastErr != nil {
+					return zero, lastErr
+				}
+				return zero, fmt.Errorf("all nodes failed")
+			}
+
+		case <-timer.C:
+			// Hedged timeout reached, spin up next backup candidate
+			if candIdx < len(cands) {
+				launchNode(cands[candIdx].RawURI)
+				candIdx++
+				timer.Reset(hedgingDelay)
+			}
+
 		case <-ctx.Done():
 			log.Printf("[Racing] 客户端断开，停止并行竞争")
 			return zero, ctx.Err()
 		}
 	}
-
-	if lastErr != nil {
-		return zero, lastErr
-	}
-	return zero, fmt.Errorf("all nodes failed")
 }
 
 func StreamParallel(ctx context.Context, cfg config.AppConfig, op func(ctx context.Context, proxyURI string) <-chan StreamChunk, yield func(StreamChunk) bool) {
@@ -139,21 +171,36 @@ func StreamParallel(ctx context.Context, cfg config.AppConfig, op func(ctx conte
 		}
 		return
 	}
-	log.Printf("[Vertex] [StreamParallel] 开启并发测速, %d 个节点参与", len(cands))
+
+	log.Printf("[Vertex] [StreamParallel] 开启对冲延迟流式竞速, %d 个节点参与", len(cands))
 	for _, c := range cands {
 		log.Printf("[Vertex] [StreamParallel] 参与节点: %s", c.Name)
 	}
+
 	ctxRace, cancel := context.WithCancel(ctx)
 	defer cancel()
+
 	type res struct {
 		uri   string
 		ch    <-chan StreamChunk
 		first StreamChunk
 		err   error
 	}
-	resCh := make(chan res, len(cands))
+
+	resCh := make(chan res, len(cands)+20)
 	var active int32
-	for _, cand := range cands {
+	activeKeys := make(map[string]bool)
+	var mu sync.Mutex
+
+	launchNode := func(uri string) {
+		mu.Lock()
+		if activeKeys[uri] {
+			mu.Unlock()
+			return
+		}
+		activeKeys[uri] = true
+		mu.Unlock()
+
 		atomic.AddInt32(&active, 1)
 		go func(u string) {
 			ch := op(ctxRace, u)
@@ -177,38 +224,81 @@ func StreamParallel(ctx context.Context, cfg config.AppConfig, op func(ctx conte
 				}
 			case <-ctxRace.Done():
 			}
-		}(cand.RawURI)
+		}(uri)
 	}
+
+	// Launch first candidate immediately
+	launchNode(cands[0].RawURI)
+
+	// Determine Hedging Delay
+	hedgingDelay := 500 * time.Millisecond
+	if cfg.ParallelPoolDelayDynamic {
+		avgLat := nodes.GetAverageLatency()
+		hedgingDelay = time.Duration(avgLat) * time.Millisecond
+		if hedgingDelay < 100*time.Millisecond {
+			hedgingDelay = 100 * time.Millisecond
+		}
+		if hedgingDelay > 2000*time.Millisecond {
+			hedgingDelay = 2000 * time.Millisecond
+		}
+	} else if cfg.ParallelPoolDelayMs > 0 {
+		hedgingDelay = time.Duration(cfg.ParallelPoolDelayMs) * time.Millisecond
+	}
+
+	timer := time.NewTimer(hedgingDelay)
+	defer timer.Stop()
+
+	candIdx := 1
 	var winner *res
+
 loop:
-	for atomic.LoadInt32(&active) > 0 {
+	for {
 		select {
 		case r := <-resCh:
 			atomic.AddInt32(&active, -1)
-			name := r.uri
-			for _, c := range cands {
-				if c.RawURI == r.uri {
-					name = c.Name
-					break
-				}
-			}
+			name := nodes.GetNodeName(r.uri)
+
 			if r.err == nil {
-				if winner == nil {
-					winner = &r
-					log.Printf("[Vertex] [StreamParallel] 节点胜出: %s", name)
-					nodes.RecordTest(r.uri, true, 50, "")
-					break loop
-				}
-				log.Printf("[Vertex] [StreamParallel] 节点备用成功: %s", name)
+				winner = &r
+				log.Printf("[Vertex] [StreamParallel] 节点胜出: %s", name)
+				nodes.RecordTest(r.uri, true, 50, "")
+				break loop
 			} else if ctx.Err() == nil && r.err != context.Canceled && !errors.Is(r.err, context.Canceled) {
 				log.Printf("[Racing] 节点 %s 失败: %s", name, r.err.Error())
 				nodes.RecordTest(r.uri, false, 0, r.err.Error())
+				if ve := asVertexError(r.err); ve != nil && !ve.IsRetryable() {
+					log.Printf("[Racing] 节点 %s 触发不可重试的硬性错误，终止竞速", name)
+					cancel()
+					yield(StreamChunk{Err: ve})
+					return
+				}
+
+				// Fast-path hedging: launch immediately on error
+				if candIdx < len(cands) {
+					launchNode(cands[candIdx].RawURI)
+					candIdx++
+					safeResetTimer(timer, hedgingDelay)
+				}
 			}
+
+			if atomic.LoadInt32(&active) == 0 && candIdx >= len(cands) {
+				break loop
+			}
+
+		case <-timer.C:
+			// No first packet arrived within threshold, invoke fallback hedging candidate
+			if candIdx < len(cands) {
+				launchNode(cands[candIdx].RawURI)
+				candIdx++
+				timer.Reset(hedgingDelay)
+			}
+
 		case <-ctx.Done():
 			log.Printf("[Racing] 客户端断开，停止并行竞争")
 			return
 		}
 	}
+
 	if winner != nil {
 		if !yield(winner.first) {
 			return

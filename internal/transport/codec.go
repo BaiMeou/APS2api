@@ -69,19 +69,24 @@ func parseSimple(uri, typ string) (map[string]any, error) {
 		name = dec
 	}
 	out := map[string]any{"name": name, "type": typ, "server": u.Hostname(), "port": port}
+
+	username := ""
+	if u.User != nil {
+		username = u.User.Username()
+	}
 	if typ == "trojan" || typ == "hysteria2" {
-		out["password"] = u.User.Username()
+		out["password"] = username
 	} else {
-		out["uuid"] = u.User.Username()
+		out["uuid"] = username
 	}
 
 	sec := strings.ToLower(q.Get("security"))
-	if sec == "tls" || sec == "reality" || typ == "trojan" || typ == "hysteria2" || typ == "tuic" {
+	if sec == "reality" || sec == "tls" || typ == "trojan" || typ == "hysteria2" || typ == "tuic" {
 		out["tls"] = true
 		sni := firstNonEmpty(q.Get("sni"), u.Hostname())
 		out["sni"] = sni
 		out["servername"] = firstNonEmpty(q.Get("servername"), sni)
-		if queryFlag(q, "allowInsecure", "insecure") {
+		if sec != "reality" && queryFlag(q, "allowInsecure", "insecure") {
 			out["skip-cert-verify"] = true
 		}
 	}

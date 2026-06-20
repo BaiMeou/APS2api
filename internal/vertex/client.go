@@ -155,6 +155,11 @@ func (c *VertexAIClient) completeChatNSerial(ctx context.Context, model string, 
 
 func (c *VertexAIClient) completeInner(ctx context.Context, model string, geminiPayload map[string]any, proxyURI string) (map[string]any, error) {
 	maxRetries := c.maxRetries
+	cfg := config.Load()
+	if cfg.ParallelPoolEnabled {
+		// 并发池模式下，单节点无需在内部多次重试与等待，直接快速失败让并发池调度其他节点，实现零延迟无缝切换（力大砖飞）
+		maxRetries = 0
+	}
 	recaptchaToken := ""
 	isFirstAuth := true
 	attempt := 0
@@ -297,11 +302,17 @@ func (c *VertexAIClient) executeCompleteRequest(ctx context.Context, sess *trans
 	}
 
 	if status != 200 {
-		if status == 400 {
+		errText := string(raw)
+		if cfg.DebugMode {
+			debugReq, _ := json.Marshal(newBody)
+			log.Printf("[DEBUG] [CompleteChat] HTTP 报错! 状态码: %d", status)
+			log.Printf("[DEBUG] [CompleteChat] 完整请求体: %s", string(debugReq))
+			log.Printf("[DEBUG] [CompleteChat] 上游回复: %s", errText)
+		} else if status == 400 {
 			debugBody, _ := json.Marshal(newBody["variables"])
 			log.Printf("[Vertex] 收到 400 Bad Request, Variables Payload: %s", string(debugBody))
 		}
-		errText := string(raw)
+
 		if status == 401 || status == 403 ||
 			strings.Contains(errText, "Failed to verify action") ||
 			strings.Contains(errText, "The caller does not have permission") {
@@ -324,8 +335,10 @@ func (c *VertexAIClient) executeCompleteRequest(ctx context.Context, sess *trans
 		errMsg := result.ErrorMessage
 
 		if cfg.DebugMode {
-			geminiPayloadStr, _ := json.Marshal(geminiPayload)
-			log.Printf("[DEBUG] Payload 打印: executeCompleteRequest 报错 400, geminiPayload: %s", string(geminiPayloadStr))
+			debugReq, _ := json.Marshal(newBody)
+			log.Printf("[DEBUG] [CompleteChat] 业务层报错! errorMessage: %s", errMsg)
+			log.Printf("[DEBUG] [CompleteChat] 完整请求体: %s", string(debugReq))
+			log.Printf("[DEBUG] [CompleteChat] 上游回复: %s", string(raw))
 		}
 
 		isAuth := strings.Contains(errMsg, "Failed to verify action") ||

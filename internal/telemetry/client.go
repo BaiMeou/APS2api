@@ -46,32 +46,32 @@ const (
 )
 
 var (
-	client  *http.Client
-	stopCh  chan struct{}
-	once    sync.Once
+	client *http.Client
+	stopCh chan struct{}
+	once   sync.Once
 )
 
 // State 本地持久化状态：首次启动时间和启动次数。
 type State struct {
-	FirstSeen   time.Time `json:"first_seen"`
-	StartCount  int       `json:"start_count"`
+	FirstSeen  time.Time `json:"first_seen"`
+	StartCount int       `json:"start_count"`
 }
 
 // Payload 心跳载荷。
 type Payload struct {
-	ID            string `json:"id"`
-	Version       string `json:"version"`
-	Platform      string `json:"platform"`
-	BinarySHA256  string `json:"binary_sha256"`
-	GoVersion     string `json:"go_version"`
-	CPUCores      int    `json:"cpu_cores"`
-	MemoryGB      int    `json:"memory_gb"`
-	InContainer   bool   `json:"in_container"`
-	IsTermux      bool   `json:"is_termux"`
-	Timezone      string `json:"timezone"`
-	Language      string `json:"language"`
-	FirstSeen     string `json:"first_seen"`
-	StartCount    int    `json:"start_count"`
+	ID           string `json:"id"`
+	Version      string `json:"version"`
+	Platform     string `json:"platform"`
+	BinarySHA256 string `json:"binary_sha256"`
+	GoVersion    string `json:"go_version"`
+	CPUCores     int    `json:"cpu_cores"`
+	MemoryGB     int    `json:"memory_gb"`
+	InContainer  bool   `json:"in_container"`
+	IsTermux     bool   `json:"is_termux"`
+	Timezone     string `json:"timezone"`
+	Language     string `json:"language"`
+	FirstSeen    string `json:"first_seen"`
+	StartCount   int    `json:"start_count"`
 }
 
 // Start 启动匿名遥测后台 goroutine。enabled=false 时直接返回不做任何事。

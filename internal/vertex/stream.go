@@ -66,8 +66,14 @@ func (c *VertexAIClient) StreamChat(ctx context.Context, model string, geminiPay
 	}
 	StreamParallel(ctx, config.Load(), op, yield)
 }
+
 func (c *VertexAIClient) executeStreamingWithRetries(ctx context.Context, model string, geminiPayload map[string]any, proxyURI string, yield func(StreamChunk) bool) {
 	maxRetries := c.maxRetries
+	cfg := config.Load()
+	if cfg.ParallelPoolEnabled {
+		// 并发池模式下，单节点无需在内部多次重试与等待，直接快速失败让并发池调度其他节点，实现零延迟无缝切换（力大砖飞）
+		maxRetries = 0
+	}
 	contentYielded := false
 	var lastError *VertexError
 
@@ -165,7 +171,7 @@ retryLoop:
 			sess = newSess
 			recaptchaToken = ""
 
-			// 避免过快重试 429 导致 token 浪费和节点持续封禁
+			// 避免过快重试 429 导致 token 浪费 and 节点持续封禁
 			wait := ve.RetryAfter
 			if wait <= 0 {
 				wait = min(10, 1+attempt)
@@ -205,14 +211,11 @@ retryLoop:
 	}
 }
 
-// stopRequested 哨兵已不再需要：客户端断开时 emit 返回 false → scanStream 正常停止返回 nil，
-// StreamChat 据 chunkCount>0 收尾。此处保留注释记录这一设计决策（不引入额外哨兵分支）。
-
 // executeStreamingAttempt 执行单次流式请求：发请求 → 增量扫描 JSON → 提取 chunk → 过滤 finishReason。
 //
 // emit 回调把清洗后的 Gemini chunk 推给上层；
 // emit 返回 false（客户端断开）时扫描正常停止、返回 nil（StreamChat 据 chunkCount>0 收尾，不重试）。
-// ctx 绑定到上游流连接：ctx 取消时 Body.Read 报错，scanStream 干净结束（返回 nil，不 panic）。
+// ctx 绑定 to 上游流连接：ctx 取消时 Body.Read 报错，scanStream 干净结束（返回 nil，不 panic）。
 func (c *VertexAIClient) executeStreamingAttempt(ctx context.Context, sess *transport.Session, model string, geminiPayload map[string]any, recaptchaToken string, _ bool, emit func(map[string]any) bool) error {
 	reqID := RequestIDFromContext(ctx)
 	log.Printf("[Vertex] [executeStreamingAttempt] 准备发送流式请求: 模型=%s, 请求ID=%s, 代理=%s", model, reqID, nodes.GetNodeName(sess.ProxyURI))
@@ -242,13 +245,19 @@ func (c *VertexAIClient) executeStreamingAttempt(ctx context.Context, sess *tran
 
 	// HTTP 错误：读完 error body 后按状态映射（与非流式 executeCompleteRequest 一致）。
 	if sr.StatusCode != 200 {
-		if sr.StatusCode == 400 {
-			debugBody, _ := json.Marshal(newBody["variables"])
-			log.Printf("[Vertex] [Stream] 收到 400 Bad Request, Variables Payload: %s", string(debugBody))
-		}
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(sr.Body)
 		errText := buf.String()
+		if cfg.DebugMode {
+			debugReq, _ := json.Marshal(newBody)
+			log.Printf("[DEBUG] [StreamChat] HTTP 报错! 状态码: %d", sr.StatusCode)
+			log.Printf("[DEBUG] [StreamChat] 完整请求体: %s", string(debugReq))
+			log.Printf("[DEBUG] [StreamChat] 上游回复: %s", errText)
+		} else if sr.StatusCode == 400 {
+			debugBody, _ := json.Marshal(newBody["variables"])
+			log.Printf("[Vertex] [Stream] 收到 400 Bad Request, Variables Payload: %s", string(debugBody))
+		}
+
 		if sr.StatusCode == 401 || sr.StatusCode == 403 ||
 			strings.Contains(errText, "Failed to verify action") ||
 			strings.Contains(errText, "The caller does not have permission") {
@@ -266,9 +275,17 @@ func (c *VertexAIClient) executeStreamingAttempt(ctx context.Context, sess *tran
 		// 从单个上游对象提取（可能多个）chunk，逐个 emit；命中真实 finishReason 即结束。
 		return processStreamingObject(obj, emit)
 	})
+
+	if scanErr != nil && cfg.DebugMode && !errors.Is(scanErr, context.Canceled) {
+		debugReq, _ := json.Marshal(newBody)
+		log.Printf("[DEBUG] [StreamChat] 扫描流数据报错! error: %v", scanErr)
+		log.Printf("[DEBUG] [StreamChat] 完整请求体: %s", string(debugReq))
+	}
+
 	if errors.Is(scanErr, context.Canceled) {
 		return scanErr
 	}
+
 	return scanErr
 }
 
@@ -276,7 +293,7 @@ func (c *VertexAIClient) executeStreamingAttempt(ctx context.Context, sess *tran
 //
 // M27 增量扫描：
 // 跨网络 chunk 维护 scanPos/braceCount/inString/escape 状态，下个 chunk 从上次扫到的位置
-// 续扫，而非每来一个 chunk 都从 startIdx 重扫整个 buffer（旧逻辑 O(n²)）。逐字节逻辑等价。
+// 续扫，而非每来一个 chunk 都从 startIdx 重扫整个 buffer（旧逻辑 O(n²）。逐字节逻辑等价。
 //
 // onObject 返回 (stop, err)：stop=true（命中真实 finishReason / 客户端断开）即正常结束扫描；
 // err 非 nil 即中断并上抛（上游错误）。
@@ -646,6 +663,13 @@ func cleanPart(part map[string]any) map[string]any {
 	if id, ok := cleaned["inlineData"].(map[string]any); ok {
 		if toStr(id["data"]) == "" {
 			delete(cleaned, "inlineData")
+		}
+	}
+
+	// 支持代码块、代码执行结果透传
+	for _, key := range []string{"executableCode", "codeExecutionResult"} {
+		if v, ok := cleaned[key]; ok && isTruthyAny(v) {
+			return cleaned
 		}
 	}
 

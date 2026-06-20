@@ -349,18 +349,21 @@ func (s *Server) adminGetSettings(w http.ResponseWriter, _ *http.Request) {
 		telEnabled = *cfg.TelemetryEnabled
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"settings": map[string]any{
-		"max_retries":     cfg.MaxRetries,
-		"token_pool_size": cfg.TokenPoolSize,
-		"max_spill_mb":    cfg.MaxSpillMB,
-		"max_request_mb":  cfg.MaxRequestMB,
-		"max_n":           cfg.MaxN,
-		"anti429_enabled": cfg.Anti429Enabled,
-		"anti429_target":  cfg.Anti429Target,
-		"force_no_stream": cfg.ForceNoStream,
-		"anti_tracking":   cfg.AntiTracking,
-		"drop_max_tokens": cfg.DropMaxTokens,
+		"max_retries":       cfg.MaxRetries,
+		"token_pool_size":   cfg.TokenPoolSize,
+		"max_spill_mb":      cfg.MaxSpillMB,
+		"max_request_mb":    cfg.MaxRequestMB,
+		"max_n":             cfg.MaxN,
+		"anti429_enabled":   cfg.Anti429Enabled,
+		"anti429_target":    cfg.Anti429Target,
+		"force_no_stream":   cfg.ForceNoStream,
+		"anti_tracking":     cfg.AntiTracking,
+		"drop_max_tokens":   cfg.DropMaxTokens,
 		"telemetry_enabled": telEnabled,
-		"proxy_url":       cfg.ProxyURL, "parallel_pool_enabled": cfg.ParallelPoolEnabled, "parallel_pool_size": cfg.ParallelPoolSize, "active_node_uri": cfg.ActiveNodeURI,
+		"proxy_url":         cfg.ProxyURL, "parallel_pool_enabled": cfg.ParallelPoolEnabled, "parallel_pool_size": cfg.ParallelPoolSize, "active_node_uri": cfg.ActiveNodeURI,
+		"parallel_pool_delay_dynamic": cfg.ParallelPoolDelayDynamic,
+		"parallel_pool_delay_ms":      cfg.ParallelPoolDelayMs,
+		"recaptcha_expire_seconds":    cfg.RecaptchaExpireSeconds,
 	}})
 }
 
@@ -371,7 +374,10 @@ var adminAllowedSettings = map[string]bool{
 	"anti429_target": true, "force_no_stream": true, "anti_tracking": true,
 	"drop_max_tokens": true, "proxy_url": true, "admin_password": true,
 	"parallel_pool_enabled": true, "parallel_pool_size": true,
-	"telemetry_enabled": true,
+	"telemetry_enabled":           true,
+	"parallel_pool_delay_dynamic": true,
+	"parallel_pool_delay_ms":      true,
+	"recaptcha_expire_seconds":    true,
 }
 
 // adminPutSettings 处理 PUT /api/admin/settings：合并 {settings:{...}} 写回 config.json 并清缓存。
@@ -389,7 +395,7 @@ func (s *Server) adminPutSettings(w http.ResponseWriter, r *http.Request) {
 		}
 		// 数字字段：前端 number 输入可能传 float64，强类型字段需为整数，统一收敛成 int。
 		switch k {
-		case "max_retries", "token_pool_size", "max_spill_mb", "max_request_mb", "max_n", "parallel_pool_size":
+		case "max_retries", "token_pool_size", "max_spill_mb", "max_request_mb", "max_n", "parallel_pool_size", "parallel_pool_delay_ms", "recaptcha_expire_seconds":
 			if f, ok := v.(float64); ok {
 				updates[k] = int(f)
 				continue

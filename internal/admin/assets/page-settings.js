@@ -1,6 +1,9 @@
 const SETTINGS_FIELDS = [
   { k: 'parallel_pool_enabled', label: '并发请求池', type: 'bool', desc: '同时请求多个健康节点，首包到达即采纳，降低延迟' },
   { k: 'parallel_pool_size', label: '并发数', type: 'number', desc: '并发抢跑的节点数 (默认4)' },
+  { k: 'parallel_pool_delay_dynamic', label: '动态对冲延迟', type: 'bool', desc: '根据节点平均响应时间动态调整并发启动间隔，平衡延迟与流量消耗' },
+  { k: 'parallel_pool_delay_ms', label: '固定对冲延迟时间 (毫秒)', type: 'number', desc: '当禁用动态延迟时，以此固定间隔对冲触发后续备份通道 (默认 500ms)' },
+  { k: 'recaptcha_expire_seconds', label: 'Token池时效限制 (秒)', type: 'number', desc: 'reCAPTCHA 离线预取 Token 的可用期限阈值 (默认 60s)' },
   { k: 'max_retries', label: '上游重试次数', type: 'number', desc: '上游请求失败时的重试次数；总尝试 = 此值 + 1' },
   { k: 'max_n', label: 'n 多候选上限', type: 'number', desc: 'chat 的 n（一次返回多个候选）上限' },
   { k: 'anti429_target', label: 'anti429 注入位置', type: 'select', opts: ['system', 'user'], desc: '随机数注入到 system 指令、还是首条 user 消息前' },

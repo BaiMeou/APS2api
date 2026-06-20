@@ -218,11 +218,18 @@ func ConvertChatRequest(body map[string]any, cfg config.AppConfig) (string, map[
 		}
 	}
 
-	// response_format → responseMimeType（json_object / json_schema 都降级为 application/json，
-	// 因为匿名上游不接受 responseSchema——实测 400）
+	// response_format → responseMimeType 与 responseSchema（已完美支持结构化输出翻译）
 	if rf, ok := body["response_format"].(map[string]any); ok {
 		if t, _ := rf["type"].(string); t == "json_object" || t == "json_schema" {
 			genCfg["responseMimeType"] = "application/json"
+			if t == "json_schema" {
+				if js, ok := rf["json_schema"].(map[string]any); ok {
+					if sch, ok := js["schema"].(map[string]any); ok {
+						// 暂存标准 JSON Schema，后续在 BuildVertexVariables 转换时再通过 toNativeSchema 归一
+						genCfg["responseSchema"] = sch
+					}
+				}
+			}
 		}
 	}
 
@@ -586,7 +593,7 @@ func holderURLString(holder any) string {
 
 // parseInputAudio 从 input_audio holder 解析 (mime, base64)。
 // 兼容：① {data, format}（format 经 audioFormatMIME 映射）；② {data: "data:..."} ;
-// ③ {url: "data:..."}；④ holder 直接是 data: URI 字符串。处理 input_audio 分支。
+// ③ {url: "data:..."}；④ holder 直接 is data: URI 字符串。处理 input_audio 分支。
 func parseInputAudio(holder any) (string, string) {
 	switch h := holder.(type) {
 	case string:
@@ -650,7 +657,7 @@ func BuildVertexVariables(model string, geminiPayload map[string]any, cfg config
 		vars["contents"] = c
 	}
 
-	// tools 归一：转 camelCase + 把裸 FunctionDeclaration 聚合进 functionDeclarations。
+	// tools 归一：转 camelCase + 把裸 FunctionDeclaration 聚合进一个 functionDeclarations Tool，
 	// 空结果时移除 tools 与 toolConfig（避免上游因 tools=[] 报错）。
 	if rawTools, ok := vars["tools"]; ok {
 		normalized := normalizeToolsFormat(rawTools)
@@ -1096,6 +1103,8 @@ func convertToGeminiFormat(cfg map[string]any) map[string]any {
 				continue
 			}
 			out[camelKey] = v
+		case "responseSchema":
+			out[camelKey] = toNativeSchema(v)
 		case "topK":
 			out[camelKey] = clampTopK(v)
 		default:

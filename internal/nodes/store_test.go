@@ -16,6 +16,9 @@ func resetState() {
 	nodeList = nil
 	healthMap = make(map[string]*NodeHealth)
 	loaded = false
+	// 彻底清除物理磁盘缓存，防止测试间的数据污染
+	_ = os.Remove(filepath.Join(fileDir(), "nodes.json"))
+	_ = os.Remove(filepath.Join(fileDir(), "node_health.json"))
 }
 
 func TestNodesLifecycle(t *testing.T) {
