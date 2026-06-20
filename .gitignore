@@ -25,3 +25,4 @@ test-generated-*.png
 
 # Build output
 telemetry-server
+cmd/telemetry-server/
