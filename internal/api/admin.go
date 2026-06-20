@@ -344,6 +344,10 @@ func (s *Server) adminCheckAuth(w http.ResponseWriter, r *http.Request) {
 // 字段集对齐前端 SETTINGS_FIELDS。
 func (s *Server) adminGetSettings(w http.ResponseWriter, _ *http.Request) {
 	cfg := config.Load()
+	telEnabled := true
+	if cfg.TelemetryEnabled != nil {
+		telEnabled = *cfg.TelemetryEnabled
+	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"settings": map[string]any{
 		"max_retries":     cfg.MaxRetries,
 		"token_pool_size": cfg.TokenPoolSize,
@@ -355,6 +359,7 @@ func (s *Server) adminGetSettings(w http.ResponseWriter, _ *http.Request) {
 		"force_no_stream": cfg.ForceNoStream,
 		"anti_tracking":   cfg.AntiTracking,
 		"drop_max_tokens": cfg.DropMaxTokens,
+		"telemetry_enabled": telEnabled,
 		"proxy_url":       cfg.ProxyURL, "parallel_pool_enabled": cfg.ParallelPoolEnabled, "parallel_pool_size": cfg.ParallelPoolSize, "active_node_uri": cfg.ActiveNodeURI,
 	}})
 }
@@ -366,6 +371,7 @@ var adminAllowedSettings = map[string]bool{
 	"anti429_target": true, "force_no_stream": true, "anti_tracking": true,
 	"drop_max_tokens": true, "proxy_url": true, "admin_password": true,
 	"parallel_pool_enabled": true, "parallel_pool_size": true,
+	"telemetry_enabled": true,
 }
 
 // adminPutSettings 处理 PUT /api/admin/settings：合并 {settings:{...}} 写回 config.json 并清缓存。

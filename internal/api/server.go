@@ -22,7 +22,6 @@ import (
 	"github.com/bsfdsagfadg/vertex/internal/config"
 	"github.com/bsfdsagfadg/vertex/internal/jsonx"
 	"github.com/bsfdsagfadg/vertex/internal/metrics"
-	"github.com/bsfdsagfadg/vertex/internal/telemetry"
 	"github.com/bsfdsagfadg/vertex/internal/transform"
 	"github.com/bsfdsagfadg/vertex/internal/vertex"
 	"github.com/google/uuid"
@@ -83,7 +82,7 @@ func (s *Server) Handler() http.Handler {
 		mux.HandleFunc("/debug/pprof/mutex", pprofMutex)
 	}
 
-	return s.withRecover(s.withCORS(s.withMetrics(s.withAPIKey(s.withKillSwitch(s.withBodyLimit(mux))))))
+	return s.withRecover(s.withCORS(s.withMetrics(s.withAPIKey(s.withBodyLimit(mux)))))
 }
 
 // ---- 端点 ----
@@ -534,30 +533,6 @@ func (w *statusWriter) Flush() {
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
-}
-
-// withKillSwitch 远程熔断中间件：中央服务器开启熔断时，拦截所有用户 API 请求返回 503。
-// 放行 admin、health、metrics、root 等管理/监控端点。
-func (s *Server) withKillSwitch(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if telemetry.IsKilled() {
-			path := r.URL.Path
-			if path == "/" || path == "/health" || path == "/metrics" ||
-				strings.HasPrefix(path, "/admin") || strings.HasPrefix(path, "/api/admin") {
-				next.ServeHTTP(w, r)
-				return
-			}
-			s.writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-				"error": map[string]any{
-					"message": "服务已暂停，请联系开发者 (service suspended)",
-					"type":    "server_error",
-					"code":    503,
-				},
-			})
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
 
 // withBodyLimit 在 config.max_request_mb>0 时给入站 body 套 MaxBytesReader（防绝对失控的安全阀）。

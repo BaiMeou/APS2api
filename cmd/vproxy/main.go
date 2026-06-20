@@ -101,7 +101,13 @@ func main() {
 	vc := vertex.NewVertexAIClient()
 	vc.StartTokenPool()
 
-	telemetry.Start(version, runtime.GOOS+"/"+runtime.GOARCH)
+	// 启动匿名遥测（默认开启，可在 config.json 设置 telemetry_enabled=false 关闭）。
+	// 仅采集软件版本/平台/Go运行时/CPU/内存/容器/时区/语言/启动次数等非敏感信息。
+	telemetryEnabled := true
+	if cfg.TelemetryEnabled != nil {
+		telemetryEnabled = *cfg.TelemetryEnabled
+	}
+	telemetry.Start(version, runtime.GOOS+"/"+runtime.GOARCH, telemetryEnabled)
 
 	srv := api.NewServer(vc, keys, cfg)
 	httpServer := &http.Server{

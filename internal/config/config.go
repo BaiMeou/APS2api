@@ -44,6 +44,10 @@ type AppConfig struct {
 	DebugPprof            bool   `json:"debug_pprof"`
 	ParallelNodeTopK      int    `json:"parallel_node_top_k"`
 	DebugMode             bool   `json:"debug_mode"`
+
+	// 匿名遥测：仅发送实例 ID + 版本 + 平台，不含任何用户/网络/隐私数据。
+	// 用于了解软件的版本分布和活跃数。指针类型区分"未设置"和"显式 false"，未设置时默认开启。
+	TelemetryEnabled *bool `json:"telemetry_enabled,omitempty"`
 }
 
 func DefaultConfig() AppConfig {
