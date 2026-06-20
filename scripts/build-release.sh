@@ -51,19 +51,19 @@ build() {
   echo "    -> $OUT/$pkg.zip"
 }
 
-# Windows
-build windows amd64 vertex-proxy.exe vertex-proxy-windows-amd64 scripts/启动.bat
-build windows 386   vertex-proxy.exe vertex-proxy-windows-386   scripts/启动.bat
+# Windows（附带 setup.bat 一键部署脚本）
+build windows amd64 vertex-proxy.exe vertex-proxy-windows-amd64 scripts/启动.bat scripts/setup.bat
+build windows 386   vertex-proxy.exe vertex-proxy-windows-386   scripts/启动.bat scripts/setup.bat
 
-# Linux
-build linux   amd64 vertex-proxy     vertex-proxy-linux-amd64   scripts/start.sh scripts/vertex-proxy.service
-build linux   386   vertex-proxy     vertex-proxy-linux-386     scripts/start.sh scripts/vertex-proxy.service
-build linux   arm64 vertex-proxy     vertex-proxy-android-arm64 scripts/start.sh scripts/vertex-proxy.service
-build linux   arm   vertex-proxy     vertex-proxy-linux-arm     scripts/start.sh scripts/vertex-proxy.service
+# Linux（附带 setup.sh 一键部署脚本）
+build linux   amd64 vertex-proxy     vertex-proxy-linux-amd64   scripts/start.sh scripts/vertex-proxy.service scripts/setup.sh
+build linux   386   vertex-proxy     vertex-proxy-linux-386     scripts/start.sh scripts/vertex-proxy.service scripts/setup.sh
+build linux   arm64 vertex-proxy     vertex-proxy-android-arm64 scripts/start.sh scripts/vertex-proxy.service scripts/setup.sh
+build linux   arm   vertex-proxy     vertex-proxy-linux-arm     scripts/start.sh scripts/vertex-proxy.service scripts/setup.sh
 
-# macOS
-build darwin  amd64 vertex-proxy     vertex-proxy-darwin-amd64  scripts/start.sh
-build darwin  arm64 vertex-proxy     vertex-proxy-darwin-arm64  scripts/start.sh
+# macOS（附带 setup.sh）
+build darwin  amd64 vertex-proxy     vertex-proxy-darwin-amd64  scripts/start.sh scripts/setup.sh
+build darwin  arm64 vertex-proxy     vertex-proxy-darwin-arm64  scripts/start.sh scripts/setup.sh
 
 echo "完成。产物："
 ls -1 "$OUT"
