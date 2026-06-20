@@ -33,7 +33,7 @@ func ParseURI(uri string) (map[string]any, error) {
 		return parseVmess(uri)
 	}
 	if strings.HasPrefix(uri, "ss://") {
-		return parseSS(uri)
+		return parseShadowsocksURI(uri)
 	}
 	if strings.HasPrefix(uri, "hysteria2://") || strings.HasPrefix(uri, "hy2://") {
 		return parseSimple(uri, "hysteria2")
@@ -64,7 +64,11 @@ func parseSimple(uri, typ string) (map[string]any, error) {
 		port = 443
 	}
 	q := u.Query()
-	out := map[string]any{"name": u.Fragment, "type": typ, "server": u.Hostname(), "port": port}
+	name := u.Fragment
+	if dec, err := url.QueryUnescape(name); err == nil {
+		name = dec
+	}
+	out := map[string]any{"name": name, "type": typ, "server": u.Hostname(), "port": port}
 	if typ == "trojan" || typ == "hysteria2" {
 		out["password"] = u.User.Username()
 	} else {
@@ -74,25 +78,26 @@ func parseSimple(uri, typ string) (map[string]any, error) {
 	sec := strings.ToLower(q.Get("security"))
 	if sec == "tls" || sec == "reality" || typ == "trojan" || typ == "hysteria2" || typ == "tuic" {
 		out["tls"] = true
-		out["sni"] = u.Hostname()
-		if sni := q.Get("sni"); sni != "" {
-			out["sni"] = sni
-		}
-		if sec != "reality" && q.Get("allowInsecure") == "1" {
+		sni := firstNonEmpty(q.Get("sni"), u.Hostname())
+		out["sni"] = sni
+		out["servername"] = firstNonEmpty(q.Get("servername"), sni)
+		if queryFlag(q, "allowInsecure", "insecure") {
 			out["skip-cert-verify"] = true
 		}
-		out["servername"] = out["sni"]
 	}
 
 	if sec == "reality" {
-		if pubKey := q.Get("pbk"); pubKey != "" {
-			out["reality-opts"] = map[string]any{"public-key": pubKey, "short-id": q.Get("sid")}
+		if pubKey := firstNonEmpty(q.Get("pbk"), q.Get("public-key")); pubKey != "" {
+			out["reality-opts"] = map[string]any{"public-key": pubKey, "short-id": firstNonEmpty(q.Get("sid"), q.Get("short-id"))}
 		}
 	}
 
 	if typ == "vless" || typ == "trojan" {
 		if flow := q.Get("flow"); flow != "" {
 			out["flow"] = flow
+		}
+		if fp := firstNonEmpty(q.Get("fp"), q.Get("client-fingerprint"), q.Get("fingerprint")); fp != "" {
+			out["client-fingerprint"] = fp
 		}
 		network := q.Get("type")
 		if network == "ws" || network == "grpc" || network == "http" || network == "xhttp" {
@@ -125,7 +130,47 @@ func parseSimple(uri, typ string) (map[string]any, error) {
 			out["xudp"] = true
 		}
 	}
+	if typ == "hysteria2" {
+		if sni := firstNonEmpty(q.Get("sni"), q.Get("peer"), u.Hostname()); sni != "" {
+			out["sni"] = sni
+			out["servername"] = sni
+		}
+		if ports := firstNonEmpty(q.Get("ports"), q.Get("mport")); ports != "" {
+			out["ports"] = ports
+		}
+		if obfs := q.Get("obfs"); obfs != "" {
+			out["obfs"] = obfs
+		}
+		if obfsPassword := firstNonEmpty(q.Get("obfs-password"), q.Get("obfsPassword")); obfsPassword != "" {
+			out["obfs-password"] = obfsPassword
+		}
+		if fp := firstNonEmpty(q.Get("fp"), q.Get("fingerprint")); fp != "" {
+			out["fingerprint"] = fp
+		}
+		if alpn := q.Get("alpn"); alpn != "" {
+			out["alpn"] = strings.Split(alpn, ",")
+		}
+	}
 	return out, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if trimmed := strings.TrimSpace(v); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func queryFlag(q url.Values, keys ...string) bool {
+	for _, key := range keys {
+		switch strings.ToLower(strings.TrimSpace(q.Get(key))) {
+		case "1", "true", "yes", "on":
+			return true
+		}
+	}
+	return false
 }
 
 func parseVmess(uri string) (map[string]any, error) {
@@ -218,14 +263,120 @@ func parseVmess(uri string) (map[string]any, error) {
 				hPath = "/"
 			}
 			out["http-opts"] = map[string]any{
-				"method": "GET",
-				"path":   []string{hPath},
+				"method":  "GET",
+				"path":    []string{hPath},
 				"headers": map[string][]string{"Host": {host}},
 			}
 		}
 	}
 
 	return out, nil
+}
+
+func parseShadowsocksURI(uri string) (map[string]any, error) {
+	u, err := url.Parse(uri)
+	if err != nil {
+		return nil, err
+	}
+	if u.User == nil || u.Hostname() == "" {
+		return parseSS(uri)
+	}
+
+	method, password, err := decodeSSUserInfo(u.User)
+	if err != nil {
+		return nil, err
+	}
+	port, _ := strconv.Atoi(u.Port())
+	if port == 0 {
+		return nil, fmt.Errorf("ss parse failed: invalid host:port")
+	}
+	name := u.Fragment
+	if dec, err := url.QueryUnescape(name); err == nil {
+		name = dec
+	}
+
+	out := map[string]any{
+		"name":     name,
+		"type":     "ss",
+		"server":   u.Hostname(),
+		"port":     port,
+		"cipher":   method,
+		"password": password,
+	}
+	applySSPlugin(out, u.Query().Get("plugin"))
+	return out, nil
+}
+
+func decodeSSUserInfo(user *url.Userinfo) (string, string, error) {
+	if user == nil {
+		return "", "", fmt.Errorf("ss parse failed: missing userinfo")
+	}
+	if password, ok := user.Password(); ok {
+		return user.Username(), password, nil
+	}
+	return decodeSSCredentials(user.Username())
+}
+
+func decodeSSCredentials(userInfo string) (string, string, error) {
+	if colonIdx := strings.Index(userInfo, ":"); colonIdx != -1 {
+		mBytes, errM := base64.StdEncoding.DecodeString(padB64(userInfo[:colonIdx]))
+		pBytes, errP := base64.StdEncoding.DecodeString(padB64(userInfo[colonIdx+1:]))
+		if errM == nil && errP == nil {
+			return string(mBytes), string(pBytes), nil
+		}
+		return userInfo[:colonIdx], userInfo[colonIdx+1:], nil
+	}
+
+	b, err := base64.StdEncoding.DecodeString(padB64(userInfo))
+	if err == nil {
+		parts := strings.SplitN(string(b), ":", 2)
+		if len(parts) == 2 {
+			return parts[0], parts[1], nil
+		}
+	}
+	return "", "", fmt.Errorf("ss parse failed: invalid userinfo (cannot decode method or password)")
+}
+
+func applySSPlugin(out map[string]any, pluginRaw string) {
+	pluginRaw = strings.TrimSpace(pluginRaw)
+	if pluginRaw == "" {
+		return
+	}
+
+	segments := strings.Split(pluginRaw, ";")
+	plugin := strings.ToLower(strings.TrimSpace(segments[0]))
+	rawOpts := map[string]string{}
+	for _, segment := range segments[1:] {
+		key, value, ok := strings.Cut(segment, "=")
+		if !ok {
+			continue
+		}
+		rawOpts[strings.ToLower(strings.TrimSpace(key))] = strings.TrimSpace(value)
+	}
+
+	switch plugin {
+	case "simple-obfs", "obfs-local", "obfs":
+		out["plugin"] = "obfs"
+		opts := map[string]any{}
+		if mode := firstNonEmpty(rawOpts["obfs"], rawOpts["mode"]); mode != "" {
+			opts["mode"] = mode
+		}
+		if host := firstNonEmpty(rawOpts["obfs-host"], rawOpts["host"]); host != "" {
+			opts["host"] = host
+		}
+		if len(opts) > 0 {
+			out["plugin-opts"] = opts
+		}
+	default:
+		out["plugin"] = plugin
+		if len(rawOpts) > 0 {
+			opts := make(map[string]any, len(rawOpts))
+			for key, value := range rawOpts {
+				opts[key] = value
+			}
+			out["plugin-opts"] = opts
+		}
+	}
 }
 
 func parseSS(uri string) (map[string]any, error) {

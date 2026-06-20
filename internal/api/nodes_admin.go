@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -589,6 +590,8 @@ func parseInlineYamlAttrs(s string) map[string]string {
 	inQuotes := false
 	var quoteChar rune
 	isKey := true
+	braceDepth := 0
+	bracketDepth := 0
 
 	runes := []rune(s)
 	for i := 0; i < len(runes); i++ {
@@ -597,10 +600,18 @@ func parseInlineYamlAttrs(s string) map[string]string {
 			if r == quoteChar {
 				inQuotes = false
 			} else if r == '\\' && i+1 < len(runes) {
-				currentValue.WriteRune(runes[i+1])
+				if isKey {
+					currentKey.WriteRune(runes[i+1])
+				} else {
+					currentValue.WriteRune(runes[i+1])
+				}
 				i++
 			} else {
-				currentValue.WriteRune(r)
+				if isKey {
+					currentKey.WriteRune(r)
+				} else {
+					currentValue.WriteRune(r)
+				}
 			}
 			continue
 		}
@@ -622,7 +633,28 @@ func parseInlineYamlAttrs(s string) map[string]string {
 				currentKey.WriteRune(r)
 			}
 		} else {
-			if r == ',' {
+			switch r {
+			case '{':
+				braceDepth++
+				currentValue.WriteRune(r)
+			case '}':
+				if braceDepth > 0 {
+					braceDepth--
+				}
+				currentValue.WriteRune(r)
+			case '[':
+				bracketDepth++
+				currentValue.WriteRune(r)
+			case ']':
+				if bracketDepth > 0 {
+					bracketDepth--
+				}
+				currentValue.WriteRune(r)
+			case ',':
+				if braceDepth > 0 || bracketDepth > 0 {
+					currentValue.WriteRune(r)
+					continue
+				}
 				key := strings.TrimSpace(currentKey.String())
 				val := strings.TrimSpace(currentValue.String())
 				if key != "" {
@@ -631,7 +663,7 @@ func parseInlineYamlAttrs(s string) map[string]string {
 				currentKey.Reset()
 				currentValue.Reset()
 				isKey = true
-			} else {
+			default:
 				currentValue.WriteRune(r)
 			}
 		}
@@ -647,8 +679,50 @@ func parseInlineYamlAttrs(s string) map[string]string {
 	return attrs
 }
 
+func isTruthy(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if trimmed := strings.TrimSpace(v); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func parseInlineYamlObject(s string) map[string]string {
+	trimmed := strings.TrimSpace(s)
+	if strings.HasPrefix(trimmed, "{") && strings.HasSuffix(trimmed, "}") && len(trimmed) >= 2 {
+		trimmed = strings.TrimSpace(trimmed[1 : len(trimmed)-1])
+	}
+	if trimmed == "" {
+		return map[string]string{}
+	}
+	return parseInlineYamlAttrs(trimmed)
+}
+
+func buildProxyURI(scheme, credential, server, port, name string, query url.Values) string {
+	u := &url.URL{
+		Scheme:   scheme,
+		User:     url.User(credential),
+		Host:     net.JoinHostPort(server, port),
+		Fragment: name,
+	}
+	if len(query) > 0 {
+		u.RawQuery = query.Encode()
+	}
+	return u.String()
+}
+
 func clashProxyToURI(attrs map[string]string) string {
-	typ := attrs["type"]
+	typ := strings.ToLower(strings.TrimSpace(attrs["type"]))
 	name := attrs["name"]
 	server := attrs["server"]
 	port := attrs["port"]
@@ -734,28 +808,122 @@ func clashProxyToURI(attrs map[string]string) string {
 		b64Str := base64.StdEncoding.EncodeToString(jsonBytes)
 		return "vmess://" + b64Str
 
-	case "vless", "trojan":
-		uuidOrPass := attrs["uuid"]
-		if uuidOrPass == "" {
-			uuidOrPass = attrs["password"]
-		}
-		sni := attrs["sni"]
-		if sni == "" {
-			sni = server
+	case "vless":
+		uuid := attrs["uuid"]
+		if uuid == "" {
+			return ""
 		}
 
-		var query []string
-		if attrs["tls"] == "true" {
-			query = append(query, "security=tls")
-			query = append(query, "sni="+sni)
+		query := url.Values{}
+		serverName := firstNonEmpty(attrs["servername"], attrs["sni"], server)
+		realityOpts := parseInlineYamlObject(attrs["reality-opts"])
+		if len(realityOpts) > 0 {
+			query.Set("security", "reality")
+			if publicKey := realityOpts["public-key"]; publicKey != "" {
+				query.Set("pbk", publicKey)
+			}
+			if shortID := realityOpts["short-id"]; shortID != "" {
+				query.Set("sid", shortID)
+			}
+		} else if isTruthy(attrs["tls"]) {
+			query.Set("security", "tls")
+		}
+		if serverName != "" {
+			query.Set("sni", serverName)
+		}
+		if isTruthy(attrs["skip-cert-verify"]) {
+			query.Set("allowInsecure", "1")
+		}
+		if flow := attrs["flow"]; flow != "" {
+			query.Set("flow", flow)
+		}
+		if fp := attrs["client-fingerprint"]; fp != "" {
+			query.Set("fp", fp)
+		}
+		if network := strings.ToLower(strings.TrimSpace(attrs["network"])); network != "" {
+			query.Set("type", network)
+			switch network {
+			case "ws":
+				wsOpts := parseInlineYamlObject(attrs["ws-opts"])
+				if path := wsOpts["path"]; path != "" {
+					query.Set("path", path)
+				}
+				headers := parseInlineYamlObject(wsOpts["headers"])
+				if host := firstNonEmpty(headers["Host"], headers["host"]); host != "" {
+					query.Set("host", host)
+				}
+			case "grpc":
+				grpcOpts := parseInlineYamlObject(attrs["grpc-opts"])
+				if serviceName := firstNonEmpty(grpcOpts["grpc-service-name"], grpcOpts["serviceName"]); serviceName != "" {
+					query.Set("serviceName", serviceName)
+				}
+			}
+		}
+		return buildProxyURI("vless", uuid, server, port, name, query)
+
+	case "trojan":
+		password := attrs["password"]
+		if password == "" {
+			return ""
 		}
 
-		queryStr := ""
-		if len(query) > 0 {
-			queryStr = "?" + strings.Join(query, "&")
+		query := url.Values{}
+		if sni := firstNonEmpty(attrs["sni"], attrs["servername"], server); sni != "" {
+			query.Set("sni", sni)
+		}
+		if isTruthy(attrs["skip-cert-verify"]) {
+			query.Set("allowInsecure", "1")
+		}
+		if fp := attrs["client-fingerprint"]; fp != "" {
+			query.Set("fp", fp)
+		}
+		if network := strings.ToLower(strings.TrimSpace(attrs["network"])); network != "" {
+			query.Set("type", network)
+			switch network {
+			case "ws":
+				wsOpts := parseInlineYamlObject(attrs["ws-opts"])
+				if path := wsOpts["path"]; path != "" {
+					query.Set("path", path)
+				}
+				headers := parseInlineYamlObject(wsOpts["headers"])
+				if host := firstNonEmpty(headers["Host"], headers["host"]); host != "" {
+					query.Set("host", host)
+				}
+			case "grpc":
+				grpcOpts := parseInlineYamlObject(attrs["grpc-opts"])
+				if serviceName := firstNonEmpty(grpcOpts["grpc-service-name"], grpcOpts["serviceName"]); serviceName != "" {
+					query.Set("serviceName", serviceName)
+				}
+			}
+		}
+		return buildProxyURI("trojan", password, server, port, name, query)
+
+	case "hysteria2", "hy2":
+		password := attrs["password"]
+		if password == "" {
+			return ""
 		}
 
-		return typ + "://" + uuidOrPass + "@" + server + ":" + port + "/" + queryStr + "#" + url.QueryEscape(name)
+		query := url.Values{}
+		if sni := firstNonEmpty(attrs["sni"], attrs["servername"], server); sni != "" {
+			query.Set("sni", sni)
+		}
+		if isTruthy(attrs["skip-cert-verify"]) {
+			query.Set("insecure", "1")
+		}
+		if ports := firstNonEmpty(attrs["ports"], attrs["mport"]); ports != "" {
+			query.Set("ports", ports)
+		}
+		if obfs := attrs["obfs"]; obfs != "" {
+			query.Set("obfs", obfs)
+		}
+		if obfsPassword := attrs["obfs-password"]; obfsPassword != "" {
+			query.Set("obfs-password", obfsPassword)
+		}
+		if fp := firstNonEmpty(attrs["client-fingerprint"], attrs["fingerprint"]); fp != "" {
+			query.Set("fp", fp)
+		}
+		return buildProxyURI("hy2", password, server, port, name, query)
 	}
 
 	return ""
