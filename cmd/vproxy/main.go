@@ -8,7 +8,9 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net/http"
@@ -41,9 +43,32 @@ var (
 var rulesText string
 
 const (
-	shutdownGrace   = 25 * time.Second
-	rulesAgreedFile = "config/.rules_agreed"
+	shutdownGrace         = 25 * time.Second
+	rulesAgreedFile       = "config/.rules_agreed"
+	rulesAgreedFileDocker = "config/agreed-rules-docker.txt"
 )
+
+// rulesHash 是当前内嵌 rules.txt 内容的 SHA256（前 16 位十六进制）。
+// rules.txt 一旦变动，hash 就变 → 用户必须重新同意（裸机交互或 Docker 重写文件）。
+func rulesHash() string {
+	sum := sha256.Sum256([]byte(rulesText))
+	return hex.EncodeToString(sum[:])[:16]
+}
+
+// inDocker 通过 /.dockerenv 与 cgroup 判断当前是否运行于 Docker 容器。
+// Docker 环境中 stdin 通常无 TTY，无法交互同意 → 走文件同意路径。
+func inDocker() bool {
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
+		s := string(data)
+		if strings.Contains(s, "docker") || strings.Contains(s, "containerd") || strings.Contains(s, "kubepods") {
+			return true
+		}
+	}
+	return false
+}
 
 func main() {
 	// ---- 启动版权横幅 ----
@@ -67,22 +92,59 @@ func main() {
 	fmt.Println("  ╚══════════════════════════════════════════════════════════╝")
 	fmt.Println()
 
-	// ---- 规则同意检查 ----
-	if !checkRulesAgreed() {
-		fmt.Println(rulesText)
-		fmt.Println()
-		fmt.Print("  请输入 yes 同意以上规则（输入其他内容退出）：")
-		reader := bufio.NewReader(os.Stdin)
-		input, _ := reader.ReadString('\n')
-		input = strings.TrimSpace(strings.ToLower(input))
-		if input != "yes" {
-			fmt.Println("  你未同意规则，程序退出。")
+	// ---- 规则同意检查（含版本/哈希追踪：rules.txt 一变，必须重新同意） ----
+	curHash := rulesHash()
+	if inDocker() {
+		// Docker 环境：stdin 通常无 TTY，改走文件同意。
+		// 用户需在挂载的 config/ 目录里创建 agreed-rules-docker.txt，
+		// 内容只要包含当前 rules 的哈希字符串即视为同意。
+		if !checkRulesAgreedDocker(curHash) {
+			fmt.Println(rulesText)
+			fmt.Println()
+			fmt.Println("  ╔══════════════════════════════════════════════════════════╗")
+			fmt.Println("  ║  📦 检测到 Docker 环境                                   ║")
+			fmt.Println("  ╚══════════════════════════════════════════════════════════╝")
+			fmt.Println()
+			fmt.Println("  Docker 容器中无法交互同意规则。请按以下步骤同意：")
+			fmt.Println()
+			fmt.Println("  1) 在挂载到容器 /app/config 的本机目录中创建文件：")
+			fmt.Println("       agreed-rules-docker.txt")
+			fmt.Println()
+			fmt.Println("  2) 文件内容写入当前规则版本哈希（必须完全匹配）：")
+			fmt.Printf("       %s\n", curHash)
+			fmt.Println()
+			fmt.Println("     一行命令：")
+			fmt.Printf("       echo %s > ./config/agreed-rules-docker.txt\n", curHash)
+			fmt.Println()
+			fmt.Println("  3) 重启容器即可。")
+			fmt.Println()
+			fmt.Println("  注意：规则更新后哈希会变化，需要重新执行此步骤。")
+			fmt.Println("        此机制仅在 Docker 容器内严格生效；裸机部署走交互式同意。")
+			fmt.Println()
 			os.Exit(0)
 		}
-		saveRulesAgreed()
-		fmt.Println()
-		fmt.Println("  ✓ 已同意规则，正在启动...")
-		fmt.Println()
+	} else {
+		// 裸机/非 Docker：交互式同意，hash 不一致也要重新同意。
+		if !checkRulesAgreed(curHash) {
+			fmt.Println(rulesText)
+			fmt.Println()
+			if hasOldAgreement() {
+				fmt.Println("  ⚠️  规则已更新（含遥测披露等内容），需要您重新确认。")
+				fmt.Println()
+			}
+			fmt.Print("  请输入 yes 同意以上规则（输入其他内容退出）：")
+			reader := bufio.NewReader(os.Stdin)
+			input, _ := reader.ReadString('\n')
+			input = strings.TrimSpace(strings.ToLower(input))
+			if input != "yes" {
+				fmt.Println("  你未同意规则，程序退出。")
+				os.Exit(0)
+			}
+			saveRulesAgreed(curHash)
+			fmt.Println()
+			fmt.Println("  ✓ 已同意规则，正在启动...")
+			fmt.Println()
+		}
 	}
 
 	cfg := config.Load()
@@ -151,18 +213,38 @@ func main() {
 	log.Printf("[vproxy] 优雅关闭完成，vproxy 退出")
 }
 
-// checkRulesAgreed 检查用户是否已同意规则。
-func checkRulesAgreed() bool {
+// checkRulesAgreed 检查用户是否已同意当前版本规则（裸机交互路径）。
+// 文件内容须包含当前 rulesHash() —— rules.txt 修改后哈希变化，旧同意失效。
+func checkRulesAgreed(curHash string) bool {
 	data, err := os.ReadFile(rulesAgreedFile)
 	if err != nil {
 		return false
 	}
-	// 文件内容是同意时的时间戳，只要文件存在就算同意过
-	return len(data) > 0
+	return strings.Contains(string(data), curHash)
 }
 
-// saveRulesAgreed 保存规则同意记录。
-func saveRulesAgreed() {
+// hasOldAgreement 判断是否存在过往任意版本的同意记录（用于提示"规则已更新"）。
+func hasOldAgreement() bool {
+	data, err := os.ReadFile(rulesAgreedFile)
+	if err != nil {
+		return false
+	}
+	return len(strings.TrimSpace(string(data))) > 0
+}
+
+// saveRulesAgreed 记录"用户已同意 curHash 版本规则"。
+func saveRulesAgreed(curHash string) {
 	_ = os.MkdirAll("config", 0o700)
-	_ = os.WriteFile(rulesAgreedFile, []byte(time.Now().Format(time.RFC3339)), 0o600)
+	line := fmt.Sprintf("%s\t%s\n", time.Now().Format(time.RFC3339), curHash)
+	_ = os.WriteFile(rulesAgreedFile, []byte(line), 0o600)
+}
+
+// checkRulesAgreedDocker 检查 Docker 环境下用户提供的同意文件。
+// 仅检查文件内容是否包含当前 rules 哈希（允许多行/空白容错）。
+func checkRulesAgreedDocker(curHash string) bool {
+	data, err := os.ReadFile(rulesAgreedFileDocker)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(data), curHash)
 }
