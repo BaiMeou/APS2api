@@ -6,13 +6,17 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	_ "embed"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -33,55 +37,80 @@ var (
 	buildTime   = "unknown"
 )
 
-// shutdownGrace 是优雅关闭时排干在途请求的最长等待。超时则强制结束（避免卡死部署）。
-const shutdownGrace = 25 * time.Second
+//go:embed rules.txt
+var rulesText string
+
+const (
+	shutdownGrace   = 25 * time.Second
+	rulesAgreedFile = "config/.rules_agreed"
+)
 
 func main() {
 	// ---- 启动版权横幅 ----
-	log.Printf("╔══════════════════════════════════════════════════════════════╗")
-	log.Printf("║  Vertex AI Proxy  %-42s ║", version)
-	log.Printf("║  Copyright (c) 2026 BaiMeow. All rights reserved.          ║")
-	log.Printf("║  PolyForm Noncommercial License 1.0.0                      ║")
-	log.Printf("║  Build: %s / %s                                  ║", buildCommit, buildTime)
-	log.Printf("║  Platform: %s/%s                                       ║", runtime.GOOS, runtime.GOARCH)
-	log.Printf("╚══════════════════════════════════════════════════════════════╝")
+	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
+	fmt.Printf("║  Vertex AI Proxy  %-42s ║\n", version)
+	fmt.Println("║  Copyright (c) 2026 BaiMeow. All rights reserved.          ║")
+	fmt.Println("║  PolyForm Noncommercial License 1.0.0                      ║")
+	fmt.Printf("║  Build: %s / %s                                  ║\n", buildCommit, buildTime)
+	fmt.Printf("║  Platform: %s/%s                                       ║\n", runtime.GOOS, runtime.GOARCH)
+	fmt.Println("╚══════════════════════════════════════════════════════════════╝")
+
+	// ---- 反诈播报（每次启动必显示） ----
+	fmt.Println()
+	fmt.Println("  ╔══════════════════════════════════════════════════════════╗")
+	fmt.Println("  ║                                                          ║")
+	fmt.Println("  ║   ⚠️  本软件完全免费，如果你花钱购买了这个软件，         ║")
+	fmt.Println("  ║       你被骗了。请立即联系卖家退款。                     ║")
+	fmt.Println("  ║                                                          ║")
+	fmt.Println("  ║   获取正版：https://discord.gg/odysseia                  ║")
+	fmt.Println("  ║                                                          ║")
+	fmt.Println("  ╚══════════════════════════════════════════════════════════╝")
+	fmt.Println()
+
+	// ---- 规则同意检查 ----
+	if !checkRulesAgreed() {
+		fmt.Println(rulesText)
+		fmt.Println()
+		fmt.Print("  请输入 yes 同意以上规则（输入其他内容退出）：")
+		reader := bufio.NewReader(os.Stdin)
+		input, _ := reader.ReadString('\n')
+		input = strings.TrimSpace(strings.ToLower(input))
+		if input != "yes" {
+			fmt.Println("  你未同意规则，程序退出。")
+			os.Exit(0)
+		}
+		saveRulesAgreed()
+		fmt.Println()
+		fmt.Println("  ✓ 已同意规则，正在启动...")
+		fmt.Println()
+	}
 
 	cfg := config.Load()
 	metrics.Default.SetStart(time.Now().Unix())
-	spool.SetMaxSpillBytes(int64(cfg.MaxSpillMB) << 20) // 大请求/媒体序列化的磁盘溢出配额上限
+	spool.SetMaxSpillBytes(int64(cfg.MaxSpillMB) << 20)
 
-	// 节点删除时同步清理对应的 mihomo 代理实例。
 	nodes.DeleteNodeCallback = transport.RemoveProxy
-	// 后台清理空闲 >30min 的 mihomo 实例（每 5min 扫描一次）。
 	transport.StartProxyGC(5*time.Minute, 30*time.Minute)
 
 	keys := api.NewAPIKeyManager()
 	keys.LoadKeys()
 
-	// 管理后台：确保有管理员密码（首次启动自动生成并写回 config.json），启动会话清理后台任务。
 	api.EnsureAdminPassword()
 	api.StartAdminSessionCleanup(time.Hour)
 
 	vc := vertex.NewVertexAIClient()
-	vc.StartTokenPool() // 启动 recaptcha token 获取器
+	vc.StartTokenPool()
 
-	// 启动匿名统计（默认开启，config 可关闭）。轻量心跳，不含用户隐私。
 	telemetry.Start(version, runtime.GOOS+"/"+runtime.GOARCH)
 
 	srv := api.NewServer(vc, keys, cfg)
 	httpServer := &http.Server{
-		Addr:    "0.0.0.0:" + strconv.Itoa(cfg.PortAPI),
-		Handler: srv.Handler(),
-		// 只设安全的超时：ReadHeaderTimeout 防 slowloris 慢速发头、IdleTimeout 回收空闲 keep-alive。
-		// 刻意不设 ReadTimeout/WriteTimeout——它们会砍断长 SSE 流式与大媒体上传/下载（大文件红线）。
+		Addr:              "0.0.0.0:" + strconv.Itoa(cfg.PortAPI),
+		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 15 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
 
-	// 信号处理：
-	//   SIGINT/SIGTERM → 优雅关闭（停止接新连接、排干在途请求，再停 token 池）。
-	//   SIGHUP         → 立即清配置/模型缓存，下次读取即热重载（省去 ≤60s TTL 等待）。
-	// 配置热重载本身不掉在途请求：每请求各自 config.Load() 取值拷贝，改配置不影响已在途的。
 	shutdownDone := make(chan struct{})
 	go func() {
 		sig := make(chan os.Signal, 1)
@@ -112,6 +141,22 @@ func main() {
 	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("[vproxy] server error: %v", err)
 	}
-	<-shutdownDone // 等优雅关闭流程跑完（Shutdown 返回后 ListenAndServe 才返回 ErrServerClosed）
+	<-shutdownDone
 	log.Printf("[vproxy] 优雅关闭完成，vproxy 退出")
+}
+
+// checkRulesAgreed 检查用户是否已同意规则。
+func checkRulesAgreed() bool {
+	data, err := os.ReadFile(rulesAgreedFile)
+	if err != nil {
+		return false
+	}
+	// 文件内容是同意时的时间戳，只要文件存在就算同意过
+	return len(data) > 0
+}
+
+// saveRulesAgreed 保存规则同意记录。
+func saveRulesAgreed() {
+	_ = os.MkdirAll("config", 0o700)
+	_ = os.WriteFile(rulesAgreedFile, []byte(time.Now().Format(time.RFC3339)), 0o600)
 }

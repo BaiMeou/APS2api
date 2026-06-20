@@ -36,6 +36,7 @@ build() {
   cp config/api_keys.example.txt  "$stage/config/"
   cp config/models.json           "$stage/config/"
   cp 部署指南.md                   "$stage/"
+  cp cmd/vproxy/rules.txt         "$stage/"  # 规则文件（已嵌入二进制，此为可读副本）
   # 附带的启动脚本/服务文件（按平台传入）
   for f in "$@"; do cp "$f" "$stage/"; done
 
