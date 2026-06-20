@@ -311,7 +311,7 @@ function doToggle(enabled) {
 })();
 </script></body></html>`,
 		ksColor, total, ksColor, ksText, ksColor, ksText,
-		ksText,
+		`<div style="text-align:center;margin:20px 0"><button class="ks-btn" style="background:` + ksColor + `" onclick="toggleKS()">` + ksText + `</button></div>`,
 		ks, chartJSON,
 	)
 }
