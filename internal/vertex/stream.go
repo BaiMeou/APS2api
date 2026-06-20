@@ -17,6 +17,7 @@ import (
 
 	"github.com/bsfdsagfadg/vertex/internal/config"
 	"github.com/bsfdsagfadg/vertex/internal/metrics"
+	"github.com/bsfdsagfadg/vertex/internal/nodes"
 	"github.com/bsfdsagfadg/vertex/internal/spool"
 	"github.com/bsfdsagfadg/vertex/internal/transport"
 )
@@ -70,7 +71,7 @@ func (c *VertexAIClient) executeStreamingWithRetries(ctx context.Context, model 
 	contentYielded := false
 	var lastError *VertexError
 
-	reqID, _ := ctx.Value("reqID").(string)
+	reqID := RequestIDFromContext(ctx)
 	sess, err := c.net.CreateSession(180, proxyURI, reqID)
 	if err != nil {
 		yield(StreamChunk{Err: NewInternalError("create session: " + err.Error())})
@@ -84,7 +85,7 @@ func (c *VertexAIClient) executeStreamingWithRetries(ctx context.Context, model 
 
 retryLoop:
 	for attempt <= maxRetries {
-		log.Printf("[Vertex] [StreamChat] 开始尝试 (Attempt %d/%d), 模型=%s", attempt, maxRetries, model)
+		log.Printf("[Vertex] [StreamChat] 开始尝试 (Attempt %d/%d), 模型=%s, 请求ID=%s, 代理=%s", attempt, maxRetries, model, reqID, nodes.GetNodeName(proxyURI))
 		if recaptchaToken == "" {
 			tok, _ := c.pool.GetTokenWithProxy(proxyURI)
 			recaptchaToken = tok
@@ -151,6 +152,7 @@ retryLoop:
 			lastError = ve
 			metrics.Default.IncUpstream429()
 			if contentYielded || attempt >= maxRetries {
+				log.Printf("[Vertex] [StreamChat] (Attempt %d/%d) 节点 %s 触发 429 失败, 请求ID=%s, 代理=%s", attempt, maxRetries, model, reqID, nodes.GetNodeName(proxyURI))
 				break retryLoop
 			}
 			// 429：销毁旧 session 重建新的，换 token。
@@ -162,8 +164,14 @@ retryLoop:
 			}
 			sess = newSess
 			recaptchaToken = ""
+
+			// 避免过快重试 429 导致 token 浪费和节点持续封禁
+			wait := ve.RetryAfter
+			if wait <= 0 {
+				wait = min(10, 1+attempt)
+			}
+			log.Printf("[Vertex] [StreamChat] (Attempt %d/%d) 节点 %s 触发 429 将重试 (延迟 %ds), 请求ID=%s, 代理=%s", attempt, maxRetries, model, wait, reqID, nodes.GetNodeName(proxyURI))
 			attempt++
-			wait := min(10, 1+attempt)
 			if err := sleepCtx(ctx, time.Duration(wait)*time.Second); err != nil {
 				break retryLoop
 			}
@@ -175,8 +183,10 @@ retryLoop:
 			}
 			// 【关键改动】：如果是网络不通等内部错误，直接熔断并停止重试。
 			if ve.Kind == "internal" || !ve.IsRetryable() || contentYielded || attempt >= maxRetries {
+				log.Printf("[Vertex] [StreamChat] (Attempt %d/%d) 节点 %s 触发异常错误失败: [%s] %s, 请求ID=%s, 代理=%s", attempt, maxRetries, model, ve.Kind, ve.Message, reqID, nodes.GetNodeName(proxyURI))
 				break retryLoop
 			}
+			log.Printf("[Vertex] [StreamChat] (Attempt %d/%d) 节点 %s 触发异常错误将重试: [%s] %s, 请求ID=%s, 代理=%s", attempt, maxRetries, model, ve.Kind, ve.Message, reqID, nodes.GetNodeName(proxyURI))
 			attempt++
 			if err := sleepCtx(ctx, backoff(attempt)); err != nil {
 				break retryLoop
@@ -204,8 +214,8 @@ retryLoop:
 // emit 返回 false（客户端断开）时扫描正常停止、返回 nil（StreamChat 据 chunkCount>0 收尾，不重试）。
 // ctx 绑定到上游流连接：ctx 取消时 Body.Read 报错，scanStream 干净结束（返回 nil，不 panic）。
 func (c *VertexAIClient) executeStreamingAttempt(ctx context.Context, sess *transport.Session, model string, geminiPayload map[string]any, recaptchaToken string, _ bool, emit func(map[string]any) bool) error {
-	reqID, _ := ctx.Value("reqID").(string)
-	log.Printf("[Vertex] [executeStreamingAttempt] 准备发送流式请求: 模型=%s, reqID=%s, proxyURI=%s", model, reqID, sess.ProxyURI)
+	reqID := RequestIDFromContext(ctx)
+	log.Printf("[Vertex] [executeStreamingAttempt] 准备发送流式请求: 模型=%s, 请求ID=%s, 代理=%s", model, reqID, nodes.GetNodeName(sess.ProxyURI))
 	cfg := config.Load()
 	newBody := buildRequestPayload(model, geminiPayload, recaptchaToken, cfg)
 	// 上游请求 payload 序列化到 spool 缓冲（大媒体自动落盘）。流式：请求体在 DoStream 发送期被读取，

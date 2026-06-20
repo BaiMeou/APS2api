@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/bsfdsagfadg/vertex/internal/metrics"
+	"github.com/bsfdsagfadg/vertex/internal/vertex"
 )
 
 // TestWithMetrics 验证 withMetrics 中间件的与指标无关行为：
@@ -19,7 +20,7 @@ func TestWithMetrics(t *testing.T) {
 
 	var seenReqID string
 	ok := s.withMetrics(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		seenReqID = RequestIDFromContext(r.Context())
+		seenReqID = vertex.RequestIDFromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
 	rec := httptest.NewRecorder()

@@ -23,7 +23,7 @@ func RunParallel[T any](ctx context.Context, cfg config.AppConfig, op func(ctx c
 		if proxy == "" {
 			proxy = cfg.ProxyURL
 		}
-		log.Printf("[Vertex] [RunParallel] 降级为单节点运行: %s", proxy)
+		log.Printf("[Vertex] [RunParallel] 降级为单节点运行: %s", nodes.GetNodeName(proxy))
 		return op(ctx, proxy)
 	}
 
@@ -131,7 +131,7 @@ func StreamParallel(ctx context.Context, cfg config.AppConfig, op func(ctx conte
 		if proxy == "" {
 			proxy = cfg.ProxyURL
 		}
-		log.Printf("[Vertex] [StreamParallel] 降级为单节点运行: %s", proxy)
+		log.Printf("[Vertex] [StreamParallel] 降级为单节点运行: %s", nodes.GetNodeName(proxy))
 		for chunk := range op(ctx, proxy) {
 			if !yield(chunk) {
 				return

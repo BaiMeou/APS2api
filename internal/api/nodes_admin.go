@@ -262,7 +262,7 @@ func (s *Server) adminTestNode(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	log.Printf("[Admin] [TestNode] 节点测试 %s: ok=%v elapsed=%.0fms error=%q disabled=%v", body.RawURI, ok, elapsed, errStr, disabled)
+	log.Printf("[Admin] [TestNode] 节点测试 %s: ok=%v elapsed=%.0fms error=%q disabled=%v", nodes.GetNodeName(body.RawURI), ok, elapsed, errStr, disabled)
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"ok":         ok,
 		"elapsed_ms": elapsed,
@@ -279,7 +279,7 @@ func (s *Server) adminEnableNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	ok := nodes.EnableNode(body.RawURI)
-	log.Printf("[Admin] [EnableNode] 启用节点 %s: %v", body.RawURI, ok)
+	log.Printf("[Admin] [EnableNode] 启用节点 %s: %v", nodes.GetNodeName(body.RawURI), ok)
 	s.writeJSON(w, http.StatusOK, map[string]any{"ok": ok})
 }
 

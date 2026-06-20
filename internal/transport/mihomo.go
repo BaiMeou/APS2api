@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bsfdsagfadg/vertex/internal/nodes"
 	"github.com/metacubex/mihomo/adapter"
 	"github.com/metacubex/mihomo/constant"
 )
@@ -39,7 +40,7 @@ func getOrStartProxyDialer(uri string, reqID string) (func(ctx context.Context, 
 	}
 	proxyMutex.Unlock()
 
-	log.Printf("[Transport] reqID=%s 触发代理初始化: %s", reqID, uri)
+	log.Printf("[Transport] 请求ID=%s 触发代理初始化: %s", reqID, nodes.GetNodeName(uri))
 
 	outMap, err := ParseURI(uri)
 	if err != nil {
@@ -93,7 +94,7 @@ func RemoveProxy(uri string) {
 	if info, ok := proxyMap[uri]; ok {
 		if !info.closed {
 			info.closed = true
-			log.Printf("[Transport] 代理节点已清理释放: %s", uri)
+			log.Printf("[Transport] 代理节点已清理释放: %s", nodes.GetNodeName(uri))
 		}
 		delete(proxyMap, uri)
 	}
@@ -124,7 +125,7 @@ func cleanupIdleProxies(maxIdle time.Duration) {
 		if now.Sub(info.lastUsedAt) > maxIdle {
 			if !info.closed {
 				info.closed = true
-				log.Printf("[Transport] 空闲代理已清理释放: %s", uri)
+				log.Printf("[Transport] 空闲代理已清理释放: %s", nodes.GetNodeName(uri))
 			}
 			delete(proxyMap, uri)
 		}

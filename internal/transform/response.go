@@ -5,12 +5,11 @@
 package transform
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"strings"
 	"time"
 
 	"github.com/bsfdsagfadg/vertex/internal/jsonx"
+	"github.com/google/uuid"
 )
 
 // FinishReasonMap 把 Gemini finishReason 映射到 OpenAI finish_reason。
@@ -28,11 +27,9 @@ var FinishReasonMap = map[string]string{
 	"OTHER":                   "stop",
 }
 
-// reqID 生成 24 位十六进制 id。
+// reqID 生成 uuid。
 func reqID() string {
-	b := make([]byte, 12)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b) // 12 字节 → 24 个 hex 字符
+	return uuid.New().String()
 }
 
 // MapFinishReason 把 Gemini finishReason 转 OpenAI finish_reason。

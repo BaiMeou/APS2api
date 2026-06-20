@@ -202,6 +202,18 @@ func DedupNodes() int {
 	return removed
 }
 
+func GetNodeName(uri string) string {
+	mu.Lock()
+	defer mu.Unlock()
+	ensureLoaded()
+	for _, n := range nodeList {
+		if n.RawURI == uri {
+			return n.Name
+		}
+	}
+	return "Unknown"
+}
+
 func DeleteDisabled() int {
 	mu.Lock()
 	defer mu.Unlock()

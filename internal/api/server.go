@@ -10,8 +10,6 @@ package api
 
 import (
 	"context"
-	cryptorand "crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log"
@@ -26,6 +24,7 @@ import (
 	"github.com/bsfdsagfadg/vertex/internal/metrics"
 	"github.com/bsfdsagfadg/vertex/internal/transform"
 	"github.com/bsfdsagfadg/vertex/internal/vertex"
+	"github.com/google/uuid"
 )
 
 // Server 持有依赖，挂载路由。
@@ -221,7 +220,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		if vErr != nil {
 			ve := toVertexError(vErr)
 			if isSafetyBlock(ve) {
-				log.Printf("[Vertex] 请求被 Google 安全审查拦截, req=%s, 原因: %s", RequestIDFromContext(r.Context()), ve.Status)
+				log.Printf("[Vertex] 请求被 Google 安全审查拦截, 请求ID=%s, 原因: %s", vertex.RequestIDFromContext(r.Context()), ve.Status)
 				s.writeJSON(w, http.StatusOK, oaiSafetyResponse(model))
 				return
 			}
@@ -236,7 +235,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if vErr != nil {
 		ve := toVertexError(vErr)
 		if isSafetyBlock(ve) {
-			log.Printf("[Vertex] 请求被 Google 安全审查拦截, req=%s, 原因: %s", RequestIDFromContext(r.Context()), ve.Status)
+			log.Printf("[Vertex] 请求被 Google 安全审查拦截, 请求ID=%s, 原因: %s", vertex.RequestIDFromContext(r.Context()), ve.Status)
 			// 安全拦截以错误形式抛出时，返回 200 + content_filter（而非错误码）。
 			s.writeJSON(w, http.StatusOK, oaiSafetyResponse(model))
 			return
@@ -300,7 +299,7 @@ func (s *Server) streamChatCompletions(ctx context.Context, w http.ResponseWrite
 	// write 写一条 SSE 行并立即 flush（避免代理/客户端攒包）。返回 false 表示客户端断开。
 	write := func(line string) bool {
 		if _, err := io.WriteString(w, line); err != nil {
-			log.Printf("[Server] [Stream] req=%s 客户端已主动断开连接", requestID)
+			log.Printf("[Server] [Stream] 请求ID=%s 客户端已主动断开连接", requestID)
 			return false
 		}
 		if canFlush {
@@ -316,7 +315,7 @@ func (s *Server) streamChatCompletions(ctx context.Context, w http.ResponseWrite
 
 	s.vc.StreamChat(ctx, model, geminiPayload, func(ch vertex.StreamChunk) bool {
 		if isFirst && ch.Err == nil {
-			log.Printf("[Server] [Stream] req=%s 首字响应耗时: %.2fs", requestID, time.Since(startTime).Seconds())
+			log.Printf("[Server] [Stream] 请求ID=%s 首字响应耗时: %.2fs", requestID, time.Since(startTime).Seconds())
 		}
 		// 错误 chunk（重试耗尽）：发 OAI error 事件 + [DONE] 后终止。
 		if ch.Err != nil {
@@ -426,11 +425,9 @@ func isSafetyBlock(e *vertex.VertexError) bool {
 	return false
 }
 
-// reqID24 生成 24 位十六进制 request id。
+// reqID24 生成 uuid。
 func reqID24() string {
-	b := make([]byte, 12)
-	_, _ = cryptorand.Read(b)
-	return hex.EncodeToString(b)
+	return uuid.New().String()
 }
 
 // ---- 错误映射 ----
@@ -509,16 +506,6 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 
 // ---- request-id 上下文 ----
 
-type requestIDKey struct{}
-
-// RequestIDFromContext 取请求上下文里的 request-id（无则空串）。供需要追踪的下游代码用。
-func RequestIDFromContext(ctx context.Context) string {
-	if v, ok := ctx.Value("reqID").(string); ok {
-		return v
-	}
-	return ""
-}
-
 // statusWriter 包装 ResponseWriter 以捕获状态码；透传 Flush 以不破坏 SSE 流式。
 type statusWriter struct {
 	http.ResponseWriter
@@ -575,7 +562,7 @@ func (s *Server) withMetrics(next http.Handler) http.Handler {
 		reqID := reqID24()
 		w.Header().Set("X-Request-Id", reqID)
 		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
-		ctx := context.WithValue(r.Context(), "reqID", reqID)
+		ctx := context.WithValue(r.Context(), vertex.RequestIDKey{}, reqID)
 
 		start := time.Now()
 		s.metrics.StartRequest()
@@ -585,7 +572,7 @@ func (s *Server) withMetrics(next http.Handler) http.Handler {
 		success := sw.status < 400
 		s.metrics.EndRequest(success, elapsed.Seconds())
 		s.metrics.RecordRequest(r.URL.Path, success, elapsed.Seconds(), start.Format("15:04:05"))
-		log.Printf("[Server] %s %s - %d (%.3fs) req=%s", r.Method, r.URL.Path, sw.status, elapsed.Seconds(), reqID)
+		log.Printf("[Server] %s %s - %d (%.3fs) 请求ID=%s", r.Method, r.URL.Path, sw.status, elapsed.Seconds(), reqID)
 	})
 }
 

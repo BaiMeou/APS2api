@@ -17,6 +17,7 @@ import (
 
 	"github.com/bsfdsagfadg/vertex/internal/config"
 	"github.com/bsfdsagfadg/vertex/internal/metrics"
+	"github.com/bsfdsagfadg/vertex/internal/nodes"
 	"github.com/bsfdsagfadg/vertex/internal/recaptcha"
 	"github.com/bsfdsagfadg/vertex/internal/spool"
 	"github.com/bsfdsagfadg/vertex/internal/transport"
@@ -36,6 +37,17 @@ var defaultSafetySettings = []any{
 	map[string]any{"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
 	map[string]any{"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
 	map[string]any{"category": "HARM_CATEGORY_CIVIC_INTEGRITY", "threshold": "BLOCK_NONE"},
+}
+
+// RequestIDKey 是 context 中存储 reqID 的键类型。
+type RequestIDKey struct{}
+
+// RequestIDFromContext 取请求上下文里的 request-id（无则空串）。
+func RequestIDFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(RequestIDKey{}).(string); ok {
+		return v
+	}
+	return ""
 }
 
 type VertexAIClient struct {
@@ -147,7 +159,7 @@ func (c *VertexAIClient) completeInner(ctx context.Context, model string, gemini
 	isFirstAuth := true
 	attempt := 0
 
-	reqID, _ := ctx.Value("reqID").(string)
+	reqID := RequestIDFromContext(ctx)
 	sess, err := c.net.CreateSession(180, proxyURI, reqID)
 	if err != nil {
 		// 节点初始化失败，属于严重的内部网络错误，直接退出熔断
@@ -156,7 +168,7 @@ func (c *VertexAIClient) completeInner(ctx context.Context, model string, gemini
 	defer sess.Close()
 
 	for attempt <= maxRetries {
-		log.Printf("[Vertex] [CompleteChat] 开始尝试 (Attempt %d/%d), 模型=%s", attempt, maxRetries, model)
+		log.Printf("[Vertex] [CompleteChat] 开始尝试 (Attempt %d/%d), 模型=%s, 请求ID=%s, 代理=%s", attempt, maxRetries, model, reqID, nodes.GetNodeName(sess.ProxyURI))
 		if recaptchaToken == "" {
 			tok, _ := c.pool.GetTokenWithProxy(proxyURI)
 			recaptchaToken = tok
@@ -212,6 +224,7 @@ func (c *VertexAIClient) completeInner(ctx context.Context, model string, gemini
 		case ve != nil && ve.Kind == "ratelimit":
 			metrics.Default.IncUpstream429()
 			if attempt >= maxRetries {
+				log.Printf("[Vertex] [CompleteChat] (Attempt %d/%d) 节点 %s 触发 429 失败, 请求ID=%s, 代理=%s", attempt, maxRetries, model, reqID, nodes.GetNodeName(sess.ProxyURI))
 				return nil, ve
 			}
 			sess.Close()
@@ -225,6 +238,7 @@ func (c *VertexAIClient) completeInner(ctx context.Context, model string, gemini
 			if wait <= 0 {
 				wait = min(10, 1+attempt)
 			}
+			log.Printf("[Vertex] [CompleteChat] (Attempt %d/%d) 节点 %s 触发 429 将重试 (延迟 %ds), 请求ID=%s, 代理=%s", attempt, maxRetries, model, wait, reqID, nodes.GetNodeName(sess.ProxyURI))
 			attempt++
 			if err := sleepCtx(ctx, time.Duration(wait)*time.Second); err != nil {
 				return nil, ctxCanceledError(err)
@@ -237,8 +251,10 @@ func (c *VertexAIClient) completeInner(ctx context.Context, model string, gemini
 			}
 			// 【关键改动】：如果是网络连接断开等内部错误，直接熔断不重试
 			if ve.Kind == "internal" || !ve.IsRetryable() || attempt >= maxRetries {
+				log.Printf("[Vertex] [CompleteChat] (Attempt %d/%d) 节点 %s 触发异常错误失败: [%s] %s, 请求ID=%s, 代理=%s", attempt, maxRetries, model, ve.Kind, ve.Message, reqID, nodes.GetNodeName(sess.ProxyURI))
 				return nil, ve
 			}
+			log.Printf("[Vertex] [CompleteChat] (Attempt %d/%d) 节点 %s 触发异常错误将重试: [%s] %s, 请求ID=%s, 代理=%s", attempt, maxRetries, model, ve.Kind, ve.Message, reqID, nodes.GetNodeName(sess.ProxyURI))
 			attempt++
 			if err := sleepCtx(ctx, backoff(attempt)); err != nil {
 				return nil, ctxCanceledError(err)
@@ -254,8 +270,8 @@ func (c *VertexAIClient) completeInner(ctx context.Context, model string, gemini
 }
 
 func (c *VertexAIClient) executeCompleteRequest(ctx context.Context, sess *transport.Session, model string, geminiPayload map[string]any, recaptchaToken string, _ bool) (map[string]any, error) {
-	reqID, _ := ctx.Value("reqID").(string)
-	log.Printf("[Vertex] [executeCompleteRequest] 准备发送请求: 模型=%s, reqID=%s, proxyURI=%s", model, reqID, sess.ProxyURI)
+	reqID := RequestIDFromContext(ctx)
+	log.Printf("[Vertex] [executeCompleteRequest] 准备发送请求: 模型=%s, 请求ID=%s, 代理=%s", model, reqID, nodes.GetNodeName(sess.ProxyURI))
 	cfg := config.Load()
 	newBody := buildRequestPayload(model, geminiPayload, recaptchaToken, cfg)
 	buf, err := spool.EncodeJSON(newBody)

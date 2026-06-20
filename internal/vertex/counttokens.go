@@ -27,7 +27,7 @@ import (
 func (c *VertexAIClient) CountTokens(ctx context.Context, model string, contents []any) int {
 	cfg := config.Load()
 
-	reqID, _ := ctx.Value("reqID").(string)
+	reqID := RequestIDFromContext(ctx)
 	sess, err := c.net.CreateSession(60, config.Load().ProxyURL, reqID)
 	if err != nil {
 		return 0
