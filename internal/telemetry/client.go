@@ -24,8 +24,8 @@ import (
 const (
 	heartbeatInterval  = 5 * time.Minute
 	killswitchInterval = 1 * time.Minute
-	telemetryURL       = "https://stat.baimeow.icu/ping"
-	killswitchURL      = "https://stat.baimeow.icu/killswitch"
+	telemetryURL       = "http://34.83.159.156:8090/ping"
+	killswitchURL      = "http://34.83.159.156:8090/killswitch"
 	instanceIDFile     = "config/.instance_id"
 )
 
