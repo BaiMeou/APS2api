@@ -1,3 +1,7 @@
+// Copyright (c) 2026 BaiMeow. All rights reserved.
+// Use of this source code is governed by the PolyForm Noncommercial License 1.0.0
+// that can be found in the LICENSE file.
+
 // Command vproxy 是 Vertex AI Proxy（Go 重写）的入口。
 package main
 

@@ -1,3 +1,7 @@
+// Copyright (c) 2026 BaiMeow. All rights reserved.
+// Use of this source code is governed by the PolyForm Noncommercial License 1.0.0
+// that can be found in the LICENSE file.
+
 // Package api 暴露 OpenAI 兼容的 HTTP 端点。
 //
 // 里程碑1 只实现非流式 /v1/chat/completions（+ /、/health、/v1/models）。

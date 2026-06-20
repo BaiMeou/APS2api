@@ -1,3 +1,7 @@
+// Copyright (c) 2026 BaiMeow. All rights reserved.
+// Use of this source code is governed by the PolyForm Noncommercial License 1.0.0
+// that can be found in the LICENSE file.
+
 // 本文件实现管理后台。
 //
 // 提供：会话登录鉴权、运行设置读写、API 密钥增删查、模型清单读写、自身指标/历史查看，
