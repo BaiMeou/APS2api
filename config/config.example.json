@@ -1,6 +1,16 @@
 {
-  "port_api": 2156,
-  "max_retries": 10,
   "admin_password": "",
-  "proxy_url": ""
+  "anti429_enabled": false,
+  "anti429_target": "system",
+  "anti_tracking": true,
+  "drop_max_tokens": false,
+  "force_no_stream": false,
+  "max_n": 8,
+  "max_retries": 2,
+  "parallel_pool_delay_dynamic": true,
+  "parallel_pool_delay_ms": 500,
+  "parallel_pool_enabled": true,
+  "parallel_pool_size": 4,
+  "recaptcha_expire_seconds": 60,
+  "telemetry_enabled": false
 }

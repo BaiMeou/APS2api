@@ -206,6 +206,7 @@ func BatchUpdateNodesDisabled(uris []string, disabled bool) {
 	saveNodesUnsafe()
 }
 
+// 【已修正】：恢复存储层 BatchDeleteNodes 的干净持久化逻辑，解决 writeJSONFile 与 body 的编译报错
 func BatchDeleteNodes(uris []string) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -464,7 +465,11 @@ func SelectForParallel(k int) []Node {
 		weights = append(weights[:idx], weights[idx+1:]...)
 		scored = append(scored[:idx], scored[idx+1:]...)
 	}
-	log.Printf("[Nodes] 选择并行节点 (需求: %d, 实际: %d)", k, len(selected))
+
+	// 【核心修改】：通过 DebugMode 控制此行刷屏日志，减少生产环境下的无意义 IO
+	if config.Load().DebugMode {
+		log.Printf("[Nodes] 选择并行节点 (需求: %d, 实际: %d)", k, len(selected))
+	}
 	return selected
 }
 

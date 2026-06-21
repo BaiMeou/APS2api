@@ -1,20 +1,26 @@
 const SETTINGS_FIELDS = [
-  { k: 'parallel_pool_enabled', label: '并发请求池', type: 'bool', desc: '同时请求多个健康节点，首包到达即采纳，降低延迟' },
-  { k: 'parallel_pool_size', label: '并发数', type: 'number', desc: '并发抢跑的节点数 (默认4)' },
-  { k: 'parallel_pool_delay_dynamic', label: '动态对冲延迟', type: 'bool', desc: '根据节点平均响应时间动态调整并发启动间隔，平衡延迟与流量消耗' },
-  { k: 'parallel_pool_delay_ms', label: '固定对冲延迟时间 (毫秒)', type: 'number', desc: '当禁用动态延迟时，以此固定间隔对冲触发后续备份通道 (默认 500ms)' },
-  { k: 'recaptcha_expire_seconds', label: 'Token池时效限制 (秒)', type: 'number', desc: 'reCAPTCHA 离线预取 Token 的可用期限阈值 (默认 60s)' },
-  { k: 'max_retries', label: '上游重试次数', type: 'number', desc: '上游请求失败时的重试次数；总尝试 = 此值 + 1' },
-  { k: 'max_n', label: 'n 多候选上限', type: 'number', desc: 'chat 的 n（一次返回多个候选）上限' },
-  { k: 'anti429_target', label: 'anti429 注入位置', type: 'select', opts: ['system', 'user'], desc: '随机数注入到 system 指令、还是首条 user 消息前' },
-  { k: 'anti429_enabled', label: 'anti429 随机数注入', type: 'bool', desc: '往请求注入随机数字串，削弱上游 429 / 缓存命中' },
-  { k: 'force_no_stream', label: '强制非流式', type: 'bool', desc: '把所有流式请求降级为非流式' },
-  { k: 'anti_tracking', label: '反追踪', type: 'bool', desc: '移除可能被用于追踪的请求特征' },
-  { k: 'drop_max_tokens', label: '移除 maxOutputTokens', type: 'bool', desc: '移除输出 token 上限，让模型自由输出' },
-  { k: 'debug_mode', label: 'Debug 日志', type: 'bool', desc: '开启更详细的错误与负载调试日志' },
+  // 🚀 Group: pool (并发与 Token 池管理)
+  { k: 'parallel_pool_enabled', label: '并发请求池', type: 'bool', group: 'pool', desc: '同时请求多个健康节点，首包到达即采纳，降低延迟' },
+  { k: 'parallel_pool_size', label: '并发数', type: 'number', group: 'pool', desc: '并发抢跑的节点数 (默认 4)' },
+  { k: 'parallel_pool_delay_dynamic', label: '动态对冲延迟', type: 'bool', group: 'pool', desc: '根据节点平均响应时间动态调整并发启动间隔，平衡延迟与流量消耗' },
+  { k: 'parallel_pool_delay_ms', label: '固定对冲延迟时间 (毫秒)', type: 'number', group: 'pool', desc: '当禁用动态延迟时，以此固定间隔对冲触发后续备份通道 (默认 500ms)' },
+  { k: 'token_pool_size', label: 'Token池大小', type: 'number', group: 'pool', desc: '预取 reCAPTCHA Token 的缓冲数量。改大需重启程序生效 (默认 8)' },
+  { k: 'recaptcha_expire_seconds', label: 'Token池时效限制 (秒)', type: 'number', group: 'pool', desc: 'reCAPTCHA 离线预取 Token 的可用期限阈值 (默认 60s)' },
+
+  // 🛠 Group: core (核心控制与基础参数)
+  { k: 'max_retries', label: '上游重试次数', type: 'number', group: 'core', desc: '上游请求失败时的重试次数；总尝试 = 此值 + 1' },
+  { k: 'max_n', label: '最大候选数 (max_n)', type: 'number', group: 'core', desc: '限制客户端一次生成回答的条数上限，防滥用刷量 (默认 8)' },
+  { k: 'max_spill_mb', label: '最大内存缓冲 (MB)', type: 'number', group: 'core', desc: '上传大文件时，超过此大小将写入磁盘，防爆内存 (默认 2048)' },
+  { k: 'force_no_stream', label: '强制非流式', type: 'bool', group: 'core', desc: '把所有流式请求降级为非流式' },
+  { k: 'debug_mode', label: 'Debug 日志', type: 'bool', group: 'core', desc: '开启更详细的错误与负载调试日志' },
+
+  // 🛡 Group: security (安全增强与模型策略)
+  { k: 'anti429_enabled', label: 'anti429 随机数注入', type: 'bool', group: 'security', desc: '往请求注入随机数字串，削弱上游 429 / 缓存限制' },
+  { k: 'anti429_target', label: 'anti429 注入位置', type: 'select', opts: ['system', 'user'], group: 'security', desc: '随机数注入到 system 指令、还是首条 user 消息前' },
+  { k: 'anti_tracking', label: '反追踪', type: 'bool', group: 'security', desc: '移除可能被用于追踪的请求特征' },
+  { k: 'drop_max_tokens', label: '移除 maxOutputTokens', type: 'bool', group: 'security', desc: '移除输出 token 上限，让模型自由输出' },
 ];
 
-// 遥测设置单独显示（更显眼），不混在普通设置里。
 const TELEMETRY_INFO = `
 <div class="card glass" style="margin-bottom:14px;padding:18px;border-left:3px solid #3b82f6">
   <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap">
@@ -38,6 +44,7 @@ const TELEMETRY_INFO = `
 let curSettings = {};
 async function loadSettings() {
   const d = await API.settings.get(); curSettings = d.settings || d;
+  
   const fld = (f) => {
     const v = curSettings[f.k];
     if (f.type === 'bool') return `<div class="field bool"><div class="min-w-0"><label for="set_${f.k}">${f.label}</label>${f.desc?`<div class="desc mt-4px">${f.desc}</div>`:''}</div><label class="toggle"><input type="checkbox" id="set_${f.k}" ${v?'checked':''}><span class="track"></span></label></div>`;
@@ -46,21 +53,51 @@ async function loadSettings() {
     else input = `<input type="${f.type}" id="set_${f.k}" value="${v ?? ''}">`;
     return `<div class="field"><label for="set_${f.k}">${f.label}</label>${input}${f.desc?`<div class="desc">${f.desc}</div>`:''}</div>`;
   };
-  const nums = SETTINGS_FIELDS.filter(f => f.type !== 'bool'), bools = SETTINGS_FIELDS.filter(f => f.type === 'bool');
+
+  // 【核心修改：定义视觉功能分组】
+  const groups = {
+    pool: { title: '🚀 并发与 Token 池管理', fields: [] },
+    core: { title: '🛠 核心控制与基础参数', fields: [] },
+    security: { title: '🛡 安全增强与模型策略', fields: [] }
+  };
+
+  SETTINGS_FIELDS.forEach(f => {
+    if (groups[f.group]) {
+      groups[f.group].fields.push(f);
+    }
+  });
+
+  let sectionsHtml = '';
+  for (const [key, g] of Object.entries(groups)) {
+    const numFields = g.fields.filter(f => f.type !== 'bool');
+    const boolFields = g.fields.filter(f => f.type === 'bool');
+
+    sectionsHtml += `
+      <div class="settings-section-title">${g.title}</div>
+      ${numFields.length ? `<div class="grid grid-2">${numFields.map(fld).join('')}</div>` : ''}
+      ${boolFields.length ? `<div class="grid grid-2" style="margin-top:10px;">${boolFields.map(fld).join('')}</div>` : ''}
+    `;
+  }
+
   $('#settingsForm').innerHTML =
     TELEMETRY_INFO +
-    '<div class="grid grid-2">' + nums.map(fld).join('') + '</div>' +
-    '<div class="h-6px"></div><div class="grid grid-2">' + bools.map(fld).join('') + '</div>' +
+    sectionsHtml +
     '<button class="btn mt-14px" onclick="saveSettings()">保存设置</button>';
-  // 遥测开关默认开启（telemetry_enabled 未设置时为 null，按 true 处理）
+  
   const telEnabled = curSettings.telemetry_enabled !== false;
   $('#set_telemetry_enabled').checked = telEnabled;
   PAGE_CACHE['settings'] = $('#page-settings').innerHTML;
 }
+
 async function saveSettings() {
   const out = {};
-  for (const f of SETTINGS_FIELDS) { const el = $('#set_' + f.k); if (!el) continue; if (f.type === 'bool') out[f.k] = el.checked; else if (f.type === 'number') out[f.k] = parseInt(el.value || '0', 10); else out[f.k] = el.value; }
-  // 遥测开关
+  for (const f of SETTINGS_FIELDS) { 
+    const el = $('#set_' + f.k); 
+    if (!el) continue; 
+    if (f.type === 'bool') out[f.k] = el.checked; 
+    else if (f.type === 'number') out[f.k] = parseInt(el.value || '0', 10); 
+    else out[f.k] = el.value; 
+  }
   const telEl = $('#set_telemetry_enabled');
   if (telEl) out['telemetry_enabled'] = telEl.checked;
   await API.settings.put(out); toast('设置已保存');

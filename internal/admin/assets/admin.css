@@ -43,7 +43,6 @@ option { background: #1f1813; color: var(--text); }
     radial-gradient(1200px 800px at 82% -6%, rgba(240, 180, 110, .16), transparent 55%),
     radial-gradient(900px 700px at 10% 110%, rgba(120, 150, 190, .1), transparent 55%),
     linear-gradient(180deg, rgba(20, 15, 11, .42), rgba(13, 10, 8, .62));
-
 }
 
 .glass {
@@ -77,7 +76,7 @@ option { background: #1f1813; color: var(--text); }
 #login .logo { width: 56px; height: 56px; margin: 0 auto; border-radius: 16px; background: linear-gradient(135deg, var(--gold), var(--gold-deep)); display: grid; place-items: center; font-size: 26px; font-weight: 800; color: #2c1d08; box-shadow: 0 8px 22px rgba(240, 189, 92, .4); }
 #login h1 { font-size: 21px; margin: 16px 0 5px; letter-spacing: .02em; }
 #login .sub { color: var(--text-dim); font-size: 12.5px; margin-bottom: 26px; }
-#login input { margin-bottom: 14px; text-align: center; }
+#login input { text-align: left; }
 #login .btn { width: 100%; }
 .err { color: var(--red); font-size: 12px; min-height: 16px; margin-top: 12px; }
 
@@ -128,12 +127,63 @@ section.entering { opacity: 0; transform: translateY(14px); }
 .stat .value.blue { color: var(--blue); } .stat .value.green { color: var(--green); }
 .stat .sub { color: var(--text-dim); font-size: 11.5px; margin-top: 6px; }
 
-table { width: 100%; border-collapse: collapse; }
+/* 全局表格重置（非固定布局） */
+table {
+  width: 100% !important;
+  border-collapse: collapse;
+}
+
 th, td { text-align: left; padding: 13px 15px; border-bottom: 1px solid var(--stroke); font-size: 13px; }
 th { color: var(--text-dim); font-weight: 600; font-size: 12px; }
 tr:last-child td { border-bottom: none; }
 tbody tr { transition: background .16s; } tbody tr:hover { background: rgba(255, 255, 255, .05); }
 td code { background: rgba(0, 0, 0, .3); padding: 2px 9px; border-radius: 8px; font-size: 12px; word-break: break-all; }
+
+/* ── 【仅在电脑端桌面视图启用的布局锁定 (锁定列宽，防止撑开挤压)】 ── */
+@media (min-width: 769px) {
+  table {
+    table-layout: fixed !important; /* 核心：锁定电脑端布局算法，强制均分/限制宽度 */
+  }
+
+  /* 复选框列 */
+  table th:nth-child(1), table td:nth-child(1) {
+    width: 50px !important;
+    text-align: center;
+  }
+  /* 节点名称列：弹性并给安全极小值 */
+  table th:nth-child(2), table td:nth-child(2) {
+    width: auto !important;
+    min-width: 180px !important;
+  }
+  /* 协议类型列：适当拓宽 */
+  table th:nth-child(3), table td:nth-child(3) {
+    width: 110px !important;
+  }
+  /* 状态/延迟列 */
+  table th:nth-child(4), table td:nth-child(4) {
+    width: 240px !important;
+  }
+  /* 操作栏列：分配足够 4 个按钮排放的宽度，防折行 */
+  table th:nth-child(5), table td:nth-child(5) {
+    width: 290px !important;
+    text-align: right !important;
+  }
+
+  /* 桌面端长错误信息自动换行控制，绝不横向撑爆表格 */
+  .node-error-wrap, .node-err-msg {
+    word-break: break-all !important;
+    white-space: normal !important;
+    max-width: 210px !important;
+    line-height: 1.35 !important;
+  }
+
+  /* 桌面端超长地址信息自动折行 */
+  table td:nth-child(2) div {
+    word-break: break-all !important;
+    white-space: normal !important;
+    line-height: 1.35 !important;
+  }
+}
 
 .field { margin-bottom: 18px; }
 .field label { display: block; color: var(--text-dim); font-size: 12.5px; margin-bottom: 7px; }
@@ -142,12 +192,52 @@ td code { background: rgba(0, 0, 0, .3); padding: 2px 9px; border-radius: 8px; f
 .field .desc { color: var(--text-dim); font-size: 11px; margin-top: 6px; opacity: .85; }
 .toolbar { display: flex; gap: 11px; margin-bottom: 18px; }
 .toolbar input { flex: 1; }
-.pill { display: inline-block; padding: 3px 11px; border-radius: 99px; font-size: 11.5px; }
-.pill.on { background: rgba(132, 214, 160, .16); color: var(--green); }
-.pill.off { background: rgba(255, 255, 255, .07); color: var(--text-dim); }
+
+/* 【视觉美化：设置分类标题】 */
+.settings-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--gold);
+  margin: 22px 0 12px 0;
+  padding-bottom: 6px;
+  border-bottom: 1px dashed var(--stroke);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.settings-section-title:first-of-type {
+  margin-top: 10px;
+}
+
+/* 【视觉美化：毛玻璃 Preset 背景选项】 */
 .preset { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 6px; }
-.preset .thumb { width: 120px; height: 74px; border-radius: 12px; background-size: cover; background-position: center; cursor: pointer; border: 2px solid transparent; transition: border-color .2s, transform .2s var(--ease); }
+.preset .thumb {
+  position: relative;
+  width: 120px;
+  height: 74px;
+  border-radius: 12px;
+  background-size: cover;
+  background-position: center;
+  cursor: pointer;
+  border: 2px solid transparent;
+  transition: border-color .2s, transform .2s var(--ease);
+  overflow: hidden;
+}
 .preset .thumb:hover { transform: translateY(-3px) scale(1.02); border-color: var(--gold); }
+.preset .thumb-label {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  font-size: 11px;
+  text-align: center;
+  padding: 3px 0;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
 .toast { position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(22px); padding: 13px 24px; font-size: 13px; opacity: 0; transition: all .34s var(--ease); pointer-events: none; z-index: 50; }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 .text-right { text-align: right; }
@@ -239,13 +329,118 @@ td code { background: rgba(0, 0, 0, .3); padding: 2px 9px; border-radius: 8px; f
     transform: translateX(-100%);
     transition: transform .3s var(--ease);
     padding: 20px 14px;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
   }
   aside.open { transform: translateX(0); box-shadow: 0 0 60px rgba(0,0,0,.6); }
   .main-content { padding: 16px; padding-top: 68px; }
   main { border-radius: 0; }
   .page-head h2 { font-size: 20px; }
   .card { padding: 16px; }
-  .card table { display: block; overflow-x: auto; white-space: nowrap; }
+
+  /* ── 【移动端表格重构：Table 彻底转换成磨砂卡片】 ── */
+  /* 【核心修改：作用域限定在各自页面上，绝不全局影响】 */
+  #page-nodes table, #page-nodes thead, #page-nodes tbody, #page-nodes th, #page-nodes td, #page-nodes tr,
+  #page-keys table, #page-keys thead, #page-keys tbody, #page-keys th, #page-keys td, #page-keys tr {
+    display: block !important;
+    width: 100% !important;
+    table-layout: auto !important; /* 关键：移动端抛弃电脑端的锁死列宽算法 */
+  }
+  #page-nodes thead tr, #page-keys thead tr {
+    position: absolute !important;
+    top: -9999px;
+    left: -9999px;
+  }
+  #page-nodes tr, #page-keys tr {
+    border: 1px solid var(--stroke) !important;
+    border-radius: 12px !important;
+    margin-bottom: 16px !important;
+    padding: 12px 14px !important;
+    background: rgba(255, 255, 255, 0.02) !important;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1) !important;
+  }
+  #page-nodes td, #page-keys td {
+    border: none !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05) !important;
+    position: relative !important;
+    padding: 8px 0 8px 32% !important;
+    font-size: 13px !important;
+    white-space: normal !important;
+    text-align: left !important;
+    width: 100% !important; /* 核心：在移动端彻底洗掉 td-child 的强制宽度 */
+  }
+  #page-nodes td:last-child, #page-keys td:last-child {
+    border-bottom: none !important;
+    padding-bottom: 0 !important;
+  }
+  #page-nodes td:before, #page-keys td:before {
+    position: absolute;
+    top: 8px;
+    left: 0;
+    width: 28%;
+    padding-right: 10px;
+    white-space: nowrap;
+    font-weight: 600;
+    color: var(--text-dim);
+  }
+
+  /* ── 1. 代理节点页面卡片伪类标签（精准限制） ── */
+  #page-nodes td:nth-of-type(1) { padding-left: 0 !important; text-align: left !important; }
+  #page-nodes td:nth-of-type(1):before { content: "选择节点"; }
+  #page-nodes td:nth-of-type(2):before { content: "节点名称"; }
+  #page-nodes td:nth-of-type(3):before { content: "协议类型"; }
+  #page-nodes td:nth-of-type(4):before { content: "状态延迟"; }
+  #page-nodes td:nth-of-type(5):before { content: "管理操作"; }
+
+  /* ── 2. 密钥页面卡片伪类标签（新增专属标签，杜绝借用代理页面标签） ── */
+  #page-keys td:nth-of-type(1):before { content: "密钥名称"; }
+  #page-keys td:nth-of-type(2):before { content: "密钥 Value"; }
+  #page-keys td:nth-of-type(3):before { content: "备注描述"; }
+  #page-keys td:nth-of-type(4):before { content: "管理操作"; }
+
+  /* 代理页面 checkbox 样式精准限制 */
+  #page-nodes td:nth-of-type(1) input[type="checkbox"] {
+    margin-left: 32%;
+    width: 18px;
+    height: 18px;
+  }
+  #page-nodes td:nth-of-type(1):before {
+    top: 10px;
+  }
+  
+  /* 移动端 4 按钮排列微调 */
+  #page-nodes td:nth-of-type(5) {
+    display: flex !important;
+    flex-wrap: wrap !important;
+    gap: 6px !important;
+    padding-left: 32% !important;
+  }
+  #page-nodes td:nth-of-type(5) .btn {
+    margin: 0 !important;
+    font-size: 11px !important;
+    padding: 5px 8px !important;
+  }
+
+  /* 密钥页面移动端删除按钮精致对齐 */
+  #page-keys td:nth-of-type(4) {
+    display: flex !important;
+    padding-left: 32% !important;
+  }
+  #page-keys td:nth-of-type(4) .btn {
+    margin: 0 !important;
+    font-size: 11px !important;
+    padding: 5px 12px !important;
+  }
+  
+  /* 移动端错误详细信息自然折行 */
+  .node-err-msg {
+    color: var(--red);
+    font-size: 11px;
+    margin-top: 4px;
+    word-break: break-all !important;
+    white-space: normal !important;
+    line-height: 1.4 !important;
+  }
 }
 
 @media (max-width: 600px) {
@@ -255,4 +450,23 @@ td code { background: rgba(0, 0, 0, .3); padding: 2px 9px; border-radius: 8px; f
   .actions .btn { flex: 1; min-width: 0; text-align: center; font-size: 12px; padding: 8px 10px; }
   .toolbar { flex-wrap: wrap; }
   .toolbar input { min-width: 120px; }
+
+  /* ── 【核心修改：手机端对密钥页面输入框进行弹性垂直堆叠，根治重叠】 ── */
+  /* 精准限定在 #page-keys 内，保留登录框的密码眼睛切换按钮在水平一排 */
+  #page-keys .key-input-wrap {
+    flex-direction: column !important;
+    gap: 10px !important;
+    width: 100% !important;
+  }
+  #page-keys .key-input-wrap input {
+    border-radius: 11px !important;
+    border-right: 1px solid var(--stroke) !important;
+    width: 100% !important;
+  }
+  #page-keys .key-gen-btn {
+    border-radius: 11px !important;
+    height: 40px !important;
+    width: 100% !important;
+    border-left: 1px solid var(--stroke) !important; /* 堆叠后恢复左边框 */
+  }
 }

@@ -120,16 +120,18 @@ async function loadNodes() {
         avail.textContent = '\u53EF\u7528';
         statusTd.appendChild(avail);
       } else {
-        var errMsg = health.last_test_error ? health.last_test_error.slice(0, 30) : '';
+        // 【核心修改】：红色标签内容回归极简，仅显示“测试失败”，保持标签小巧美观
         var pill = document.createElement('span');
         pill.className = 'pill off';
         pill.style.cssText = 'background:rgba(236,138,124,0.16);color:var(--red);margin-right:5px;';
-        pill.textContent = '\u6D4B\u8BD5\u5931\u8D25' + (errMsg ? ' ' + errMsg : '');
+        pill.textContent = '\u6D4B\u8BD5\u5931\u8D25';
         statusTd.appendChild(pill);
+        
+        // 【核心修改】：详细的错误原因直接渲染在下方第二行，不再受原有的 90 字符硬性截断限制
         if (health.last_test_error) {
           var errSpan = document.createElement('div');
-          errSpan.style.cssText = 'color:var(--red);font-size:11px;margin-top:2px;';
-          errSpan.textContent = health.last_test_error.slice(0, 90);
+          errSpan.className = 'node-err-msg';
+          errSpan.textContent = health.last_test_error;
           statusTd.appendChild(errSpan);
         }
       }
