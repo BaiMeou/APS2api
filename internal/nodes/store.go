@@ -447,6 +447,23 @@ func UpdateNodeTestResult(uri string, ok bool, ms float64, errStr string) {
 	RecordTest(uri, ok, ms, errStr)
 }
 
+// RecordRateLimit 业务流 429 专属软降温函数：只执行短冷却，保留原评分分数不破坏
+func RecordRateLimit(uri string, cooldownSec int) {
+	mu.Lock()
+	defer mu.Unlock()
+	ensureLoaded()
+	h, exists := healthMap[uri]
+	if !exists {
+		h = &NodeHealth{}
+		healthMap[uri] = h
+	}
+	h.CooldownUntil = time.Now().Unix() + int64(cooldownSec)
+	h.LastTestError = "429 Rate Limit"
+	h.LastFailAt = time.Now().Unix()
+	saveNodesUnsafe()
+	saveHealthUnsafe()
+}
+
 type scoredNode struct {
 	node  Node
 	score float64
@@ -457,6 +474,26 @@ func SelectForParallel(k int) []Node {
 	defer mu.Unlock()
 	ensureLoaded()
 	now := time.Now().Unix()
+
+	// 历史衰减机制：对积压了过多历史分数的节点执行定期折半衰减，使评分更易受近期波动响应
+	decayed := false
+	for _, n := range nodeList {
+		if n.Disabled {
+			continue
+		}
+		h := healthMap[n.RawURI]
+		if h != nil {
+			if h.SuccessCount > 1000 || h.FailCount > 200 {
+				h.SuccessCount /= 2
+				h.FailCount /= 2
+				decayed = true
+			}
+		}
+	}
+	if decayed {
+		saveHealthUnsafe()
+	}
+
 	var scored []scoredNode
 	var cooldownNodes []scoredNode
 	for _, n := range nodeList {

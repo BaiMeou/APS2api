@@ -56,19 +56,19 @@ type AppConfig struct {
 func DefaultConfig() AppConfig {
 	return AppConfig{
 		PortAPI:                   2156,
-		MaxRetries:                2,
+		MaxRetries:                1, // 默认为 1 次
 		Anti429Target:             "system",
 		AntiTracking:              true,
 		VertexAPIKey:              defaultAnonAPIKey,
 		CountTokensQuerySignature: defaultCountTokensQuerySig,
 		MaxN:                      8,
-		TokenPoolSize:             8,
+		TokenPoolSize:             30, // 配套 15 并发，池子扩容至 30 更加稳健
 		MaxSpillMB:                2048,
 		ParallelPoolEnabled:       true,
-		ParallelPoolSize:          4,
+		ParallelPoolSize:          15, // 默认为 15 并发
 		ParallelNodeTopK:          80,
-		ParallelPoolDelayDynamic:  true,
-		ParallelPoolDelayMs:       500,
+		ParallelPoolDelayDynamic:  false, // 建议默认关闭动态对冲，改为稳定的秒级接力
+		ParallelPoolDelayMs:       2500,  // 固定对冲间隔设为 2500ms（2.5秒），单节点撞墙后触发接力
 		RecaptchaExpireSeconds:    60,
 	}
 }
