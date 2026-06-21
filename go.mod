@@ -6,6 +6,7 @@ require (
 	github.com/bogdanfinn/fhttp v0.6.8
 	github.com/bogdanfinn/tls-client v1.15.1
 	github.com/metacubex/mihomo v1.19.27
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (

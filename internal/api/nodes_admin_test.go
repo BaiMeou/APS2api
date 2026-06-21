@@ -1,8 +1,12 @@
 package api
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"net/url"
 	"testing"
+
+	"github.com/bsfdsagfadg/vertex/internal/transport"
 )
 
 func TestParseInlineYamlAttrsKeepsNestedObjects(t *testing.T) {
@@ -81,5 +85,175 @@ func TestClashProxyToURIBuildsHy2WithPortRange(t *testing.T) {
 	}
 	if q.Get("sni") != "www.bing.com" || q.Get("insecure") != "1" {
 		t.Fatalf("hy2 tls params not preserved: sni=%q insecure=%q", q.Get("sni"), q.Get("insecure"))
+	}
+}
+
+func TestParseClashYAMLToNodesPreservesSSPluginOpts(t *testing.T) {
+	yamlText := `
+proxies:
+  - { name: 'HK Demo', type: ss, server: example.com, port: 12022, cipher: aes-128-gcm, password: secret, plugin: obfs, plugin-opts: { mode: http, host: edge.example.com }, udp: true }
+`
+
+	imported := parseClashYAMLToNodes(yamlText)
+	if len(imported) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(imported))
+	}
+	if imported[0].Type != "ss" || imported[0].Name != "HK Demo" {
+		t.Fatalf("unexpected imported node metadata: %#v", imported[0])
+	}
+
+	out, err := transport.ParseURI(imported[0].RawURI)
+	if err != nil {
+		t.Fatalf("ParseURI returned error: %v", err)
+	}
+	if got := out["plugin"]; got != "obfs" {
+		t.Fatalf("plugin not preserved: %#v", got)
+	}
+	opts, ok := out["plugin-opts"].(map[string]any)
+	if !ok {
+		t.Fatalf("plugin-opts missing or wrong type: %#v", out["plugin-opts"])
+	}
+	if opts["mode"] != "http" || opts["host"] != "edge.example.com" {
+		t.Fatalf("plugin-opts not preserved: %#v", opts)
+	}
+	if got := out["udp"]; got != true {
+		t.Fatalf("udp not preserved: %#v", got)
+	}
+}
+
+func TestParseImportedNodesSupportsSingleTopLevelProxyObject(t *testing.T) {
+	text := `{ name: 'HK Demo', type: ss, server: example.com, port: 12022, cipher: aes-128-gcm, password: secret, plugin: obfs, plugin-opts: { mode: http, host: edge.example.com } }`
+
+	imported := parseImportedNodes(text)
+	if len(imported) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(imported))
+	}
+
+	out, err := transport.ParseURI(imported[0].RawURI)
+	if err != nil {
+		t.Fatalf("ParseURI returned error: %v", err)
+	}
+	if out["type"] != "ss" || out["server"] != "example.com" {
+		t.Fatalf("unexpected imported node: %#v", out)
+	}
+}
+
+func TestParseImportedNodesSupportsV2RayNInnerURI(t *testing.T) {
+	payload, err := json.Marshal(map[string]any{
+		"ConfigType":     5,
+		"Remarks":        "demo",
+		"Address":        "cf.example.com",
+		"Port":           443,
+		"Password":       "12345678-1234-1234-1234-123456789012",
+		"StreamSecurity": "tls",
+		"Sni":            "edge.example.com",
+		"Fingerprint":    "chrome",
+		"Network":        "ws",
+		"ProtoExtraObj":  map[string]any{"VlessEncryption": "none"},
+		"TransportExtraObj": map[string]any{
+			"Path": "/ws",
+			"Host": "edge.example.com",
+		},
+	})
+	if err != nil {
+		t.Fatalf("Marshal returned error: %v", err)
+	}
+
+	text := "v2rayn://vless/" + base64.RawURLEncoding.EncodeToString(payload)
+	imported := parseImportedNodes(text)
+	if len(imported) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(imported))
+	}
+
+	out, err := transport.ParseURI(imported[0].RawURI)
+	if err != nil {
+		t.Fatalf("ParseURI returned error: %v", err)
+	}
+	if out["type"] != "vless" || out["servername"] != "edge.example.com" {
+		t.Fatalf("unexpected imported node: %#v", out)
+	}
+	wsOpts, ok := out["ws-opts"].(map[string]any)
+	if !ok || wsOpts["path"] != "/ws" {
+		t.Fatalf("ws-opts not preserved: %#v", out["ws-opts"])
+	}
+}
+
+func TestParseImportedNodesSupportsSIP008(t *testing.T) {
+	text := `{"servers":[{"remarks":"ss demo","server":"1.2.3.4","server_port":8388,"method":"aes-128-gcm","password":"secret"}]}`
+
+	imported := parseImportedNodes(text)
+	if len(imported) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(imported))
+	}
+
+	out, err := transport.ParseURI(imported[0].RawURI)
+	if err != nil {
+		t.Fatalf("ParseURI returned error: %v", err)
+	}
+	if out["type"] != "ss" || intValue(out["port"]) != 8388 {
+		t.Fatalf("unexpected imported node: %#v", out)
+	}
+}
+
+func TestParseImportedNodesSupportsV2RayOutbounds(t *testing.T) {
+	text := `{
+  "outbounds": [
+    {
+      "tag": "demo",
+      "protocol": "vmess",
+      "settings": {
+        "vnext": [
+          {
+            "address": "v2ray.cool",
+            "port": 443,
+            "users": [
+              {
+                "id": "a3482e88-686a-4a58-8126-99c9df64b7bf",
+                "security": "auto",
+                "alterId": 0
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "ws",
+        "security": "tls",
+        "tlsSettings": {
+          "serverName": "edge.example.com",
+          "fingerprint": "chrome",
+          "allowInsecure": true,
+          "alpn": "h2"
+        },
+        "wsSettings": {
+          "path": "/ws",
+          "headers": {
+            "Host": "edge.example.com"
+          }
+        }
+      }
+    }
+  ]
+}`
+
+	imported := parseImportedNodes(text)
+	if len(imported) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(imported))
+	}
+
+	out, err := transport.ParseURI(imported[0].RawURI)
+	if err != nil {
+		t.Fatalf("ParseURI returned error: %v", err)
+	}
+	if out["type"] != "vmess" || out["servername"] != "edge.example.com" {
+		t.Fatalf("unexpected imported node: %#v", out)
+	}
+	wsOpts, ok := out["ws-opts"].(map[string]any)
+	if !ok {
+		t.Fatalf("ws-opts missing: %#v", out["ws-opts"])
+	}
+	headers, ok := wsOpts["headers"].(map[string]any)
+	if !ok || headers["Host"] != "edge.example.com" {
+		t.Fatalf("unexpected ws headers: %#v", wsOpts)
 	}
 }

@@ -36,6 +36,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/bsfdsagfadg/vertex/internal/netx"
 )
 
 const (
@@ -80,7 +82,7 @@ func Start(version, platform string, enabled bool) {
 		return
 	}
 	once.Do(func() {
-		client = &http.Client{Timeout: 10 * time.Second}
+		client = netx.NewHTTPClient(10 * time.Second)
 		stopCh = make(chan struct{})
 
 		instID := loadOrCreateID()
