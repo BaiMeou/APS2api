@@ -232,6 +232,9 @@ func (s *Server) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 	case "/nodes/batch-delete":
 		s.adminBatchDeleteNodes(w, r)
 		return
+	case "/nodes/sort":
+		s.adminSortNodesByLatency(w, r)
+		return
 	}
 
 	switch path {
@@ -378,6 +381,7 @@ var adminAllowedSettings = map[string]bool{
 	"parallel_pool_delay_dynamic": true,
 	"parallel_pool_delay_ms":      true,
 	"recaptcha_expire_seconds":    true,
+	"active_node_uri":             true,
 }
 
 // adminPutSettings 处理 PUT /api/admin/settings：合并 {settings:{...}} 写回 config.json 并清缓存。

@@ -453,7 +453,16 @@ func (s *Server) adminUseNode(w http.ResponseWriter, r *http.Request) {
 	if !s.decodeAdminBody(w, r, &body) {
 		return
 	}
-	_ = config.WriteSettings(map[string]any{"active_node_uri": body.RawURI, "parallel_pool_enabled": false})
+	if body.RawURI == "" {
+		_ = config.WriteSettings(map[string]any{"active_node_uri": "", "parallel_pool_enabled": true})
+	} else {
+		_ = config.WriteSettings(map[string]any{"active_node_uri": body.RawURI, "parallel_pool_enabled": false})
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) adminSortNodesByLatency(w http.ResponseWriter, _ *http.Request) {
+	nodes.SortNodesByLatency()
 	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

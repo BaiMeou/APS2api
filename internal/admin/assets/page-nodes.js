@@ -4,6 +4,7 @@ document.getElementById('nodesBody').addEventListener('click', function(e) {
   var uri = btn.dataset.uri;
   var action = btn.dataset.action;
   if (action === 'use-node') useNode(uri);
+  else if (action === 'unuse-node') unuseNode(uri);
   else if (action === 'delete-node') delNode(uri);
   else if (action === 'test-node') testSingleNode(uri);
   else if (action === 'enable-node') enableNode(uri);
@@ -120,14 +121,12 @@ async function loadNodes() {
         avail.textContent = '\u53EF\u7528';
         statusTd.appendChild(avail);
       } else {
-        // 【核心修改】：红色标签内容回归极简，仅显示“测试失败”，保持标签小巧美观
         var pill = document.createElement('span');
         pill.className = 'pill off';
         pill.style.cssText = 'background:rgba(236,138,124,0.16);color:var(--red);margin-right:5px;';
         pill.textContent = '\u6D4B\u8BD5\u5931\u8D25';
         statusTd.appendChild(pill);
         
-        // 【核心修改】：详细的错误原因直接渲染在下方第二行，不再受原有的 90 字符硬性截断限制
         if (health.last_test_error) {
           var errSpan = document.createElement('div');
           errSpan.className = 'node-err-msg';
@@ -155,13 +154,23 @@ async function loadNodes() {
         enableBtn.textContent = '\u542F\u7528';
         actionTd.appendChild(enableBtn);
       }
-      var useBtn = document.createElement('button');
-      useBtn.className = 'btn ghost';
-      useBtn.style.cssText = 'padding:4px 10px;font-size:12px;margin-right:4px;';
-      useBtn.dataset.action = 'use-node';
-      useBtn.dataset.uri = n.raw_uri;
-      useBtn.textContent = '\u9501\u5B9A\u4F7F\u7528';
-      actionTd.appendChild(useBtn);
+      if (isLocked) {
+        var unuseBtn = document.createElement('button');
+        unuseBtn.className = 'btn ghost';
+        unuseBtn.style.cssText = 'padding:4px 10px;font-size:12px;margin-right:4px;color:var(--gold);';
+        unuseBtn.dataset.action = 'unuse-node';
+        unuseBtn.dataset.uri = n.raw_uri;
+        unuseBtn.textContent = '取消锁定';
+        actionTd.appendChild(unuseBtn);
+      } else {
+        var useBtn = document.createElement('button');
+        useBtn.className = 'btn ghost';
+        useBtn.style.cssText = 'padding:4px 10px;font-size:12px;margin-right:4px;';
+        useBtn.dataset.action = 'use-node';
+        useBtn.dataset.uri = n.raw_uri;
+        useBtn.textContent = '\u9501\u5B9A\u4F7F\u7528';
+        actionTd.appendChild(useBtn);
+      }
       var delBtn = document.createElement('button');
       delBtn.className = 'btn danger';
       delBtn.style.cssText = 'padding:4px 10px;font-size:12px;';
@@ -246,6 +255,8 @@ async function testAllNodes() {
 
 async function dedupNodes() { await API.nodes.dedup(); loadNodes(); toast('去重完成'); }
 async function deleteDisabledNodes() { await API.nodes.deleteDisabled(); loadNodes(); toast('清理完成'); }
+async function sortNodesByLatency() { await API.nodes.sort(); await loadNodes(); toast('已按延迟重排节点'); }
+
 async function testSingleNode(uri) {
   toast('正在测试节点...');
   try {
@@ -267,6 +278,7 @@ async function enableNode(uri) {
 }
 
 async function useNode(uri) { await API.useNode(uri); loadSettings(); loadNodes(); toast('已锁定使用该节点，并关闭并发池'); }
+async function unuseNode(uri) { await API.useNode(''); loadSettings(); loadNodes(); toast('已取消锁定，并恢复并发池'); }
 async function delNode(uri) { if(!confirm('删除该节点？')) return; await API.nodes.delete(uri); loadNodes(); toast('已删除'); }
 
 function getSelectedNodeURIs() {

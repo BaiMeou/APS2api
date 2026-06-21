@@ -127,7 +127,6 @@ func MergeNodes(newNodes []Node) {
 
 func DeleteNode(uri string) {
 	mu.Lock()
-	defer mu.Unlock()
 	ensureLoaded()
 	var kept []Node
 	for _, n := range nodeList {
@@ -139,18 +138,20 @@ func DeleteNode(uri string) {
 	delete(healthMap, uri)
 	saveNodesUnsafe()
 	saveHealthUnsafe()
-	if DeleteNodeCallback != nil {
-		DeleteNodeCallback(uri)
+	cb := DeleteNodeCallback
+	mu.Unlock() // 必须先解锁，避免底层的销毁回调查找节点名称时发生死锁
+	if cb != nil {
+		cb(uri)
 	}
 }
 
 func DedupNodes() int {
 	mu.Lock()
-	defer mu.Unlock()
 	ensureLoaded()
 	keepMap := make(map[string]bool)
 	var kept []Node
 	removed := 0
+	var removedURIs []string
 	for _, n := range nodeList {
 		key := n.RawURI
 		if scheme, userinfo, host, port, ok := parseNodeIdentity(n.RawURI); ok {
@@ -161,32 +162,50 @@ func DedupNodes() int {
 			kept = append(kept, n)
 		} else {
 			removed++
+			removedURIs = append(removedURIs, n.RawURI)
 			delete(healthMap, n.RawURI)
 		}
 	}
 	nodeList = kept
 	saveNodesUnsafe()
 	saveHealthUnsafe()
+	cb := DeleteNodeCallback
+	mu.Unlock() // 先解锁再通知销毁连接池
+
+	if cb != nil {
+		for _, u := range removedURIs {
+			cb(u)
+		}
+	}
 	return removed
 }
 
 func DeleteDisabled() int {
 	mu.Lock()
-	defer mu.Unlock()
 	ensureLoaded()
 	var kept []Node
 	removed := 0
+	var removedURIs []string
 	for _, n := range nodeList {
 		if !n.Disabled {
 			kept = append(kept, n)
 		} else {
 			removed++
+			removedURIs = append(removedURIs, n.RawURI)
 			delete(healthMap, n.RawURI)
 		}
 	}
 	nodeList = kept
 	saveNodesUnsafe()
 	saveHealthUnsafe()
+	cb := DeleteNodeCallback
+	mu.Unlock()
+
+	if cb != nil {
+		for _, u := range removedURIs {
+			cb(u)
+		}
+	}
 	return removed
 }
 
@@ -206,10 +225,8 @@ func BatchUpdateNodesDisabled(uris []string, disabled bool) {
 	saveNodesUnsafe()
 }
 
-// 【已修正】：恢复存储层 BatchDeleteNodes 的干净持久化逻辑，解决 writeJSONFile 与 body 的编译报错
 func BatchDeleteNodes(uris []string) {
 	mu.Lock()
-	defer mu.Unlock()
 	ensureLoaded()
 	targets := make(map[string]bool)
 	for _, u := range uris {
@@ -225,11 +242,59 @@ func BatchDeleteNodes(uris []string) {
 	nodeList = kept
 	saveNodesUnsafe()
 	saveHealthUnsafe()
-	if DeleteNodeCallback != nil {
+	cb := DeleteNodeCallback
+	mu.Unlock() // 防止在批量删除时引发卡死死锁
+
+	if cb != nil {
 		for _, u := range uris {
-			DeleteNodeCallback(u)
+			cb(u)
 		}
 	}
+}
+
+func SortNodesByLatency() {
+	mu.Lock()
+	ensureLoaded()
+
+	sort.Slice(nodeList, func(i, j int) bool {
+		n1 := nodeList[i]
+		n2 := nodeList[j]
+
+		// 禁用的排在最后面
+		if n1.Disabled != n2.Disabled {
+			return !n1.Disabled
+		}
+
+		h1 := healthMap[n1.RawURI]
+		h2 := healthMap[n2.RawURI]
+
+		val1 := math.MaxFloat64
+		if h1 != nil {
+			if h1.ConsecutiveFailures > 0 {
+				val1 = 1e6 + float64(h1.ConsecutiveFailures)*1000
+			} else if h1.LastTestMs > 0 {
+				val1 = h1.LastTestMs
+			}
+		}
+
+		val2 := math.MaxFloat64
+		if h2 != nil {
+			if h2.ConsecutiveFailures > 0 {
+				val2 = 1e6 + float64(h2.ConsecutiveFailures)*1000
+			} else if h2.LastTestMs > 0 {
+				val2 = h2.LastTestMs
+			}
+		}
+
+		// 延迟一致的按名字自然排序
+		if val1 == val2 {
+			return n1.Name < n2.Name
+		}
+		return val1 < val2
+	})
+
+	saveNodesUnsafe()
+	mu.Unlock()
 }
 
 func GetNodeName(uri string) string {
@@ -466,7 +531,6 @@ func SelectForParallel(k int) []Node {
 		scored = append(scored[:idx], scored[idx+1:]...)
 	}
 
-	// 【核心修改】：通过 DebugMode 控制此行刷屏日志，减少生产环境下的无意义 IO
 	if config.Load().DebugMode {
 		log.Printf("[Nodes] 选择并行节点 (需求: %d, 实际: %d)", k, len(selected))
 	}
