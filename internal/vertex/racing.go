@@ -299,3 +299,17 @@ loop:
 			return
 		}
 	}
+
+	if winner != nil {
+		if !yield(winner.first) {
+			return
+		}
+		for chunk := range winner.ch {
+			if !yield(chunk) {
+				return
+			}
+		}
+	} else {
+		yield(StreamChunk{Err: NewInternalError("all nodes failed to stream")})
+	}
+}
