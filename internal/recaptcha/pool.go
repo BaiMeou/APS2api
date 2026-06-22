@@ -98,9 +98,13 @@ func (p *TokenPool) workerLoop() {
 					go func() {
 						defer atomic.AddInt32(&p.activeFetchers, -1)
 
-						// 【改进1】：增加随机抖动 (Jitter)。错开 0~1000毫秒，
-						// 这样在补充大量 Token 时，它们在时间轴上也是均匀拉开的，而不是瞬间齐发。
-						time.Sleep(time.Duration(rand.Intn(1000)) * time.Millisecond)
+						// 急救模式：如果池子彻底干涸（currentCount == 0 / len(tokenChan) == 0）
+						// 则说明聊天处于大并发对冲启动阶段。此时跳过随机 jitter 错开，不睡眠，全力秒级极速拉取重填。
+						if len(p.tokenChan) > 0 {
+							time.Sleep(time.Duration(rand.Intn(1000)) * time.Millisecond)
+						} else {
+							log.Printf("[Recaptcha] Token 池空，启动急救无缝填充机制...")
+						}
 
 						// 智能多节点分摊
 						proxyURI := ""
@@ -132,7 +136,6 @@ func (p *TokenPool) workerLoop() {
 							ExpireAt: time.Now().Add(time.Duration(expireSec) * time.Second),
 						}
 
-						// 【改进2】：如果 channel 已满，直接丢弃，不阻塞阻塞协程
 						select {
 						case p.tokenChan <- tok:
 						case <-p.stopCh:
@@ -158,7 +161,7 @@ func (p *TokenPool) GetTokenWithProxy(proxyURI string) (string, error) {
 			if !ok {
 				return p.fetch(proxyURI)
 			}
-			// 【改进3】：即将过期的 Token 提前过滤掉（留出 5 秒网络传输冗余），提升请求成功率
+			// 即将过期的 Token 提前过滤掉（留出 5 秒网络传输冗余），提升请求成功率
 			if time.Now().Add(5 * time.Second).After(tok.ExpireAt) {
 				continue // 自动跳过即将过期的 Token
 			}
