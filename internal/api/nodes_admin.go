@@ -1859,6 +1859,9 @@ func buildClashNode(proxy map[string]any) (nodes.Node, bool) {
 	if !ok || len(normalized) == 0 {
 		return nodes.Node{}, false
 	}
+	if !looksLikeClashProxyMap(normalized) {
+		return nodes.Node{}, false
+	}
 
 	rawURI := clashProxyObjectToURI(normalized)
 	if rawURI == "" {

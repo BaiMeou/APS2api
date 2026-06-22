@@ -121,6 +121,19 @@ proxies:
 	}
 }
 
+func TestParseClashYAMLToNodesSkipsInvalidProxyObjects(t *testing.T) {
+	yamlText := `
+proxies:
+  - { name: bad missing endpoint, type: ss }
+  - { name: group-ish, type: select }
+`
+
+	imported := parseClashYAMLToNodes(yamlText)
+	if len(imported) != 0 {
+		t.Fatalf("expected invalid proxy objects to be skipped, got %#v", imported)
+	}
+}
+
 func TestParseImportedNodesSupportsSingleTopLevelProxyObject(t *testing.T) {
 	text := `{ name: 'HK Demo', type: ss, server: example.com, port: 12022, cipher: aes-128-gcm, password: secret, plugin: obfs, plugin-opts: { mode: http, host: edge.example.com } }`
 
