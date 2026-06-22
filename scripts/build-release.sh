@@ -97,7 +97,14 @@ build linux   arm64 vertex-proxy     vertex-proxy-linux-arm64   scripts/start.sh
 build linux   arm   vertex-proxy     vertex-proxy-linux-arm     scripts/start.sh scripts/vertex-proxy.service scripts/setup.sh
 
 # Android（启用 CGO 编译，指定 NDK 编译器，API 28 以兼容 Android 9+）
-build android arm64 vertex-proxy     vertex-proxy-android-arm64 scripts/start.sh scripts/setup.sh
+if [ -n "${ANDROID_NDK_HOME:-}" ]; then
+  build android arm64 vertex-proxy     vertex-proxy-android-arm64 scripts/start.sh scripts/setup.sh
+elif [ "${BUILD_ANDROID:-auto}" = "1" ] || [ "${BUILD_ANDROID:-auto}" = "true" ]; then
+  echo "error: BUILD_ANDROID is enabled but ANDROID_NDK_HOME is not set" >&2
+  exit 1
+else
+  echo "==> skip android/arm64: ANDROID_NDK_HOME is not set"
+fi
 
 # macOS（附带 setup.sh）
 build darwin  amd64 vertex-proxy     vertex-proxy-darwin-amd64  scripts/start.sh scripts/setup.sh
