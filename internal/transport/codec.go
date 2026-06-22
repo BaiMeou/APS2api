@@ -225,13 +225,23 @@ func parseVmess(uri string) (map[string]any, error) {
 	tlsStr, _ := d["tls"].(string)
 	if strings.ToLower(tlsStr) == "tls" {
 		host, _ := d["host"].(string)
-		sni := host
+		sni, _ := d["sni"].(string)
+		if sni == "" {
+			sni = host
+		}
 		if sni == "" {
 			sni, _ = d["add"].(string)
 		}
 		out["tls"] = true
 		out["sni"] = sni
 		out["servername"] = sni
+		if fp, ok := d["fp"].(string); ok && fp != "" {
+			out["client-fingerprint"] = fp
+			out["fingerprint"] = fp
+		}
+		if alpn, ok := d["alpn"].(string); ok && alpn != "" {
+			out["alpn"] = strings.Split(alpn, ",")
+		}
 		if insecure, ok := d["skip-cert-verify"].(bool); ok {
 			out["skip-cert-verify"] = insecure
 		} else if allowInsecure, ok := d["allowInsecure"].(string); ok && allowInsecure == "1" {

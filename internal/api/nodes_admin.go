@@ -22,8 +22,10 @@ import (
 	"time"
 
 	"github.com/bsfdsagfadg/vertex/internal/config"
+	"github.com/bsfdsagfadg/vertex/internal/netx"
 	"github.com/bsfdsagfadg/vertex/internal/nodes"
 	"github.com/bsfdsagfadg/vertex/internal/transport"
+	"gopkg.in/yaml.v3"
 )
 
 func (s *Server) adminGetNodes(w http.ResponseWriter, _ *http.Request) {
@@ -53,105 +55,14 @@ func (s *Server) adminFetchSub(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	log.Printf("[Admin] [FetchSub] 开始拉取订阅 URL: %s", body.URL)
-	client := &http.Client{
-		Timeout: 30 * time.Second,
-	}
-	req, err := http.NewRequestWithContext(r.Context(), "GET", body.URL, nil)
+	text, err := s.fetchSubscriptionText(r.Context(), body.URL)
 	if err != nil {
-		log.Printf("[Admin] [FetchSub] 创建拉取请求失败: %v", err)
-		s.writeJSON(w, http.StatusBadRequest, adminErr("创建请求失败: "+err.Error()))
-		return
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("[Admin] [FetchSub] 发送拉取请求失败: %v", err)
+		log.Printf("[Admin] [FetchSub] 拉取失败: %v", err)
 		s.writeJSON(w, http.StatusBadRequest, adminErr("拉取失败: "+err.Error()))
 		return
 	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("[Admin] [FetchSub] 服务器返回非200状态码: %d", resp.StatusCode)
-		s.writeJSON(w, http.StatusBadRequest, adminErr("拉取失败: 服务器返回状态码 "+strconv.Itoa(resp.StatusCode)))
-		return
-	}
-	data, _ := io.ReadAll(resp.Body)
-	text := strings.TrimSpace(string(data))
 
-	var lines []string
-	if strings.Contains(text, "proxies:") {
-		log.Printf("[Admin] [FetchSub] 识别为 Clash YAML 格式")
-		lines = parseClashYamlToURIs(text)
-	} else {
-		if b, err := decodeSubBase64(text); err == nil {
-			log.Printf("[Admin] [FetchSub] 识别并解密了 Base64 订阅内容")
-			text = string(b)
-		} else {
-			log.Printf("[Admin] [FetchSub] 内容未采用 Base64 或解密失败，尝试直接按行解析")
-		}
-		for _, line := range strings.Split(text, "\n") {
-			line = strings.TrimSpace(line)
-			if line != "" {
-				lines = append(lines, line)
-			}
-		}
-	}
-
-	var newNodes []nodes.Node
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if out, err := transport.ParseURI(line); err == nil {
-			t, _ := out["type"].(string)
-			// 提取节点名
-			nodeName := ""
-			if strings.HasPrefix(line, "vmess://") {
-				// vmess 解密出来的 json 中有 ps 字段，也就是节点名
-				b64Str := line[8:]
-				if idx := strings.Index(b64Str, "?"); idx != -1 {
-					b64Str = b64Str[:idx]
-				}
-				if idx := strings.Index(b64Str, "#"); idx != -1 {
-					b64Str = b64Str[:idx]
-				}
-				b64Str = strings.ReplaceAll(strings.ReplaceAll(b64Str, "-", "+"), "_", "/")
-				if pad := len(b64Str) % 4; pad != 0 {
-					b64Str += strings.Repeat("=", 4-pad)
-				}
-				if b, err := base64.StdEncoding.DecodeString(b64Str); err == nil {
-					var d map[string]any
-					if err := json.Unmarshal(b, &d); err == nil {
-						if ps, ok := d["ps"].(string); ok && ps != "" {
-							nodeName = ps
-						}
-					}
-				}
-			} else {
-				// ss, vless, trojan, hysteria2, tuic 等节点，通过 # 分割后面的节点名
-				if idx := strings.Index(line, "#"); idx != -1 {
-					escapedName := line[idx+1:]
-					if dec, err := url.QueryUnescape(escapedName); err == nil {
-						nodeName = dec
-					} else {
-						nodeName = escapedName
-					}
-				}
-			}
-
-			if nodeName == "" {
-				if n, ok := out["name"].(string); ok {
-					nodeName = n
-				}
-			}
-			if nodeName == "" {
-				nodeName = line[:min(len(line), 40)]
-			}
-			out["name"] = nodeName
-			newNodes = append(newNodes, nodes.Node{Type: t, Name: nodeName, RawURI: line})
-		}
-	}
+	newNodes := parseImportedNodes(text)
 	nodes.MergeNodes(newNodes)
 	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true, "count": len(newNodes)})
 }
@@ -369,74 +280,10 @@ func (s *Server) adminImportNodes(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("[Admin] [ImportNodes] 收到优选节点文件导入请求, 替换模式: %v", body.Replace)
 
-	text := strings.TrimSpace(body.Text)
-	var lines []string
-	if strings.Contains(text, "proxies:") {
-		lines = parseClashYamlToURIs(text)
-	} else {
-		if b, err := decodeSubBase64(text); err == nil {
-			text = string(b)
-		}
-		for _, line := range strings.Split(text, "\n") {
-			line = strings.TrimSpace(line)
-			if line != "" {
-				lines = append(lines, line)
-			}
-		}
-	}
-
-	var newNodes []nodes.Node
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		if out, err := transport.ParseURI(line); err == nil {
-			t, _ := out["type"].(string)
-			nodeName := ""
-			if strings.HasPrefix(line, "vmess://") {
-				b64Str := line[8:]
-				if idx := strings.Index(b64Str, "?"); idx != -1 {
-					b64Str = b64Str[:idx]
-				}
-				if idx := strings.Index(b64Str, "#"); idx != -1 {
-					b64Str = b64Str[:idx]
-				}
-				b64Str = strings.ReplaceAll(strings.ReplaceAll(b64Str, "-", "+"), "_", "/")
-				if pad := len(b64Str) % 4; pad != 0 {
-					b64Str += strings.Repeat("=", 4-pad)
-				}
-				if b, err := base64.StdEncoding.DecodeString(b64Str); err == nil {
-					var d map[string]any
-					if err := json.Unmarshal(b, &d); err == nil {
-						if ps, ok := d["ps"].(string); ok && ps != "" {
-							nodeName = ps
-						}
-					}
-				}
-			} else {
-				if idx := strings.Index(line, "#"); idx != -1 {
-					escapedName := line[idx+1:]
-					if dec, err := url.QueryUnescape(escapedName); err == nil {
-						nodeName = dec
-					} else {
-						nodeName = escapedName
-					}
-				}
-			}
-
-			if nodeName == "" {
-				nodeName = line[:min(len(line), 40)]
-			}
-			newNodes = append(newNodes, nodes.Node{Type: t, Name: nodeName, RawURI: line})
-		}
-	}
-
+	newNodes := parseImportedNodes(strings.TrimSpace(body.Text))
 	if body.Replace {
-		// 先清除所有节点
 		log.Printf("[Admin] [ImportNodes] 替换模式，正在清除全部已有候选节点")
-		allCurrent := nodes.LoadNodes()
-		for _, cn := range allCurrent {
+		for _, cn := range nodes.LoadNodes() {
 			nodes.DeleteNode(cn.RawURI)
 		}
 	}
@@ -730,6 +577,862 @@ func buildProxyURI(scheme, credential, server, port, name string, query url.Valu
 	return u.String()
 }
 
+func intValue(v any) int {
+	switch x := v.(type) {
+	case int:
+		return x
+	case int8:
+		return int(x)
+	case int16:
+		return int(x)
+	case int32:
+		return int(x)
+	case int64:
+		return int(x)
+	case uint:
+		return int(x)
+	case uint8:
+		return int(x)
+	case uint16:
+		return int(x)
+	case uint32:
+		return int(x)
+	case uint64:
+		return int(x)
+	case float32:
+		return int(x)
+	case float64:
+		return int(x)
+	case string:
+		n, _ := strconv.Atoi(strings.TrimSpace(x))
+		return n
+	default:
+		return 0
+	}
+}
+
+func boolValue(v any) bool {
+	switch x := v.(type) {
+	case bool:
+		return x
+	case string:
+		return isTruthy(x)
+	default:
+		return false
+	}
+}
+
+func mapValue(v any) map[string]any {
+	out, _ := normalizeYAMLValue(v).(map[string]any)
+	return out
+}
+
+func sliceValue(v any) []any {
+	out, _ := normalizeYAMLValue(v).([]any)
+	return out
+}
+
+func firstMapValue(v any) map[string]any {
+	items := sliceValue(v)
+	if len(items) == 0 {
+		return nil
+	}
+	return mapValue(items[0])
+}
+
+func parseJSONMapString(s string) map[string]any {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(s), &out); err != nil {
+		return nil
+	}
+	return out
+}
+
+func nestedObject(obj map[string]any, keys ...string) map[string]any {
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		if nested := mapValue(obj[key]); len(nested) > 0 {
+			return nested
+		}
+		if nested := parseJSONMapString(valueToString(obj[key])); len(nested) > 0 {
+			return nested
+		}
+	}
+	return nil
+}
+
+func splitCSV(s string) []string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+func parseReservedBytes(s string) []int {
+	parts := splitCSV(s)
+	if len(parts) == 0 {
+		return nil
+	}
+	out := make([]int, 0, len(parts))
+	for _, part := range parts {
+		n, err := strconv.Atoi(part)
+		if err != nil {
+			return nil
+		}
+		out = append(out, n)
+	}
+	return out
+}
+
+func splitInterfaceAddresses(s string) (string, string) {
+	var ipv4, ipv6 string
+	for _, part := range splitCSV(s) {
+		if strings.Contains(part, ":") {
+			if ipv6 == "" {
+				ipv6 = part
+			}
+			continue
+		}
+		if ipv4 == "" {
+			ipv4 = part
+		}
+	}
+	return ipv4, ipv6
+}
+
+func normalizeImportedNetwork(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	switch s {
+	case "", "raw", "tcp":
+		return ""
+	default:
+		return s
+	}
+}
+
+func importedAllowInsecure(v any) bool {
+	switch x := v.(type) {
+	case bool:
+		return x
+	case string:
+		return strings.EqualFold(strings.TrimSpace(x), "true") || isTruthy(x)
+	default:
+		return false
+	}
+}
+
+func applyCommonImportedProxyFields(proxy map[string]any, obj map[string]any) {
+	if sni := strings.TrimSpace(valueToString(obj["Sni"])); sni != "" {
+		proxy["sni"] = sni
+		proxy["servername"] = sni
+	}
+	if fp := strings.TrimSpace(valueToString(obj["Fingerprint"])); fp != "" {
+		proxy["client-fingerprint"] = fp
+		proxy["fingerprint"] = fp
+	}
+	if importedAllowInsecure(obj["AllowInsecure"]) {
+		proxy["skip-cert-verify"] = true
+	}
+	if alpn := splitCSV(valueToString(obj["Alpn"])); len(alpn) > 0 {
+		proxy["alpn"] = alpn
+	}
+	if cert := strings.TrimSpace(valueToString(obj["Cert"])); cert != "" {
+		proxy["certificate"] = cert
+	}
+	if privateKey := strings.TrimSpace(valueToString(obj["PrivateKey"])); privateKey != "" {
+		proxy["private-key"] = privateKey
+	}
+}
+
+func applyTransportExtras(proxy map[string]any, obj map[string]any, transport map[string]any) {
+	network := normalizeImportedNetwork(valueToString(obj["Network"]))
+	if network == "" {
+		return
+	}
+
+	switch network {
+	case "ws":
+		proxy["network"] = "ws"
+		wsOpts := map[string]any{}
+		if path := strings.TrimSpace(valueToString(transport["Path"])); path != "" {
+			wsOpts["path"] = path
+		}
+		if host := strings.TrimSpace(valueToString(transport["Host"])); host != "" {
+			wsOpts["headers"] = map[string]any{"Host": host}
+		}
+		if len(wsOpts) > 0 {
+			proxy["ws-opts"] = wsOpts
+		}
+	case "grpc":
+		proxy["network"] = "grpc"
+		grpcOpts := map[string]any{}
+		if serviceName := strings.TrimSpace(valueToString(transport["GrpcServiceName"])); serviceName != "" {
+			grpcOpts["grpc-service-name"] = serviceName
+		}
+		if len(grpcOpts) > 0 {
+			proxy["grpc-opts"] = grpcOpts
+		}
+	case "http", "h2":
+		proxy["network"] = "http"
+		httpOpts := map[string]any{}
+		if path := strings.TrimSpace(valueToString(transport["Path"])); path != "" {
+			httpOpts["path"] = []string{path}
+		}
+		if host := strings.TrimSpace(valueToString(transport["Host"])); host != "" {
+			httpOpts["headers"] = map[string][]string{"Host": []string{host}}
+		}
+		if len(httpOpts) > 0 {
+			httpOpts["method"] = "GET"
+			proxy["http-opts"] = httpOpts
+		}
+	case "xhttp":
+		proxy["network"] = "xhttp"
+		xhttpOpts := map[string]any{}
+		if path := strings.TrimSpace(valueToString(transport["Path"])); path != "" {
+			xhttpOpts["path"] = path
+		}
+		if host := strings.TrimSpace(valueToString(transport["Host"])); host != "" {
+			xhttpOpts["host"] = host
+		}
+		if mode := strings.TrimSpace(valueToString(transport["XhttpMode"])); mode != "" {
+			xhttpOpts["mode"] = mode
+		}
+		if headers := parseJSONMapString(valueToString(transport["XhttpExtra"])); len(headers) > 0 {
+			xhttpOpts["extra"] = headers
+		}
+		if len(xhttpOpts) > 0 {
+			proxy["xhttp-opts"] = xhttpOpts
+		}
+	default:
+		proxy["network"] = network
+	}
+}
+
+func applyImportedTLSFields(proxy map[string]any, obj map[string]any) {
+	streamSecurity := strings.ToLower(strings.TrimSpace(valueToString(obj["StreamSecurity"])))
+	switch streamSecurity {
+	case "tls":
+		proxy["tls"] = true
+	case "reality":
+		proxy["tls"] = true
+		proxy["reality-opts"] = map[string]any{
+			"public-key": strings.TrimSpace(valueToString(obj["PublicKey"])),
+			"short-id":   strings.TrimSpace(valueToString(obj["ShortId"])),
+		}
+	}
+}
+
+func buildClashURI(proxy map[string]any) string {
+	body, err := json.Marshal(proxy)
+	if err != nil {
+		return ""
+	}
+	return "clash://" + base64.StdEncoding.EncodeToString(body)
+}
+
+func v2rayNConfigType(v any) int {
+	switch x := v.(type) {
+	case string:
+		switch strings.ToLower(strings.TrimSpace(x)) {
+		case "vmess":
+			return 1
+		case "shadowsocks", "ss":
+			return 3
+		case "socks", "socks5":
+			return 4
+		case "vless":
+			return 5
+		case "trojan":
+			return 6
+		case "hysteria2", "hy2":
+			return 7
+		case "tuic":
+			return 8
+		case "wireguard":
+			return 9
+		case "http":
+			return 10
+		case "anytls":
+			return 11
+		case "naive":
+			return 12
+		default:
+			return intValue(x)
+		}
+	default:
+		return intValue(v)
+	}
+}
+
+func buildImportedProxyFromV2RayNProfile(obj map[string]any) map[string]any {
+	cfgType := v2rayNConfigType(obj["ConfigType"])
+	if cfgType == 0 {
+		return nil
+	}
+
+	name := firstNonEmpty(valueToString(obj["Remarks"]), valueToString(obj["Name"]))
+	server := strings.TrimSpace(valueToString(obj["Address"]))
+	port := intValue(obj["Port"])
+	password := strings.TrimSpace(valueToString(obj["Password"]))
+	username := strings.TrimSpace(valueToString(obj["Username"]))
+	proto := nestedObject(obj, "ProtoExtraObj", "ProtoExtra")
+	transportExtra := nestedObject(obj, "TransportExtraObj", "TransportExtra")
+
+	switch cfgType {
+	case 1:
+		if server == "" || port == 0 || password == "" {
+			return nil
+		}
+		proxy := map[string]any{
+			"name":    name,
+			"type":    "vmess",
+			"server":  server,
+			"port":    port,
+			"uuid":    password,
+			"cipher":  firstNonEmpty(valueToString(proto["VmessSecurity"]), "auto"),
+			"alterId": intValue(proto["AlterId"]),
+			"udp":     true,
+		}
+		applyCommonImportedProxyFields(proxy, obj)
+		applyImportedTLSFields(proxy, obj)
+		applyTransportExtras(proxy, obj, transportExtra)
+		return proxy
+	case 3:
+		method := strings.TrimSpace(valueToString(proto["SsMethod"]))
+		if server == "" || port == 0 || password == "" || method == "" {
+			return nil
+		}
+		proxy := map[string]any{
+			"name":     name,
+			"type":     "ss",
+			"server":   server,
+			"port":     port,
+			"cipher":   method,
+			"password": password,
+			"udp":      true,
+		}
+		return proxy
+	case 4:
+		if server == "" || port == 0 {
+			return nil
+		}
+		proxy := map[string]any{
+			"name":     name,
+			"type":     "socks5",
+			"server":   server,
+			"port":     port,
+			"username": username,
+			"password": password,
+			"udp":      true,
+		}
+		return proxy
+	case 5:
+		if server == "" || port == 0 || password == "" {
+			return nil
+		}
+		proxy := map[string]any{
+			"name":       name,
+			"type":       "vless",
+			"server":     server,
+			"port":       port,
+			"uuid":       password,
+			"encryption": firstNonEmpty(valueToString(proto["VlessEncryption"]), "none"),
+			"udp":        true,
+		}
+		if flow := strings.TrimSpace(valueToString(proto["Flow"])); flow != "" {
+			proxy["flow"] = flow
+		}
+		applyCommonImportedProxyFields(proxy, obj)
+		applyImportedTLSFields(proxy, obj)
+		applyTransportExtras(proxy, obj, transportExtra)
+		return proxy
+	case 6:
+		if server == "" || port == 0 || password == "" {
+			return nil
+		}
+		proxy := map[string]any{
+			"name":     name,
+			"type":     "trojan",
+			"server":   server,
+			"port":     port,
+			"password": password,
+			"udp":      true,
+		}
+		applyCommonImportedProxyFields(proxy, obj)
+		applyImportedTLSFields(proxy, obj)
+		applyTransportExtras(proxy, obj, transportExtra)
+		return proxy
+	case 7:
+		if server == "" || port == 0 || password == "" {
+			return nil
+		}
+		proxy := map[string]any{
+			"name":     name,
+			"type":     "hysteria2",
+			"server":   server,
+			"port":     port,
+			"password": password,
+			"udp":      true,
+		}
+		if ports := strings.TrimSpace(firstNonEmpty(valueToString(proto["Ports"]), valueToString(obj["Ports"]))); ports != "" {
+			proxy["ports"] = strings.ReplaceAll(ports, ":", "-")
+		}
+		if obfsPassword := strings.TrimSpace(valueToString(proto["SalamanderPass"])); obfsPassword != "" {
+			proxy["obfs"] = "salamander"
+			proxy["obfs-password"] = obfsPassword
+		}
+		applyCommonImportedProxyFields(proxy, obj)
+		return proxy
+	case 8:
+		if server == "" || port == 0 || password == "" {
+			return nil
+		}
+		proxy := map[string]any{
+			"name":     name,
+			"type":     "tuic",
+			"server":   server,
+			"port":     port,
+			"password": password,
+			"udp":      true,
+		}
+		if username != "" {
+			proxy["uuid"] = username
+		} else {
+			proxy["token"] = password
+			delete(proxy, "password")
+		}
+		if cc := strings.TrimSpace(valueToString(proto["CongestionControl"])); cc != "" {
+			proxy["congestion-controller"] = cc
+		}
+		applyCommonImportedProxyFields(proxy, obj)
+		return proxy
+	case 9:
+		if server == "" || port == 0 || password == "" {
+			return nil
+		}
+		proxy := map[string]any{
+			"name":        name,
+			"type":        "wireguard",
+			"server":      server,
+			"port":        port,
+			"private-key": password,
+			"public-key":  strings.TrimSpace(valueToString(proto["WgPublicKey"])),
+			"udp":         true,
+		}
+		if preSharedKey := strings.TrimSpace(valueToString(proto["WgPresharedKey"])); preSharedKey != "" {
+			proxy["pre-shared-key"] = preSharedKey
+		}
+		if reserved := parseReservedBytes(valueToString(proto["WgReserved"])); len(reserved) > 0 {
+			proxy["reserved"] = reserved
+		}
+		if mtu := intValue(proto["WgMtu"]); mtu > 0 {
+			proxy["mtu"] = mtu
+		}
+		ip, ipv6 := splitInterfaceAddresses(valueToString(proto["WgInterfaceAddress"]))
+		if ip != "" {
+			proxy["ip"] = ip
+		}
+		if ipv6 != "" {
+			proxy["ipv6"] = ipv6
+		}
+		return proxy
+	case 10:
+		if server == "" || port == 0 {
+			return nil
+		}
+		proxy := map[string]any{
+			"name":     name,
+			"type":     "http",
+			"server":   server,
+			"port":     port,
+			"username": username,
+			"password": password,
+		}
+		applyCommonImportedProxyFields(proxy, obj)
+		return proxy
+	case 11:
+		if server == "" || port == 0 || password == "" {
+			return nil
+		}
+		proxy := map[string]any{
+			"name":     name,
+			"type":     "anytls",
+			"server":   server,
+			"port":     port,
+			"password": password,
+			"udp":      true,
+		}
+		applyCommonImportedProxyFields(proxy, obj)
+		return proxy
+	default:
+		return nil
+	}
+}
+
+func applyV2RayStreamSettings(proxy map[string]any, stream map[string]any) {
+	if len(stream) == 0 {
+		return
+	}
+
+	network := strings.ToLower(strings.TrimSpace(valueToString(stream["network"])))
+	switch network {
+	case "ws":
+		proxy["network"] = "ws"
+		wsSettings := mapValue(stream["wsSettings"])
+		wsOpts := map[string]any{}
+		if path := strings.TrimSpace(valueToString(wsSettings["path"])); path != "" {
+			wsOpts["path"] = path
+		}
+		if host := strings.TrimSpace(valueToString(mapValue(wsSettings["headers"])["Host"])); host != "" {
+			wsOpts["headers"] = map[string]any{"Host": host}
+		}
+		if len(wsOpts) > 0 {
+			proxy["ws-opts"] = wsOpts
+		}
+	case "grpc":
+		proxy["network"] = "grpc"
+		grpcSettings := mapValue(stream["grpcSettings"])
+		if serviceName := strings.TrimSpace(firstNonEmpty(valueToString(grpcSettings["serviceName"]), valueToString(grpcSettings["grpc-service-name"]))); serviceName != "" {
+			proxy["grpc-opts"] = map[string]any{"grpc-service-name": serviceName}
+		}
+	case "http", "h2":
+		proxy["network"] = "http"
+		httpSettings := mapValue(stream["httpSettings"])
+		httpOpts := map[string]any{"method": "GET"}
+		if path := strings.TrimSpace(valueToString(httpSettings["path"])); path != "" {
+			httpOpts["path"] = []string{path}
+		}
+		hostValue := httpSettings["host"]
+		if hosts := sliceValue(hostValue); len(hosts) > 0 {
+			host := strings.TrimSpace(valueToString(hosts[0]))
+			if host != "" {
+				httpOpts["headers"] = map[string][]string{"Host": []string{host}}
+			}
+		} else if host := strings.TrimSpace(valueToString(hostValue)); host != "" {
+			httpOpts["headers"] = map[string][]string{"Host": []string{host}}
+		}
+		proxy["http-opts"] = httpOpts
+	}
+
+	security := strings.ToLower(strings.TrimSpace(valueToString(stream["security"])))
+	switch security {
+	case "tls":
+		proxy["tls"] = true
+		tlsSettings := mapValue(stream["tlsSettings"])
+		if sni := strings.TrimSpace(firstNonEmpty(valueToString(tlsSettings["serverName"]), valueToString(tlsSettings["sni"]))); sni != "" {
+			proxy["servername"] = sni
+			proxy["sni"] = sni
+		}
+		if fp := strings.TrimSpace(firstNonEmpty(valueToString(tlsSettings["fingerprint"]), valueToString(tlsSettings["fp"]))); fp != "" {
+			proxy["client-fingerprint"] = fp
+			proxy["fingerprint"] = fp
+		}
+		if boolValue(tlsSettings["allowInsecure"]) {
+			proxy["skip-cert-verify"] = true
+		}
+		if alpn := splitCSV(valueToString(tlsSettings["alpn"])); len(alpn) > 0 {
+			proxy["alpn"] = alpn
+		}
+	case "reality":
+		proxy["tls"] = true
+		realitySettings := mapValue(stream["realitySettings"])
+		if sni := strings.TrimSpace(firstNonEmpty(valueToString(realitySettings["serverName"]), valueToString(realitySettings["sni"]))); sni != "" {
+			proxy["servername"] = sni
+			proxy["sni"] = sni
+		}
+		if fp := strings.TrimSpace(firstNonEmpty(valueToString(realitySettings["fingerprint"]), valueToString(realitySettings["fp"]))); fp != "" {
+			proxy["client-fingerprint"] = fp
+			proxy["fingerprint"] = fp
+		}
+		proxy["reality-opts"] = map[string]any{
+			"public-key": strings.TrimSpace(valueToString(realitySettings["publicKey"])),
+			"short-id":   strings.TrimSpace(firstNonEmpty(valueToString(realitySettings["shortId"]), valueToString(realitySettings["short-id"]))),
+		}
+	}
+}
+
+func buildImportedProxyFromV2RayOutbound(obj map[string]any) map[string]any {
+	protocol := strings.ToLower(strings.TrimSpace(valueToString(obj["protocol"])))
+	if protocol == "" {
+		return nil
+	}
+
+	name := firstNonEmpty(valueToString(obj["remarks"]), valueToString(obj["tag"]), protocol)
+	settings := mapValue(obj["settings"])
+	streamSettings := mapValue(obj["streamSettings"])
+
+	switch protocol {
+	case "vmess", "vless":
+		vnext := firstMapValue(settings["vnext"])
+		user := firstMapValue(vnext["users"])
+		server := strings.TrimSpace(valueToString(vnext["address"]))
+		port := intValue(vnext["port"])
+		id := strings.TrimSpace(valueToString(user["id"]))
+		if server == "" || port == 0 || id == "" {
+			return nil
+		}
+		proxy := map[string]any{
+			"name":   name,
+			"type":   protocol,
+			"server": server,
+			"port":   port,
+			"uuid":   id,
+			"udp":    true,
+		}
+		if protocol == "vmess" {
+			proxy["cipher"] = firstNonEmpty(valueToString(user["security"]), "auto")
+			proxy["alterId"] = intValue(user["alterId"])
+		} else {
+			proxy["encryption"] = firstNonEmpty(valueToString(user["encryption"]), "none")
+			if flow := strings.TrimSpace(valueToString(user["flow"])); flow != "" {
+				proxy["flow"] = flow
+			}
+		}
+		applyV2RayStreamSettings(proxy, streamSettings)
+		return proxy
+	case "trojan":
+		serverInfo := firstMapValue(settings["servers"])
+		server := strings.TrimSpace(valueToString(serverInfo["address"]))
+		port := intValue(serverInfo["port"])
+		password := strings.TrimSpace(valueToString(serverInfo["password"]))
+		if server == "" || port == 0 || password == "" {
+			return nil
+		}
+		proxy := map[string]any{
+			"name":     name,
+			"type":     "trojan",
+			"server":   server,
+			"port":     port,
+			"password": password,
+			"udp":      true,
+		}
+		applyV2RayStreamSettings(proxy, streamSettings)
+		return proxy
+	case "shadowsocks":
+		serverInfo := firstMapValue(settings["servers"])
+		server := strings.TrimSpace(valueToString(serverInfo["address"]))
+		port := intValue(serverInfo["port"])
+		password := strings.TrimSpace(valueToString(serverInfo["password"]))
+		method := strings.TrimSpace(valueToString(serverInfo["method"]))
+		if server == "" || port == 0 || password == "" || method == "" {
+			return nil
+		}
+		return map[string]any{
+			"name":     name,
+			"type":     "ss",
+			"server":   server,
+			"port":     port,
+			"cipher":   method,
+			"password": password,
+			"udp":      true,
+		}
+	case "socks":
+		serverInfo := firstMapValue(settings["servers"])
+		server := strings.TrimSpace(valueToString(serverInfo["address"]))
+		port := intValue(serverInfo["port"])
+		if server == "" || port == 0 {
+			return nil
+		}
+		return map[string]any{
+			"name":     name,
+			"type":     "socks5",
+			"server":   server,
+			"port":     port,
+			"username": strings.TrimSpace(valueToString(serverInfo["user"])),
+			"password": strings.TrimSpace(valueToString(serverInfo["pass"])),
+			"udp":      true,
+		}
+	case "http":
+		serverInfo := firstMapValue(settings["servers"])
+		server := strings.TrimSpace(valueToString(serverInfo["address"]))
+		port := intValue(serverInfo["port"])
+		if server == "" || port == 0 {
+			return nil
+		}
+		return map[string]any{
+			"name":     name,
+			"type":     "http",
+			"server":   server,
+			"port":     port,
+			"username": strings.TrimSpace(valueToString(serverInfo["user"])),
+			"password": strings.TrimSpace(valueToString(serverInfo["pass"])),
+		}
+	default:
+		return nil
+	}
+}
+
+func buildImportedProxyFromSIP008(obj map[string]any) map[string]any {
+	server := strings.TrimSpace(valueToString(obj["server"]))
+	port := intValue(obj["server_port"])
+	method := strings.TrimSpace(firstNonEmpty(valueToString(obj["method"]), valueToString(obj["cipher"])))
+	password := strings.TrimSpace(valueToString(obj["password"]))
+	if server == "" || port == 0 || method == "" || password == "" {
+		return nil
+	}
+	return map[string]any{
+		"name":     firstNonEmpty(valueToString(obj["remarks"]), valueToString(obj["name"])),
+		"type":     "ss",
+		"server":   server,
+		"port":     port,
+		"cipher":   method,
+		"password": password,
+		"udp":      true,
+	}
+}
+
+func supportedClashProxyType(typ string) bool {
+	switch typ {
+	case "ss", "ssr", "socks5", "http", "vmess", "vless", "snell", "trojan", "hysteria", "hysteria2", "wireguard", "tuic", "gost-relay", "ssh", "mieru", "anytls", "sudoku", "masque", "trusttunnel", "openvpn", "tailscale":
+		return true
+	default:
+		return false
+	}
+}
+
+func looksLikeClashProxyMap(obj map[string]any) bool {
+	typ := strings.ToLower(strings.TrimSpace(valueToString(obj["type"])))
+	if !supportedClashProxyType(typ) {
+		return false
+	}
+	if typ == "wireguard" {
+		return strings.TrimSpace(valueToString(obj["private-key"])) != "" &&
+			(strings.TrimSpace(valueToString(obj["server"])) != "" || len(sliceValue(obj["peers"])) > 0)
+	}
+	return strings.TrimSpace(valueToString(obj["server"])) != "" && intValue(obj["port"]) > 0
+}
+
+func buildImportedNodeFromProxyMap(proxy map[string]any) (nodes.Node, bool) {
+	if len(proxy) == 0 {
+		return nodes.Node{}, false
+	}
+	raw := buildClashURI(proxy)
+	if raw == "" {
+		return nodes.Node{}, false
+	}
+	return parseImportedNodeLine(raw)
+}
+
+func buildImportedNodeFromMap(obj map[string]any) (nodes.Node, bool) {
+	if proxy := buildImportedProxyFromV2RayNProfile(obj); len(proxy) > 0 {
+		return buildImportedNodeFromProxyMap(proxy)
+	}
+	if proxy := buildImportedProxyFromV2RayOutbound(obj); len(proxy) > 0 {
+		return buildImportedNodeFromProxyMap(proxy)
+	}
+	if proxy := buildImportedProxyFromSIP008(obj); len(proxy) > 0 {
+		return buildImportedNodeFromProxyMap(proxy)
+	}
+	if looksLikeClashProxyMap(obj) {
+		return buildClashNode(obj)
+	}
+	return nodes.Node{}, false
+}
+
+func buildImportedNodesFromSlice(items []any) []nodes.Node {
+	imported := make([]nodes.Node, 0, len(items))
+	for _, item := range items {
+		obj := mapValue(item)
+		if len(obj) == 0 {
+			continue
+		}
+		if node, ok := buildImportedNodeFromMap(obj); ok {
+			imported = append(imported, node)
+		}
+	}
+	return imported
+}
+
+func parseJSONImportedNodes(text string) []nodes.Node {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+
+	var raw any
+	if err := json.Unmarshal([]byte(text), &raw); err != nil {
+		return nil
+	}
+
+	normalized := normalizeYAMLValue(raw)
+	if obj, ok := normalized.(map[string]any); ok {
+		if proxies := buildImportedNodesFromSlice(sliceValue(obj["proxies"])); len(proxies) > 0 {
+			return proxies
+		}
+		if outbounds := buildImportedNodesFromSlice(sliceValue(obj["outbounds"])); len(outbounds) > 0 {
+			return outbounds
+		}
+		if servers := buildImportedNodesFromSlice(sliceValue(obj["servers"])); len(servers) > 0 {
+			return servers
+		}
+		if node, ok := buildImportedNodeFromMap(obj); ok {
+			return []nodes.Node{node}
+		}
+		return nil
+	}
+	if items, ok := normalized.([]any); ok {
+		return buildImportedNodesFromSlice(items)
+	}
+	return nil
+}
+
+func parseV2RayNNodeLine(line string) (nodes.Node, bool) {
+	raw := strings.TrimSpace(line)
+	if !strings.HasPrefix(strings.ToLower(raw), "v2rayn://") {
+		return nodes.Node{}, false
+	}
+
+	body := raw[len("v2rayn://"):]
+	slash := strings.IndexByte(body, '/')
+	if slash <= 0 || slash+1 >= len(body) {
+		return nodes.Node{}, false
+	}
+
+	encoded := body[slash+1:]
+	encoded = strings.ReplaceAll(strings.ReplaceAll(encoded, "-", "+"), "_", "/")
+	if pad := len(encoded) % 4; pad != 0 {
+		encoded += strings.Repeat("=", 4-pad)
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nodes.Node{}, false
+	}
+
+	var obj map[string]any
+	if err := json.Unmarshal(decoded, &obj); err != nil {
+		return nodes.Node{}, false
+	}
+
+	normalized, _ := normalizeYAMLValue(obj).(map[string]any)
+	if len(normalized) == 0 {
+		return nodes.Node{}, false
+	}
+	return buildImportedNodeFromMap(normalized)
+}
+
+func parseFlexibleImportedNodeLine(line string) (nodes.Node, bool) {
+	if node, ok := parseImportedNodeLine(line); ok {
+		return node, true
+	}
+	return parseV2RayNNodeLine(line)
+}
+
 func clashProxyToURI(attrs map[string]string) string {
 	typ := strings.ToLower(strings.TrimSpace(attrs["type"]))
 	name := attrs["name"]
@@ -936,4 +1639,345 @@ func clashProxyToURI(attrs map[string]string) string {
 	}
 
 	return ""
+}
+
+func parseImportedNodes(text string) []nodes.Node {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+
+	normalized := maybeDecodeSubscriptionText(text)
+	if imported := parseClashYAMLToNodes(normalized); len(imported) > 0 {
+		return imported
+	}
+	if imported := parseJSONImportedNodes(normalized); len(imported) > 0 {
+		return imported
+	}
+
+	var imported []nodes.Node
+	for _, line := range strings.Split(normalized, "\n") {
+		if node, ok := parseFlexibleImportedNodeLine(line); ok {
+			imported = append(imported, node)
+		}
+	}
+	return imported
+}
+
+func maybeDecodeSubscriptionText(text string) string {
+	b, err := decodeSubBase64(text)
+	if err != nil {
+		return text
+	}
+
+	decoded := strings.TrimSpace(string(b))
+	if decoded == "" {
+		return text
+	}
+	if strings.Contains(decoded, "proxies:") || hasImportableNodeLine(decoded) || len(parseJSONImportedNodes(decoded)) > 0 {
+		return decoded
+	}
+	return text
+}
+
+func hasImportableNodeLine(text string) bool {
+	for _, line := range strings.Split(text, "\n") {
+		if _, ok := parseFlexibleImportedNodeLine(line); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func parseImportedNodeLine(line string) (nodes.Node, bool) {
+	raw := strings.TrimSpace(line)
+	if raw == "" {
+		return nodes.Node{}, false
+	}
+
+	out, err := transport.ParseURI(raw)
+	if err != nil {
+		return nodes.Node{}, false
+	}
+
+	nodeType := strings.TrimSpace(valueToString(out["type"]))
+	if nodeType == "" {
+		return nodes.Node{}, false
+	}
+
+	nodeName := extractImportedNodeName(raw, out)
+	if nodeName == "" {
+		nodeName = raw[:min(len(raw), 40)]
+	}
+	return nodes.Node{Type: nodeType, Name: nodeName, RawURI: raw}, true
+}
+
+func extractImportedNodeName(raw string, out map[string]any) string {
+	if name := strings.TrimSpace(valueToString(out["name"])); name != "" {
+		return name
+	}
+
+	if strings.HasPrefix(raw, "vmess://") {
+		b64Str := raw[8:]
+		if idx := strings.Index(b64Str, "?"); idx != -1 {
+			b64Str = b64Str[:idx]
+		}
+		if idx := strings.Index(b64Str, "#"); idx != -1 {
+			b64Str = b64Str[:idx]
+		}
+		b64Str = strings.ReplaceAll(strings.ReplaceAll(b64Str, "-", "+"), "_", "/")
+		if pad := len(b64Str) % 4; pad != 0 {
+			b64Str += strings.Repeat("=", 4-pad)
+		}
+		if b, err := base64.StdEncoding.DecodeString(b64Str); err == nil {
+			var d map[string]any
+			if err := json.Unmarshal(b, &d); err == nil {
+				if ps, ok := d["ps"].(string); ok {
+					return strings.TrimSpace(ps)
+				}
+			}
+		}
+	}
+
+	if idx := strings.Index(raw, "#"); idx != -1 {
+		escapedName := raw[idx+1:]
+		if dec, err := url.QueryUnescape(escapedName); err == nil {
+			return strings.TrimSpace(dec)
+		}
+		return strings.TrimSpace(escapedName)
+	}
+
+	return ""
+}
+
+func valueToString(v any) string {
+	switch x := v.(type) {
+	case string:
+		return x
+	case nil:
+		return ""
+	default:
+		return fmt.Sprintf("%v", x)
+	}
+}
+
+func parseClashYAMLToNodes(yamlText string) []nodes.Node {
+	yamlText = strings.TrimSpace(yamlText)
+	if yamlText == "" {
+		return nil
+	}
+
+	if imported := parseStructuredClashYAMLNodes(yamlText); len(imported) > 0 {
+		return imported
+	}
+	return parseInlineClashYAMLNodes(yamlText)
+}
+
+func parseStructuredClashYAMLNodes(yamlText string) []nodes.Node {
+	var doc struct {
+		Proxies []map[string]any `yaml:"proxies"`
+	}
+	if err := yaml.Unmarshal([]byte(yamlText), &doc); err == nil && len(doc.Proxies) > 0 {
+		return buildClashNodes(doc.Proxies)
+	}
+
+	var proxies []map[string]any
+	if err := yaml.Unmarshal([]byte(yamlText), &proxies); err == nil && len(proxies) > 0 {
+		return buildClashNodes(proxies)
+	}
+
+	var proxy map[string]any
+	if err := yaml.Unmarshal([]byte(yamlText), &proxy); err == nil && len(proxy) > 0 {
+		if normalized, ok := normalizeYAMLValue(proxy).(map[string]any); ok && looksLikeClashProxyMap(normalized) {
+			if node, ok := buildClashNode(normalized); ok {
+				return []nodes.Node{node}
+			}
+		}
+	}
+
+	return nil
+}
+
+func parseInlineClashYAMLNodes(yamlText string) []nodes.Node {
+	var imported []nodes.Node
+	lines := strings.Split(yamlText, "\n")
+	inProxies := false
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "proxies:") {
+			inProxies = true
+			continue
+		}
+		if inProxies && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") && strings.Contains(trimmed, ":") {
+			inProxies = false
+		}
+		if !inProxies || !strings.HasPrefix(trimmed, "-") {
+			continue
+		}
+
+		inline := strings.TrimSpace(strings.TrimPrefix(trimmed, "-"))
+		if !strings.HasPrefix(inline, "{") || !strings.HasSuffix(inline, "}") {
+			continue
+		}
+
+		var proxy map[string]any
+		if err := yaml.Unmarshal([]byte(inline), &proxy); err == nil {
+			if node, ok := buildClashNode(proxy); ok {
+				imported = append(imported, node)
+				continue
+			}
+		}
+
+		cleaned := inline[1 : len(inline)-1]
+		attrs := parseInlineYamlAttrs(cleaned)
+		if uri := clashProxyToURI(attrs); uri != "" {
+			if node, ok := parseImportedNodeLine(uri); ok {
+				imported = append(imported, node)
+			}
+		}
+	}
+
+	return imported
+}
+
+func buildClashNodes(proxies []map[string]any) []nodes.Node {
+	imported := make([]nodes.Node, 0, len(proxies))
+	for _, proxy := range proxies {
+		if node, ok := buildClashNode(proxy); ok {
+			imported = append(imported, node)
+		}
+	}
+	return imported
+}
+
+func buildClashNode(proxy map[string]any) (nodes.Node, bool) {
+	normalized, ok := normalizeYAMLValue(proxy).(map[string]any)
+	if !ok || len(normalized) == 0 {
+		return nodes.Node{}, false
+	}
+	if !looksLikeClashProxyMap(normalized) {
+		return nodes.Node{}, false
+	}
+
+	rawURI := clashProxyObjectToURI(normalized)
+	if rawURI == "" {
+		return nodes.Node{}, false
+	}
+	return parseImportedNodeLine(rawURI)
+}
+
+func clashProxyObjectToURI(proxy map[string]any) string {
+	body, err := json.Marshal(proxy)
+	if err != nil {
+		return ""
+	}
+	return "clash://" + base64.StdEncoding.EncodeToString(body)
+}
+
+func normalizeYAMLValue(value any) any {
+	switch v := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for key, item := range v {
+			out[key] = normalizeYAMLValue(item)
+		}
+		return out
+	case map[any]any:
+		out := make(map[string]any, len(v))
+		for key, item := range v {
+			out[fmt.Sprintf("%v", key)] = normalizeYAMLValue(item)
+		}
+		return out
+	case []any:
+		out := make([]any, 0, len(v))
+		for _, item := range v {
+			out = append(out, normalizeYAMLValue(item))
+		}
+		return out
+	default:
+		return v
+	}
+}
+
+const subscriptionFetchUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+
+func (s *Server) fetchSubscriptionText(ctx context.Context, rawURL string) (string, error) {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return "", errors.New("subscription url is empty")
+	}
+
+	data, err := fetchSubscriptionDataDirect(ctx, rawURL)
+	if err == nil {
+		return strings.TrimSpace(string(data)), nil
+	}
+
+	cfg := config.Load()
+	proxyURI := firstNonEmpty(cfg.ActiveNodeURI, cfg.ProxyURL)
+	if proxyURI == "" || s.vc == nil || s.vc.Net() == nil {
+		return "", err
+	}
+
+	log.Printf("[Admin] [FetchSub] direct fetch failed, retry via proxy: %v", err)
+	data, proxyErr := fetchSubscriptionDataViaProxy(ctx, s.vc.Net(), rawURL, proxyURI)
+	if proxyErr != nil {
+		return "", fmt.Errorf("direct fetch failed: %v; proxy retry failed: %w", err, proxyErr)
+	}
+
+	log.Printf("[Admin] [FetchSub] proxy retry succeeded")
+	return strings.TrimSpace(string(data)), nil
+}
+
+func fetchSubscriptionDataDirect(ctx context.Context, rawURL string) ([]byte, error) {
+	client := netx.NewHTTPClient(30 * time.Second)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("User-Agent", subscriptionFetchUserAgent)
+	req.Header.Set("Accept", "*/*")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("status code %d", resp.StatusCode)
+	}
+	return data, nil
+}
+
+func fetchSubscriptionDataViaProxy(ctx context.Context, netClient *transport.NetworkClient, rawURL string, proxyURI string) ([]byte, error) {
+	if netClient == nil {
+		return nil, errors.New("network client unavailable")
+	}
+
+	sess, err := netClient.CreateSession(30, proxyURI, "admin-fetch-sub")
+	if err != nil {
+		return nil, err
+	}
+	defer sess.Close()
+
+	header := transport.Header{
+		"user-agent": {subscriptionFetchUserAgent},
+		"accept":     {"*/*"},
+	}
+	statusCode, data, err := sess.DoAndRead(ctx, http.MethodGet, rawURL, header, nil)
+	if err != nil {
+		return nil, err
+	}
+	if statusCode != http.StatusOK {
+		return nil, fmt.Errorf("status code %d", statusCode)
+	}
+	return data, nil
 }

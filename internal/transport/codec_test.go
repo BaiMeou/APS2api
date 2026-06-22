@@ -1,6 +1,9 @@
 package transport
 
-import "testing"
+import (
+	"encoding/base64"
+	"testing"
+)
 
 func TestParseURIShadowsocksKeepsPortAndPlugin(t *testing.T) {
 	raw := "ss://YWVzLTEyOC1nY206aGFNTE1YaXJCeW42ckdWaA@example.com:20111/?plugin=simple-obfs%3Bobfs%3Dhttp%3Bobfs-host%3Dcdn.example.com#demo"
@@ -81,5 +84,23 @@ func TestParseURIHy2KeepsPortRange(t *testing.T) {
 	}
 	if got := out["skip-cert-verify"]; got != true {
 		t.Fatalf("expected skip-cert-verify=true, got %#v", got)
+	}
+}
+
+func TestParseURIVmessKeepsSNIAndFingerprint(t *testing.T) {
+	rawJSON := `{"v":"2","ps":"demo","add":"vmess.example.com","port":"443","id":"12345678-1234-1234-1234-123456789012","aid":"0","net":"ws","host":"edge.example.com","path":"/ws","tls":"tls","sni":"edge.example.com","fp":"chrome","alpn":"h2,http/1.1","allowInsecure":"1"}`
+	raw := "vmess://" + base64.StdEncoding.EncodeToString([]byte(rawJSON))
+
+	out, err := ParseURI(raw)
+	if err != nil {
+		t.Fatalf("ParseURI returned error: %v", err)
+	}
+
+	if out["servername"] != "edge.example.com" || out["client-fingerprint"] != "chrome" {
+		t.Fatalf("tls metadata not preserved: %#v", out)
+	}
+	alpn, ok := out["alpn"].([]string)
+	if !ok || len(alpn) != 2 || alpn[0] != "h2" {
+		t.Fatalf("alpn not preserved: %#v", out["alpn"])
 	}
 }
