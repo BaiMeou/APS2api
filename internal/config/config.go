@@ -96,6 +96,8 @@ func configPath() string {
 
 func ConfigPath() string { return configPath() }
 
+func ConfigDir() string { return filepath.Dir(configPath()) }
+
 func WriteSettings(updates map[string]any) error {
 	path := configPath()
 	raw := map[string]any{}
