@@ -76,7 +76,7 @@ option { background: #1f1813; color: var(--text); }
 #login .logo { width: 56px; height: 56px; margin: 0 auto; border-radius: 16px; background: linear-gradient(135deg, var(--gold), var(--gold-deep)); display: grid; place-items: center; font-size: 26px; font-weight: 800; color: #2c1d08; box-shadow: 0 8px 22px rgba(240, 189, 92, .4); }
 #login h1 { font-size: 21px; margin: 16px 0 5px; letter-spacing: .02em; }
 #login .sub { color: var(--text-dim); font-size: 12.5px; margin-bottom: 26px; }
-#login input { text-align: left; }
+#login input { text-align: left; margin-bottom: 14px; }
 #login .btn { width: 100%; }
 .err { color: var(--red); font-size: 12px; min-height: 16px; margin-top: 12px; }
 
@@ -139,37 +139,33 @@ tr:last-child td { border-bottom: none; }
 tbody tr { transition: background .16s; } tbody tr:hover { background: rgba(255, 255, 255, .05); }
 td code { background: rgba(0, 0, 0, .3); padding: 2px 9px; border-radius: 8px; font-size: 12px; word-break: break-all; }
 
+.table-wrap { overflow-x: auto; }
+
 /* ── 【仅在电脑端桌面视图启用的布局锁定 (锁定列宽，防止撑开挤压)】 ── */
 @media (min-width: 769px) {
-  table {
-    table-layout: fixed !important; /* 核心：锁定电脑端布局算法，强制均分/限制宽度 */
+  #page-nodes table {
+    table-layout: fixed !important;
   }
 
-  /* 复选框列 */
-  table th:nth-child(1), table td:nth-child(1) {
+  #page-nodes table th:nth-child(1), #page-nodes table td:nth-child(1) {
     width: 50px !important;
     text-align: center;
   }
-  /* 节点名称列：弹性并给安全极小值 */
-  table th:nth-child(2), table td:nth-child(2) {
+  #page-nodes table th:nth-child(2), #page-nodes table td:nth-child(2) {
     width: auto !important;
     min-width: 180px !important;
   }
-  /* 协议类型列：适当拓宽 */
-  table th:nth-child(3), table td:nth-child(3) {
+  #page-nodes table th:nth-child(3), #page-nodes table td:nth-child(3) {
     width: 110px !important;
   }
-  /* 状态/延迟列 */
-  table th:nth-child(4), table td:nth-child(4) {
+  #page-nodes table th:nth-child(4), #page-nodes table td:nth-child(4) {
     width: 240px !important;
   }
-  /* 操作栏列：分配足够 4 个按钮排放的宽度，防折行 */
-  table th:nth-child(5), table td:nth-child(5) {
+  #page-nodes table th:nth-child(5), #page-nodes table td:nth-child(5) {
     width: 290px !important;
     text-align: right !important;
   }
 
-  /* 桌面端长错误信息自动换行控制，绝不横向撑爆表格 */
   .node-error-wrap, .node-err-msg {
     word-break: break-all !important;
     white-space: normal !important;
@@ -177,8 +173,7 @@ td code { background: rgba(0, 0, 0, .3); padding: 2px 9px; border-radius: 8px; f
     line-height: 1.35 !important;
   }
 
-  /* 桌面端超长地址信息自动折行 */
-  table td:nth-child(2) div {
+  #page-nodes table td:nth-child(2) div {
     word-break: break-all !important;
     white-space: normal !important;
     line-height: 1.35 !important;
@@ -234,8 +229,8 @@ td code { background: rgba(0, 0, 0, .3); padding: 2px 9px; border-radius: 8px; f
   font-size: 11px;
   text-align: center;
   padding: 3px 0;
-  backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
 }
 
 .toast { position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%) translateY(22px); padding: 13px 24px; font-size: 13px; opacity: 0; transition: all .34s var(--ease); pointer-events: none; z-index: 50; }
@@ -269,12 +264,11 @@ td code { background: rgba(0, 0, 0, .3); padding: 2px 9px; border-radius: 8px; f
 .progress-track { height: 6px; background: rgba(0,0,0,0.3); border-radius: 99px; overflow: hidden; margin: 8px 0; }
 .progress-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--gold), var(--gold-deep)); transition: width 0.2s ease; }
 .test-progress-detail { font-size: 11px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.key-input-wrap { display: flex; gap: 0; align-items: stretch; }
-.key-input-wrap input { border-radius: 11px 0 0 11px; border-right: none; }
+.key-input-wrap { display: flex; gap: 10px; align-items: stretch; flex: 1; min-width: 0; }
 .key-gen-btn {
   width: 40px; display: flex; align-items: center; justify-content: center;
   background: rgba(255,255,255,.05); border: 1px solid var(--stroke);
-  border-radius: 0 11px 11px 0; color: var(--text-dim); cursor: pointer;
+  border-radius: 11px; color: var(--text-dim); cursor: pointer;
   transition: all .2s var(--ease); flex-shrink: 0;
 }
 .key-gen-btn:hover { color: var(--gold); border-color: rgba(240,189,92,.4); background: var(--gold-soft); }
@@ -298,9 +292,6 @@ td code { background: rgba(0, 0, 0, .3); padding: 2px 9px; border-radius: 8px; f
   .preset .thumb { width: 90px; height: 58px; }
   .toast { left: 16px; right: 16px; transform: translateY(22px); text-align: center; }
   .toast.show { transform: translateY(0); }
-  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-  .actions .flex-1 { display: none; }
-  .actions .btn { font-size: 11px; padding: 8px 6px; text-align: center; min-width: 0; }
   .card table th,
   .card table td { padding: 10px 10px; font-size: 12px; }
 }
@@ -308,7 +299,7 @@ td code { background: rgba(0, 0, 0, .3); padding: 2px 9px; border-radius: 8px; f
 .menu-btn {
   display: none; position: fixed; top: 14px; left: 14px; z-index: 99;
   width: 40px; height: 40px; border: 1px solid var(--stroke);
-  background: var(--glass); backdrop-filter: blur(10px);
+  background: var(--glass); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
   border-radius: 11px; align-items: center; justify-content: center;
   font-size: 20px; color: var(--text);
 }
@@ -329,14 +320,17 @@ td code { background: rgba(0, 0, 0, .3); padding: 2px 9px; border-radius: 8px; f
     transform: translateX(-100%);
     transition: transform .3s var(--ease);
     padding: 20px 14px;
-    backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
   }
   aside.open { transform: translateX(0); box-shadow: 0 0 60px rgba(0,0,0,.6); }
   .main-content { padding: 16px; padding-top: 68px; }
   main { border-radius: 0; }
   .page-head h2 { font-size: 20px; }
   .card { padding: 16px; }
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .actions .flex-1 { display: none; }
+  .actions .btn { font-size: 11px; padding: 8px 6px; text-align: center; min-width: 0; }
 
   /* ── 【移动端表格重构：Table 彻底转换成磨砂卡片】 ── */
   /* 【核心修改：作用域限定在各自页面上，绝不全局影响】 */
@@ -447,26 +441,32 @@ td code { background: rgba(0, 0, 0, .3); padding: 2px 9px; border-radius: 8px; f
   .grid-2 { grid-template-columns: 1fr; }
   .grid.stats { grid-template-columns: 1fr 1fr; }
   .field.bool { flex-direction: column; align-items: flex-start; }
-  .actions .btn { flex: 1; min-width: 0; text-align: center; font-size: 12px; padding: 8px 10px; }
   .toolbar { flex-wrap: wrap; }
   .toolbar input { min-width: 120px; }
 
   /* ── 【核心修改：手机端对密钥页面输入框进行弹性垂直堆叠，根治重叠】 ── */
   /* 精准限定在 #page-keys 内，保留登录框的密码眼睛切换按钮在水平一排 */
   #page-keys .key-input-wrap {
-    flex-direction: column !important;
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: wrap !important;
     gap: 10px !important;
     width: 100% !important;
   }
-  #page-keys .key-input-wrap input {
+  #page-keys .key-input-wrap input:first-of-type {
+    flex: 0 0 100% !important;
+  }
+  #page-keys .key-input-wrap input:last-of-type {
+    flex: 1 !important;
+    min-width: 0 !important;
     border-radius: 11px !important;
-    border-right: 1px solid var(--stroke) !important;
-    width: 100% !important;
+    border: 1px solid var(--stroke) !important;
   }
   #page-keys .key-gen-btn {
-    border-radius: 11px !important;
+    width: 40px !important;
     height: 40px !important;
-    width: 100% !important;
-    border-left: 1px solid var(--stroke) !important; /* 堆叠后恢复左边框 */
+    flex: none !important;
+    border-radius: 11px !important;
+    border: 1px solid var(--stroke) !important;
   }
 }

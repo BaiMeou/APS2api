@@ -59,7 +59,7 @@
       <div class="card glass">
         <div class="toolbar"><div class="key-input-wrap"><label for="kName" class="sr-only">名称（如 alice）</label><input id="kName" placeholder="名称（如 alice）"><label for="kKey" class="sr-only">密钥（留空自动生成）</label><input id="kKey" placeholder="密钥（留空自动生成）"><button class="key-gen-btn" onclick="generateKey()" title="随机生成">✨</button></div></div>
         <div class="toolbar"><label for="kDesc" class="sr-only">描述</label><input id="kDesc" placeholder="描述（可选）"><button class="btn" onclick="addKey()">添加</button></div>
-        <table><thead><tr><th>名称</th><th>密钥</th><th>描述</th><th></th></tr></thead><tbody id="keysBody"></tbody></table>
+        <div class="table-wrap"><table><thead><tr><th>名称</th><th>密钥</th><th>描述</th><th></th></tr></thead><tbody id="keysBody"></tbody></table></div>
       </div>
     </section>
 
@@ -114,7 +114,7 @@
             </div>
               <div id="testProgressDetail" class="test-progress-detail"></div>
           </div>
-          <table><thead><tr><th class="th-center"><label for="selectAllNodesCheckbox" class="sr-only">全选</label><input type="checkbox" id="selectAllNodesCheckbox" onclick="toggleSelectAllNodesCheckbox(this)"></th><th>节点名 & 连接属性</th><th>协议</th><th>状态/延迟</th><th>操作</th></tr></thead><tbody id="nodesBody"></tbody></table>
+          <div class="table-wrap"><table><thead><tr><th class="th-center"><label for="selectAllNodesCheckbox" class="sr-only">全选</label><input type="checkbox" id="selectAllNodesCheckbox" onclick="toggleSelectAllNodesCheckbox(this)"></th><th>节点名 & 连接属性</th><th>协议</th><th>状态/延迟</th><th>操作</th></tr></thead><tbody id="nodesBody"></tbody></table></div>
         </div>
       </div>
     </section>

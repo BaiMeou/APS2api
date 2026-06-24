@@ -28,6 +28,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -43,9 +44,32 @@ import (
 const (
 	heartbeatInterval = 5 * time.Minute
 	telemetryURL      = "https://stat.baimeow.icu/ping"
-	instanceIDFile    = "config/.instance_id"
-	stateFile         = "config/.telemetry_state"
+	instanceIDFile    = "config/state/.instance_id"
+	stateFile         = "config/state/.telemetry_state"
 )
+
+// MigrateStateFile 将旧路径的状态文件迁移到新路径。
+// 迁移条件：新文件不存在且旧文件存在 → 读旧文件、写新文件、删旧文件。
+// 新文件已存在时保持不动（兼容已迁移状态）；新旧都不存在时静默通过。
+func MigrateStateFile(oldPath, newPath string) {
+	if _, err := os.Stat(newPath); err == nil {
+		return
+	}
+	data, err := os.ReadFile(oldPath)
+	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(newPath), 0o700); err != nil {
+		log.Printf("migrate: failed to create directory %s: %v", filepath.Dir(newPath), err)
+		return
+	}
+	if err := os.WriteFile(newPath, data, 0o600); err != nil {
+		log.Printf("migrate: failed to write %s: %v", newPath, err)
+		return
+	}
+	os.Remove(oldPath)
+	log.Printf("migrated state file %s -> %s", oldPath, newPath)
+}
 
 var (
 	client *http.Client
@@ -145,6 +169,11 @@ func loadOrCreateID() string {
 	if err == nil && len(data) >= 32 {
 		return string(data[:32])
 	}
+	// Secondary fallback: 主迁移（main）可能因权限等问题失败，兜底尝试旧路径。
+	const oldInstanceIDFile = "config/.instance_id"
+	if data, err = os.ReadFile(oldInstanceIDFile); err == nil && len(data) >= 32 {
+		return string(data[:32])
+	}
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
 		b = []byte(time.Now().Format("2006010215040500"))
@@ -161,6 +190,12 @@ func loadAndUpdateState() State {
 	var s State
 	if data, err := os.ReadFile(stateFile); err == nil {
 		_ = json.Unmarshal(data, &s)
+	} else {
+		// Secondary fallback: 主迁移失败时兜底尝试旧路径。
+		const oldStateFile = "config/.telemetry_state"
+		if data, err := os.ReadFile(oldStateFile); err == nil {
+			_ = json.Unmarshal(data, &s)
+		}
 	}
 	if s.FirstSeen.IsZero() {
 		s.FirstSeen = time.Now()

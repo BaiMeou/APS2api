@@ -4,8 +4,6 @@ const SETTINGS_FIELDS = [
   { k: 'parallel_pool_size', label: '并发数', type: 'number', group: 'pool', desc: '并发抢跑的节点数 (默认 4)' },
   { k: 'parallel_pool_delay_dynamic', label: '动态对冲延迟', type: 'bool', group: 'pool', desc: '根据节点平均响应时间动态调整并发启动间隔，平衡延迟与流量消耗' },
   { k: 'parallel_pool_delay_ms', label: '固定对冲延迟时间 (毫秒)', type: 'number', group: 'pool', desc: '当禁用动态延迟时，以此固定间隔对冲触发后续备份通道 (默认 500ms)' },
-  { k: 'token_pool_size', label: 'Token池大小', type: 'number', group: 'pool', desc: '预取 reCAPTCHA Token 的缓冲数量。改大需重启程序生效 (默认 8)' },
-  { k: 'recaptcha_expire_seconds', label: 'Token池时效限制 (秒)', type: 'number', group: 'pool', desc: 'reCAPTCHA 离线预取 Token 的可用期限阈值 (默认 60s)' },
 
   // 🛠 Group: core (核心控制与基础参数)
   { k: 'max_retries', label: '上游重试次数', type: 'number', group: 'core', desc: '上游请求失败时的重试次数；总尝试 = 此值 + 1' },

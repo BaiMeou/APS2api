@@ -44,7 +44,7 @@ var rulesText string
 
 const (
 	shutdownGrace         = 25 * time.Second
-	rulesAgreedFile       = "config/.rules_agreed"
+	rulesAgreedFile       = "config/state/.rules_agreed"
 	rulesAgreedFileDocker = "config/agreed-rules-docker.txt"
 )
 
@@ -91,6 +91,11 @@ func main() {
 	fmt.Println("  ║                                                          ║")
 	fmt.Println("  ╚══════════════════════════════════════════════════════════╝")
 	fmt.Println()
+
+	// ---- 状态文件迁移（旧版 config/. 到新版 config/state/） ----
+	telemetry.MigrateStateFile("config/.instance_id", "config/state/.instance_id")
+	telemetry.MigrateStateFile("config/.telemetry_state", "config/state/.telemetry_state")
+	telemetry.MigrateStateFile("config/.rules_agreed", "config/state/.rules_agreed")
 
 	// ---- 规则同意检查（含版本/哈希追踪：rules.txt 一变，必须重新同意） ----
 	curHash := rulesHash()
@@ -161,7 +166,6 @@ func main() {
 	api.StartAdminSessionCleanup(time.Hour)
 
 	vc := vertex.NewVertexAIClient()
-	vc.StartTokenPool()
 
 	// 启动匿名遥测（默认开启，可在 config.json 设置 telemetry_enabled=false 关闭）。
 	// 仅采集软件版本/平台/Go运行时/CPU/内存/容器/时区/语言/启动次数等非敏感信息。
@@ -234,7 +238,7 @@ func hasOldAgreement() bool {
 
 // saveRulesAgreed 记录"用户已同意 curHash 版本规则"。
 func saveRulesAgreed(curHash string) {
-	_ = os.MkdirAll("config", 0o700)
+	_ = os.MkdirAll("config/state", 0o700)
 	line := fmt.Sprintf("%s\t%s\n", time.Now().Format(time.RFC3339), curHash)
 	_ = os.WriteFile(rulesAgreedFile, []byte(line), 0o600)
 }

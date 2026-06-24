@@ -312,7 +312,7 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   r.TLS != nil,
+		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
 		MaxAge:   int(adminSessionTTL / time.Second),
 	})
 	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -327,7 +327,7 @@ func (s *Server) adminLogout(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   r.TLS != nil,
+		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
 		MaxAge:   -1, // 立即过期
 	})
 	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true})
