@@ -44,8 +44,8 @@ var rulesText string
 
 const (
 	shutdownGrace         = 25 * time.Second
-	rulesAgreedFile       = "config/.rules_agreed"
-	rulesAgreedFileDocker = "config/agreed-rules-docker.txt"
+	rulesAgreedFile       = "config/state/.rules_agreed"
+	rulesAgreedFileDocker = "config/state/agreed-rules-docker.txt"
 )
 
 // rulesHash 是当前内嵌 rules.txt 内容的 SHA256（前 16 位十六进制）。
@@ -92,11 +92,17 @@ func main() {
 	fmt.Println("  ╚══════════════════════════════════════════════════════════╝")
 	fmt.Println()
 
+	// ---- 状态文件迁移（旧版 config/. 到新版 config/state/） ----
+	telemetry.MigrateStateFile("config/.instance_id", "config/state/.instance_id")
+	telemetry.MigrateStateFile("config/.telemetry_state", "config/state/.telemetry_state")
+	telemetry.MigrateStateFile("config/.rules_agreed", "config/state/.rules_agreed")
+	telemetry.MigrateStateFile("config/agreed-rules-docker.txt", "config/state/agreed-rules-docker.txt")
+
 	// ---- 规则同意检查（含版本/哈希追踪：rules.txt 一变，必须重新同意） ----
 	curHash := rulesHash()
 	if inDocker() {
 		// Docker 环境：stdin 通常无 TTY，改走文件同意。
-		// 用户需在挂载的 config/ 目录里创建 agreed-rules-docker.txt，
+		// 用户需在挂载的 config/state/ 目录里创建 agreed-rules-docker.txt，
 		// 内容只要包含当前 rules 的哈希字符串即视为同意。
 		if !checkRulesAgreedDocker(curHash) {
 			fmt.Println(rulesText)
@@ -108,13 +114,13 @@ func main() {
 			fmt.Println("  Docker 容器中无法交互同意规则。请按以下步骤同意：")
 			fmt.Println()
 			fmt.Println("  1) 在挂载到容器 /app/config 的本机目录中创建文件：")
-			fmt.Println("       agreed-rules-docker.txt")
+			fmt.Println("       config/state/agreed-rules-docker.txt")
 			fmt.Println()
 			fmt.Println("  2) 文件内容写入当前规则版本哈希（必须完全匹配）：")
 			fmt.Printf("       %s\n", curHash)
 			fmt.Println()
 			fmt.Println("     一行命令：")
-			fmt.Printf("       echo %s > ./config/agreed-rules-docker.txt\n", curHash)
+			fmt.Printf("       echo %s > ./config/state/agreed-rules-docker.txt\n", curHash)
 			fmt.Println()
 			fmt.Println("  3) 重启容器即可。")
 			fmt.Println()
@@ -161,7 +167,6 @@ func main() {
 	api.StartAdminSessionCleanup(time.Hour)
 
 	vc := vertex.NewVertexAIClient()
-	vc.StartTokenPool()
 
 	// 启动匿名遥测（默认开启，可在 config.json 设置 telemetry_enabled=false 关闭）。
 	// 仅采集软件版本/平台/Go运行时/CPU/内存/容器/时区/语言/启动次数等非敏感信息。
@@ -234,7 +239,7 @@ func hasOldAgreement() bool {
 
 // saveRulesAgreed 记录"用户已同意 curHash 版本规则"。
 func saveRulesAgreed(curHash string) {
-	_ = os.MkdirAll("config", 0o700)
+	_ = os.MkdirAll("config/state", 0o700)
 	line := fmt.Sprintf("%s\t%s\n", time.Now().Format(time.RFC3339), curHash)
 	_ = os.WriteFile(rulesAgreedFile, []byte(line), 0o600)
 }

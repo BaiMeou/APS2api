@@ -38,12 +38,16 @@ func (s *Server) adminGetNodes(w http.ResponseWriter, _ *http.Request) {
 			enabledCount++
 		}
 	}
+	sp := nodes.GetStickyPool()
 	s.writeJSON(w, http.StatusOK, map[string]any{
-		"nodes":          list,
-		"health":         nodes.LoadHealth(),
-		"total":          len(list),
-		"enabled_count":  enabledCount,
-		"disabled_count": disabledCount,
+		"nodes":                list,
+		"health":               nodes.LoadHealth(),
+		"total":                len(list),
+		"enabled_count":        enabledCount,
+		"disabled_count":       disabledCount,
+		"sticky_pool_available": sp.AvailableCount(),
+		"sticky_pool_in_use":    sp.StaleCount(),
+		"sticky_pool_enabled":   config.Load().StickyPoolEnabled,
 	})
 }
 

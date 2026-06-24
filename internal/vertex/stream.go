@@ -68,10 +68,10 @@ func (c *VertexAIClient) StreamChat(ctx context.Context, model string, geminiPay
 }
 
 func (c *VertexAIClient) executeStreamingWithRetries(ctx context.Context, model string, geminiPayload map[string]any, proxyURI string, yield func(StreamChunk) bool) {
-	maxRetries := c.maxRetries
 	cfg := config.Load()
-	if cfg.ParallelPoolEnabled {
-		// 并发池模式下，单节点无需在内部多次重试与等待，直接快速失败让并发池调度其他节点，实现零延迟无缝切换（力大砖飞）
+	maxRetries := cfg.MaxRetries
+	if cfg.ParallelPoolEnabled && ctx.Value(stickyModeKey{}) == nil {
+		// 并发池模式下且非粘性节点路径，单节点无需在内部多次重试与等待，直接快速失败让并发池调度其他节点，实现零延迟无缝切换（力大砖飞）
 		maxRetries = 0
 	}
 	contentYielded := false

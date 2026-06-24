@@ -70,11 +70,11 @@
   此种情况下程序会要求你提供同意文件：
 
     1. 在挂载到容器 /app/config 的本机目录下，创建文件：
-         agreed-rules-docker.txt
+         config/state/agreed-rules-docker.txt
 
     2. 文件内容写入程序首次启动时打印的"规则版本哈希"。
        一行命令搞定（哈希以程序输出为准）：
-         echo <规则版本哈希> > ./config/agreed-rules-docker.txt
+         echo <规则版本哈希> > ./config/state/agreed-rules-docker.txt
 
     3. 重启容器。
 

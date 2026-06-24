@@ -39,6 +39,7 @@ type AppConfig struct {
 	// 并发池与节点锁定配置
 	ActiveNodeURI            string `json:"active_node_uri"`
 	ParallelPoolEnabled      bool   `json:"parallel_pool_enabled"`
+	StickyPoolEnabled        bool   `json:"sticky_pool_enabled"`
 	ParallelPoolSize         int    `json:"parallel_pool_size"`
 	ParallelPoolMaxRounds    int    `json:"parallel_pool_max_rounds"`
 	DebugPprof               bool   `json:"debug_pprof"`
@@ -65,6 +66,7 @@ func DefaultConfig() AppConfig {
 		TokenPoolSize:             30, // 配套 15 并发，池子扩容至 30 更加稳健
 		MaxSpillMB:                2048,
 		ParallelPoolEnabled:       true,
+		StickyPoolEnabled:         true,
 		ParallelPoolSize:          15, // 默认为 15 并发
 		ParallelNodeTopK:          80,
 		ParallelPoolDelayDynamic:  false, // 建议默认关闭动态对冲，改为稳定的秒级接力
