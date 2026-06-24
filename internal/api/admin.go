@@ -363,10 +363,11 @@ func (s *Server) adminGetSettings(w http.ResponseWriter, _ *http.Request) {
 		"anti_tracking":     cfg.AntiTracking,
 		"drop_max_tokens":   cfg.DropMaxTokens,
 		"telemetry_enabled": telEnabled,
-		"proxy_url":         cfg.ProxyURL, "parallel_pool_enabled": cfg.ParallelPoolEnabled, "parallel_pool_size": cfg.ParallelPoolSize, "active_node_uri": cfg.ActiveNodeURI,
+		"proxy_url":                cfg.ProxyURL, "parallel_pool_enabled": cfg.ParallelPoolEnabled, "parallel_pool_size": cfg.ParallelPoolSize, "active_node_uri": cfg.ActiveNodeURI,
 		"parallel_pool_delay_dynamic": cfg.ParallelPoolDelayDynamic,
 		"parallel_pool_delay_ms":      cfg.ParallelPoolDelayMs,
 		"recaptcha_expire_seconds":    cfg.RecaptchaExpireSeconds,
+		"sticky_pool_enabled":         cfg.StickyPoolEnabled,
 	}})
 }
 
@@ -382,6 +383,7 @@ var adminAllowedSettings = map[string]bool{
 	"parallel_pool_delay_ms":      true,
 	"recaptcha_expire_seconds":    true,
 	"active_node_uri":             true,
+	"sticky_pool_enabled":         true,
 }
 
 // adminPutSettings 处理 PUT /api/admin/settings：合并 {settings:{...}} 写回 config.json 并清缓存。

@@ -51,22 +51,15 @@ func RequestIDFromContext(ctx context.Context) string {
 }
 
 type VertexAIClient struct {
-	net        *transport.NetworkClient
-	pool       *recaptcha.TokenPool
-	maxRetries int
+	net  *transport.NetworkClient
+	pool *recaptcha.TokenPool
 }
 
 func NewVertexAIClient() *VertexAIClient {
 	net := transport.NewNetworkClient()
-	cfg := config.Load()
-	mr := cfg.MaxRetries
-	if mr <= 0 {
-		mr = 2
-	}
 	return &VertexAIClient{
-		net:        net,
-		pool:       recaptcha.NewTokenPoolSize(net, cfg.TokenPoolSize),
-		maxRetries: mr,
+		net:  net,
+		pool: recaptcha.NewTokenPoolSize(net, config.Load().TokenPoolSize),
 	}
 }
 
@@ -154,10 +147,9 @@ func (c *VertexAIClient) completeChatNSerial(ctx context.Context, model string, 
 }
 
 func (c *VertexAIClient) completeInner(ctx context.Context, model string, geminiPayload map[string]any, proxyURI string) (map[string]any, error) {
-	maxRetries := c.maxRetries
 	cfg := config.Load()
-	if cfg.ParallelPoolEnabled {
-		// 并发池模式下，单节点无需在内部多次重试与等待，直接快速失败让并发池调度其他节点，实现零延迟无缝切换（力大砖飞）
+	maxRetries := cfg.MaxRetries
+	if cfg.ParallelPoolEnabled && ctx.Value(stickyModeKey{}) == nil {
 		maxRetries = 0
 	}
 	recaptchaToken := ""

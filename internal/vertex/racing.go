@@ -1,7 +1,3 @@
-// Copyright (c) 2026 BaiMeow. All rights reserved.
-// Use of this source code is governed by the PolyForm Noncommercial License 1.0.0
-// that can be found in the LICENSE file.
-
 package vertex
 
 import (
@@ -17,7 +13,8 @@ import (
 	"github.com/bsfdsagfadg/vertex/internal/nodes"
 )
 
-// safeResetTimer 安全重置定时器并排空通道，防止未读取的过期事件残留导致对冲轮询提前抢跑
+type stickyModeKey struct{}
+
 func safeResetTimer(t *time.Timer, d time.Duration) {
 	if !t.Stop() {
 		select {
@@ -29,7 +26,39 @@ func safeResetTimer(t *time.Timer, d time.Duration) {
 }
 
 func RunParallel[T any](ctx context.Context, cfg config.AppConfig, run func(context.Context, string) (T, error)) (T, error) {
+	stickyPool := nodes.GetStickyPool()
+
+	if cfg.StickyPoolEnabled && stickyPool.AvailableCount() > 0 {
+		log.Printf("[Vertex] [RunParallel] 尝试粘性节点池 (%d 个可用)", stickyPool.AvailableCount())
+		for {
+			uri, ok := stickyPool.Acquire()
+			if !ok {
+				break
+			}
+			log.Printf("[Vertex] [RunParallel] 使用粘性节点: %s", nodes.GetNodeName(uri))
+			ctxSticky := context.WithValue(ctx, stickyModeKey{}, true)
+			val, err := run(ctxSticky, uri)
+			if err == nil {
+				stickyPool.Release(uri)
+				return val, nil
+			}
+			log.Printf("[Vertex] [RunParallel] 粘性节点 %s 失败，逐出: %s", nodes.GetNodeName(uri), err.Error())
+			stickyPool.Evict(uri)
+		}
+		log.Printf("[Vertex] [RunParallel] 粘性节点池耗尽，降级并行竞速")
+	}
+
 	cands := nodes.SelectForParallel(cfg.ParallelPoolSize)
+	if cfg.StickyPoolEnabled {
+		var filtered []nodes.Node
+		for _, c := range cands {
+			if !stickyPool.IsSticky(c.RawURI) {
+				filtered = append(filtered, c)
+			}
+		}
+		cands = filtered
+	}
+
 	if !cfg.ParallelPoolEnabled || len(cands) == 0 {
 		proxy := cfg.ActiveNodeURI
 		if proxy == "" {
@@ -45,7 +74,6 @@ func RunParallel[T any](ctx context.Context, cfg config.AppConfig, run func(cont
 	}
 
 	ctxRace, cancel := context.WithCancel(ctx)
-	defer cancel()
 
 	type result struct {
 		uri string
@@ -77,10 +105,8 @@ func RunParallel[T any](ctx context.Context, cfg config.AppConfig, run func(cont
 		}(uri)
 	}
 
-	// 启动首个节点
 	launchNode(cands[0].RawURI)
 
-	// 计算延迟间隔
 	delay := time.Duration(cfg.ParallelPoolDelayMs) * time.Millisecond
 	if cfg.ParallelPoolDelayDynamic {
 		delay = time.Duration(nodes.GetAverageLatency()) * time.Millisecond
@@ -95,10 +121,10 @@ func RunParallel[T any](ctx context.Context, cfg config.AppConfig, run func(cont
 	for {
 		select {
 		case <-ctx.Done():
+			cancel()
 			return zero, ctx.Err()
 
 		case <-timer.C:
-			// 延迟对冲触发，启动下一个节点备份
 			if nextIdx < len(cands) {
 				log.Printf("[Racing] 对冲延迟唤醒，启动备份节点: %s", cands[nextIdx].Name)
 				launchNode(cands[nextIdx].RawURI)
@@ -113,20 +139,44 @@ func RunParallel[T any](ctx context.Context, cfg config.AppConfig, run func(cont
 			if res.err == nil {
 				log.Printf("[Racing] 竞速胜出节点: %s", name)
 				nodes.RecordTest(res.uri, true, 50, "")
+				stickyPool.Add(res.uri)
+				log.Printf("[Racing] 胜出节点 %s 加入粘性池", name)
+
+			go func() {
+				collectCtx, collectCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer collectCancel()
+				for {
+					select {
+					case bgRes := <-resCh:
+						atomic.AddInt32(&active, -1)
+						if bgRes.err == nil {
+							log.Printf("[Racing] 后台收集: 节点 %s 加入粘性池", nodes.GetNodeName(bgRes.uri))
+							stickyPool.Add(bgRes.uri)
+						}
+					case <-collectCtx.Done():
+						cancel()
+						return
+					}
+				}
+			}()
+
 				return res.val, nil
 			}
 
-			// 忽略上下文主动取消
 			if res.err != context.Canceled && !errors.Is(res.err, context.Canceled) {
 				log.Printf("[Racing] 节点 %s 失败: %s", name, res.err.Error())
 
 				ve := asVertexError(res.err)
 				if ve != nil && ve.Kind == "ratelimit" {
-					// 软降温：仅进行 30 秒静默不调度，保留原 Success/Fail 统计，防止硬性淘汰
 					log.Printf("[Racing] 节点 %s 触发 429 API 限制，进入 30 秒短时歇息", name)
 					nodes.RecordRateLimit(res.uri, 30)
 				} else {
 					nodes.RecordTest(res.uri, false, 0, res.err.Error())
+				}
+
+				if stickyPool.IsSticky(res.uri) {
+					log.Printf("[Racing] 节点 %s 从粘性池逐出", name)
+					stickyPool.Evict(res.uri)
 				}
 
 				if ve != nil && !ve.IsRetryable() {
@@ -135,7 +185,6 @@ func RunParallel[T any](ctx context.Context, cfg config.AppConfig, run func(cont
 					return zero, res.err
 				}
 
-				// Fast-path hedging: 如果首发失败，立刻补齐后续节点，缩短故障容灾耗时
 				if nextIdx < len(cands) {
 					log.Printf("[Racing] 竞速失败触发极速对冲接力...")
 					launchNode(cands[nextIdx].RawURI)
@@ -147,6 +196,7 @@ func RunParallel[T any](ctx context.Context, cfg config.AppConfig, run func(cont
 			}
 
 			if atomic.LoadInt32(&active) == 0 && nextIdx >= len(cands) {
+				cancel()
 				if res.err != nil {
 					return zero, res.err
 				}
@@ -157,7 +207,55 @@ func RunParallel[T any](ctx context.Context, cfg config.AppConfig, run func(cont
 }
 
 func StreamParallel(ctx context.Context, cfg config.AppConfig, op func(ctx context.Context, proxyURI string) <-chan StreamChunk, yield func(StreamChunk) bool) {
+	stickyPool := nodes.GetStickyPool()
+
+	if cfg.StickyPoolEnabled {
+		for {
+			uri, ok := stickyPool.Acquire()
+			if !ok {
+				break
+			}
+			log.Printf("[Vertex] [StreamParallel] 使用粘性节点: %s", nodes.GetNodeName(uri))
+			ctxSticky := context.WithValue(ctx, stickyModeKey{}, true)
+
+			ch := op(ctxSticky, uri)
+			first, ok := <-ch
+			if !ok {
+				log.Printf("[Vertex] [StreamParallel] 粘性节点 %s 流立即关闭，逐出", nodes.GetNodeName(uri))
+				stickyPool.Evict(uri)
+				continue
+			}
+			if first.Err != nil {
+				log.Printf("[Vertex] [StreamParallel] 粘性节点 %s 重试耗尽，逐出: %s", nodes.GetNodeName(uri), first.Err.Message)
+				stickyPool.Evict(uri)
+				continue
+			}
+
+			stickyPool.Release(uri)
+			if !yield(first) {
+				return
+			}
+			for chunk := range ch {
+				if !yield(chunk) {
+					return
+				}
+			}
+			return
+		}
+		log.Printf("[Vertex] [StreamParallel] 粘性节点池耗尽，降级并行竞速")
+	}
+
 	cands := nodes.SelectForParallel(cfg.ParallelPoolSize)
+	if cfg.StickyPoolEnabled {
+		var filtered []nodes.Node
+		for _, c := range cands {
+			if !stickyPool.IsSticky(c.RawURI) {
+				filtered = append(filtered, c)
+			}
+		}
+		cands = filtered
+	}
+
 	if !cfg.ParallelPoolEnabled || len(cands) == 0 {
 		proxy := cfg.ActiveNodeURI
 		if proxy == "" {
@@ -227,10 +325,8 @@ func StreamParallel(ctx context.Context, cfg config.AppConfig, op func(ctx conte
 		}(uri)
 	}
 
-	// 启动首个节点
 	launchNode(cands[0].RawURI)
 
-	// 计算延迟
 	delay := time.Duration(cfg.ParallelPoolDelayMs) * time.Millisecond
 	if cfg.ParallelPoolDelayDynamic {
 		delay = time.Duration(nodes.GetAverageLatency()) * time.Millisecond
@@ -253,6 +349,8 @@ loop:
 				winner = &r
 				log.Printf("[Vertex] [StreamParallel] 节点胜出: %s", name)
 				nodes.RecordTest(r.uri, true, 50, "")
+				stickyPool.Add(r.uri)
+				log.Printf("[Vertex] [StreamParallel] 胜出节点 %s 加入粘性池", name)
 				break loop
 			} else if ctx.Err() == nil && r.err != context.Canceled && !errors.Is(r.err, context.Canceled) {
 				log.Printf("[Racing] 节点 %s 失败: %s", name, r.err.Error())
@@ -265,6 +363,11 @@ loop:
 					nodes.RecordTest(r.uri, false, 0, r.err.Error())
 				}
 
+				if stickyPool.IsSticky(r.uri) {
+					log.Printf("[Racing] 节点 %s 从粘性池逐出", name)
+					stickyPool.Evict(r.uri)
+				}
+
 				if ve != nil && !ve.IsRetryable() {
 					log.Printf("[Racing] 节点 %s 触发不可重试的硬性错误，终止竞速", name)
 					cancel()
@@ -272,7 +375,6 @@ loop:
 					return
 				}
 
-				// Fast-path hedging: 如果失败，立刻替补后续节点
 				if candIdx < len(cands) {
 					log.Printf("[Racing] 竞速失败触发极速对冲接力...")
 					launchNode(cands[candIdx].RawURI)
@@ -286,7 +388,6 @@ loop:
 			}
 
 		case <-timer.C:
-			// 没有及时响应，启动备份节点
 			if candIdx < len(cands) {
 				log.Printf("[Racing] 对冲延迟唤醒，启动备份节点: %s", cands[candIdx].Name)
 				launchNode(cands[candIdx].RawURI)
@@ -304,8 +405,41 @@ loop:
 		if !yield(winner.first) {
 			return
 		}
-		for chunk := range winner.ch {
-			if !yield(chunk) {
+
+		collectTimeout := time.NewTimer(30 * time.Second)
+		defer collectTimeout.Stop()
+		for {
+			select {
+			case chunk, ok := <-winner.ch:
+				if !ok {
+					return
+				}
+				if !yield(chunk) {
+					return
+				}
+			case bgRes := <-resCh:
+				atomic.AddInt32(&active, -1)
+				bgName := nodes.GetNodeName(bgRes.uri)
+				if bgRes.err == nil {
+					log.Printf("[Vertex] [StreamParallel] 后台收集: 节点 %s 加入粘性池", bgName)
+					stickyPool.Add(bgRes.uri)
+				} else if bgRes.err != context.Canceled && !errors.Is(bgRes.err, context.Canceled) {
+					ve := asVertexError(bgRes.err)
+					if ve != nil && ve.Kind == "ratelimit" {
+						nodes.RecordRateLimit(bgRes.uri, 30)
+					} else {
+						nodes.RecordTest(bgRes.uri, false, 0, bgRes.err.Error())
+					}
+				}
+			case <-collectTimeout.C:
+				log.Printf("[Vertex] [StreamParallel] 后台收集超时，退化至仅读取胜出流")
+				for chunk := range winner.ch {
+					if !yield(chunk) {
+						return
+					}
+				}
+				return
+			case <-ctx.Done():
 				return
 			}
 		}
