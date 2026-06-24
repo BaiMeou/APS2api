@@ -49,26 +49,19 @@ var (
 	DeleteNodeCallback func(uri string)
 )
 
-func fileDir() string {
-	if exe, err := os.Executable(); err == nil {
-		return filepath.Join(filepath.Dir(exe), "config")
-	}
-	return "config"
-}
-
 func ensureLoaded() {
 	if loaded {
 		return
 	}
 	loaded = true
-	if b, err := os.ReadFile(filepath.Join(fileDir(), "nodes.json")); err == nil {
+	if b, err := os.ReadFile(filepath.Join(config.ConfigDir(), "nodes.json")); err == nil {
 		var d struct {
 			Nodes []Node `json:"nodes"`
 		}
 		_ = json.Unmarshal(b, &d)
 		nodeList = d.Nodes
 	}
-	if b, err := os.ReadFile(filepath.Join(fileDir(), "node_health.json")); err == nil {
+	if b, err := os.ReadFile(filepath.Join(config.ConfigDir(), "node_health.json")); err == nil {
 		_ = json.Unmarshal(b, &healthMap)
 	}
 }
@@ -101,11 +94,11 @@ func writeAtomicJSON(path string, v any) error {
 }
 
 func saveNodesUnsafe() {
-	_ = writeAtomicJSON(filepath.Join(fileDir(), "nodes.json"), map[string]any{"nodes": nodeList})
+	_ = writeAtomicJSON(filepath.Join(config.ConfigDir(), "nodes.json"), map[string]any{"nodes": nodeList})
 }
 
 func saveHealthUnsafe() {
-	_ = writeAtomicJSON(filepath.Join(fileDir(), "node_health.json"), healthMap)
+	_ = writeAtomicJSON(filepath.Join(config.ConfigDir(), "node_health.json"), healthMap)
 }
 
 func MergeNodes(newNodes []Node) {

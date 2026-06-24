@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/bsfdsagfadg/vertex/internal/config"
 )
 
 func resetState() {
@@ -17,8 +19,8 @@ func resetState() {
 	healthMap = make(map[string]*NodeHealth)
 	loaded = false
 	// 彻底清除物理磁盘缓存，防止测试间的数据污染
-	_ = os.Remove(filepath.Join(fileDir(), "nodes.json"))
-	_ = os.Remove(filepath.Join(fileDir(), "node_health.json"))
+	_ = os.Remove(filepath.Join(config.ConfigDir(), "nodes.json"))
+	_ = os.Remove(filepath.Join(config.ConfigDir(), "node_health.json"))
 }
 
 func TestNodesLifecycle(t *testing.T) {
@@ -32,6 +34,7 @@ func TestNodesLifecycle(t *testing.T) {
 	// let's create a symlink or temporarily mock os.Executable if needed.
 	// For simplicity, we just test the in-memory aspects mostly, and let it write to ./config
 	// Note: In a real test environment, we should make fileDir overridable.
+	// Update: fileDir() 已经被移除并重构为了 config.ConfigDir()，现在测试环境可以通过 VPROXY_CONFIG 环境变量轻松覆盖配置路径，从而避免污染真实配置。
 
 	// We'll just test the logic that doesn't strictly depend on file system or clean up
 
@@ -101,8 +104,8 @@ func TestNodesLifecycle(t *testing.T) {
 
 	// Cleanup state
 	resetState()
-	_ = os.RemoveAll(filepath.Join(fileDir(), "nodes.json"))
-	_ = os.RemoveAll(filepath.Join(fileDir(), "node_health.json"))
+	_ = os.RemoveAll(filepath.Join(config.ConfigDir(), "nodes.json"))
+	_ = os.RemoveAll(filepath.Join(config.ConfigDir(), "node_health.json"))
 }
 
 func TestParseNodeIdentity(t *testing.T) {
