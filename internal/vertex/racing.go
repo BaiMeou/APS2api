@@ -59,6 +59,27 @@ func RunParallel[T any](ctx context.Context, cfg config.AppConfig, run func(cont
 		cands = filtered
 	}
 
+	if !cfg.StickyPoolEnabled {
+		stickyURIs := stickyPool.List()
+		if len(stickyURIs) > 0 {
+			stickySet := make(map[string]bool, len(stickyURIs))
+			for _, u := range stickyURIs {
+				stickySet[u] = true
+			}
+			var filtered []nodes.Node
+			for _, c := range cands {
+				if !stickySet[c.RawURI] {
+					filtered = append(filtered, c)
+				}
+			}
+			stickyNodes := make([]nodes.Node, 0, len(stickyURIs))
+			for _, u := range stickyURIs {
+				stickyNodes = append(stickyNodes, nodes.Node{RawURI: u, Name: nodes.GetNodeName(u)})
+			}
+			cands = append(stickyNodes, filtered...)
+		}
+	}
+
 	if !cfg.ParallelPoolEnabled || len(cands) == 0 {
 		proxy := cfg.ActiveNodeURI
 		if proxy == "" {
@@ -142,23 +163,23 @@ func RunParallel[T any](ctx context.Context, cfg config.AppConfig, run func(cont
 				stickyPool.Add(res.uri)
 				log.Printf("[Racing] 胜出节点 %s 加入粘性池", name)
 
-			go func() {
-				collectCtx, collectCancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer collectCancel()
-				for {
-					select {
-					case bgRes := <-resCh:
-						atomic.AddInt32(&active, -1)
-						if bgRes.err == nil {
-							log.Printf("[Racing] 后台收集: 节点 %s 加入粘性池", nodes.GetNodeName(bgRes.uri))
-							stickyPool.Add(bgRes.uri)
+				go func() {
+					collectCtx, collectCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer collectCancel()
+					for {
+						select {
+						case bgRes := <-resCh:
+							atomic.AddInt32(&active, -1)
+							if bgRes.err == nil {
+								log.Printf("[Racing] 后台收集: 节点 %s 加入粘性池", nodes.GetNodeName(bgRes.uri))
+								stickyPool.Add(bgRes.uri)
+							}
+						case <-collectCtx.Done():
+							cancel()
+							return
 						}
-					case <-collectCtx.Done():
-						cancel()
-						return
 					}
-				}
-			}()
+				}()
 
 				return res.val, nil
 			}
@@ -254,6 +275,27 @@ func StreamParallel(ctx context.Context, cfg config.AppConfig, op func(ctx conte
 			}
 		}
 		cands = filtered
+	}
+
+	if !cfg.StickyPoolEnabled {
+		stickyURIs := stickyPool.List()
+		if len(stickyURIs) > 0 {
+			stickySet := make(map[string]bool, len(stickyURIs))
+			for _, u := range stickyURIs {
+				stickySet[u] = true
+			}
+			var filtered []nodes.Node
+			for _, c := range cands {
+				if !stickySet[c.RawURI] {
+					filtered = append(filtered, c)
+				}
+			}
+			stickyNodes := make([]nodes.Node, 0, len(stickyURIs))
+			for _, u := range stickyURIs {
+				stickyNodes = append(stickyNodes, nodes.Node{RawURI: u, Name: nodes.GetNodeName(u)})
+			}
+			cands = append(stickyNodes, filtered...)
+		}
 	}
 
 	if !cfg.ParallelPoolEnabled || len(cands) == 0 {

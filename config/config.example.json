@@ -10,6 +10,7 @@
   "parallel_pool_delay_dynamic": false,
   "parallel_pool_delay_ms": 2500,
   "parallel_pool_enabled": true,
+  "sticky_pool_enabled": false,
   "parallel_pool_size": 15,
   "recaptcha_expire_seconds": 60,
   "telemetry_enabled": false,

@@ -77,3 +77,13 @@ func (p *StickyNodePool) StaleCount() int {
 	defer p.mu.Unlock()
 	return len(p.inUse)
 }
+
+func (p *StickyNodePool) List() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	uris := make([]string, 0, len(p.pool))
+	for uri := range p.pool {
+		uris = append(uris, uri)
+	}
+	return uris
+}
