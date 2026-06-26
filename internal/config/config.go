@@ -66,7 +66,7 @@ func DefaultConfig() AppConfig {
 		TokenPoolSize:             30, // 配套 15 并发，池子扩容至 30 更加稳健
 		MaxSpillMB:                2048,
 		ParallelPoolEnabled:       true,
-		StickyPoolEnabled:         true,
+		StickyPoolEnabled:         false,
 		ParallelPoolSize:          15, // 默认为 15 并发
 		ParallelNodeTopK:          80,
 		ParallelPoolDelayDynamic:  false, // 建议默认关闭动态对冲，改为稳定的秒级接力
