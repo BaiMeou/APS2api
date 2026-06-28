@@ -93,7 +93,9 @@ function applyThemeColorFromBg(bgValue) {
   canvas.width = 64; canvas.height = 64;
   if (src) {
     const img = new Image();
-    img.crossOrigin = "Anonymous";
+    if (src.startsWith('http') && !src.startsWith(location.origin)) {
+      img.crossOrigin = "Anonymous";
+    }
     img.onload = () => { ctx.drawImage(img, 0, 0, 64, 64); extractAndSetColors(ctx); };
     img.src = src;
   } else {
