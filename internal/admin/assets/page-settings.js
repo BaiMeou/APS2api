@@ -20,26 +20,6 @@ const SETTINGS_FIELDS = [
   { k: 'drop_max_tokens', label: '移除 maxOutputTokens', type: 'bool', group: 'security', desc: '移除输出 token 上限，让模型自由输出' },
 ];
 
-const TELEMETRY_INFO = `
-<div class="card glass" style="margin-bottom:14px;padding:18px;border-left:3px solid #3b82f6">
-  <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap">
-    <div style="flex:1;min-width:240px">
-      <div style="font-size:1rem;font-weight:600;margin-bottom:6px">📡 匿名遥测</div>
-      <div class="desc" style="line-height:1.6">
-        本软件会向作者发送匿名心跳，<b>仅含运行环境信息</b>（版本、平台、CPU、内存、时区等），
-        用于了解版本分布和活跃情况。
-        <b>不收集</b>任何 IP、API 密钥、对话内容、文件路径等敏感数据。
-        服务端被动接收，不会向你的程序下发任何指令。
-        <a href="https://stat.baimeow.icu" target="_blank" style="color:#60a5fa">查看公开统计 →</a>
-      </div>
-    </div>
-    <label class="toggle" style="flex-shrink:0">
-      <input type="checkbox" id="set_telemetry_enabled">
-      <span class="track"></span>
-    </label>
-  </div>
-</div>`;
-
 let curSettings = {};
 async function loadSettings() {
   const d = await API.settings.get(); curSettings = d.settings || d;
@@ -79,12 +59,8 @@ async function loadSettings() {
   }
 
   $('#settingsForm').innerHTML =
-    TELEMETRY_INFO +
     sectionsHtml +
     '<button class="btn mt-14px" onclick="saveSettings()">保存设置</button>';
-  
-  const telEnabled = curSettings.telemetry_enabled !== false;
-  $('#set_telemetry_enabled').checked = telEnabled;
 
   const stickyEl = $('#set_sticky_pool_enabled');
   const parallelEl = $('#set_parallel_pool_enabled');
@@ -118,7 +94,9 @@ async function saveSettings() {
     else if (f.type === 'number') out[f.k] = parseInt(el.value || '0', 10); 
     else out[f.k] = el.value; 
   }
-  const telEl = $('#set_telemetry_enabled');
-  if (telEl) out['telemetry_enabled'] = telEl.checked;
+  // Keep sending whatever telemetry_enabled is in curSettings to prevent config loss/errors
+  if (curSettings.telemetry_enabled !== undefined) {
+    out['telemetry_enabled'] = curSettings.telemetry_enabled;
+  }
   await API.settings.put(out); toast('设置已保存');
 }
