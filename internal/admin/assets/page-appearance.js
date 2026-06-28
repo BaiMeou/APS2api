@@ -1,4 +1,4 @@
-function applyBg(v) { document.documentElement.style.setProperty('--bg-img', v); }
+function applyBg(v) { document.documentElement.style.setProperty('--bg-img', v); applyThemeColorFromBg(v); }
 
 async function initBg() {
   try {
@@ -53,6 +53,62 @@ async function uploadBg(e) {
 }
 
 function resetBg() { 
+function applyBg(v) { document.documentElement.style.setProperty('--bg-img', v); applyThemeColorFromBg(v); }
+
+async function initBg() {
+  try {
+    const data = await API.settings.get();
+    if (data && data.background_image) {
+      applyBg(data.background_image);
+    }
+  } catch (e) {
+    const s = localStorage.getItem('vproxy_bg');
+    if (s) applyBg(s);
+  }
+}
+initBg();
+
+async function setBgAndSync(v) {
+  applyBg(v);
+  localStorage.setItem('vproxy_bg', v); // Fallback
+  try {
+    await API.settings.put({ background_image: v });
+    toast('背景已更换');
+  } catch (e) {
+    toast('同步背景失败', true);
+  }
+}
+
+function applyBgUrl() { 
+  const u = $('#bgUrl').value.trim(); 
+  if (!u) return; 
+  setBgAndSync(`url('${u}')`); 
+}
+
+async function uploadBg(e) { 
+  const f = e.target.files[0]; 
+  if (!f) return;
+  if (f.size > 10 * 1024 * 1024) {
+    toast('文件不能超过10MB', true);
+    return;
+  }
+  const fd = new FormData();
+  fd.append('file', f);
+  try {
+    const res = await fetch('/api/admin/upload-bg', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (res.ok && data.ok) {
+      setBgAndSync(data.url);
+      loadAppearance();
+    } else {
+      toast(data.error?.message || '上传失败', true);
+    }
+  } catch (err) {
+    toast('上传失败', true);
+  }
+}
+
+function resetBg() { 
   localStorage.removeItem('vproxy_bg'); 
   applyBg(DEFAULT_BG);
   API.settings.put({ background_image: DEFAULT_BG }).catch(()=>{});
@@ -67,12 +123,98 @@ function loadAppearance() {
     { name: '纯黑', val: 'black' },
     { name: '银灰', val: '#f3f4f6' },
   ];
-  $('#presets').innerHTML = presets.map(p => {
-    if (p.val.startsWith('url')) {
-      return `<div class="thumb" style="background-image:${p.val}" onclick="setBgAndSync(\\"${p.val}\\")" title="${p.name}"></div>`;
-    } else {
-      return `<div class="thumb" style="background:${p.val}" onclick="setBgAndSync('${p.val}')" title="${p.name}"></div>`;
-    }
-  }).join('');
+  const curBg = document.documentElement.style.getPropertyValue('--bg-img').trim();
+  if (curBg && !presets.find(p => p.val === curBg)) {
+    presets.unshift({ name: '当前', val: curBg });
+  }
+  const presetsEl = $('#presets');
+  if (presetsEl) {
+    presetsEl.innerHTML = presets.map(p => {
+      if (p.val.startsWith('url')) {
+        return `<div class="thumb" style="background-image:${p.val}" onclick='setBgAndSync(&quot;${p.val}&quot;)' title="${p.name}"></div>`;
+      } else {
+        return `<div class="thumb" style="background:${p.val}" onclick='setBgAndSync(&quot;${p.val}&quot;)' title="${p.name}"></div>`;
+      }
+    }).join('');
+  }
   PAGE_CACHE['appearance'] = $('#page-appearance').innerHTML;
+}
+
+
+function applyThemeColorFromBg(bgValue) {
+  const match = bgValue.match(/url\(['"]?(.*?)['"]?\)/);
+  const src = match ? match[1] : null;
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  canvas.width = 64; canvas.height = 64;
+  if (src) {
+    const img = new Image();
+    img.crossOrigin = "Anonymous";
+    img.onload = () => { ctx.drawImage(img, 0, 0, 64, 64); extractAndSetColors(ctx); };
+    img.src = src;
+  } else {
+    ctx.fillStyle = bgValue;
+    ctx.fillRect(0, 0, 64, 64);
+    extractAndSetColors(ctx);
+  }
+}
+
+function extractAndSetColors(ctx) {
+  const data = ctx.getImageData(0, 0, 64, 64).data;
+  let r = 0, g = 0, b = 0, count = 0;
+  for (let i = 0; i < data.length; i += 16) {
+    r += data[i]; g += data[i+1]; b += data[i+2]; count++;
+  }
+  if (count === 0) return;
+  r /= count; g /= count; b /= count;
+  let [h, s, l] = rgbToHsl(r, g, b);
+  if (s < 0.25) s = 0.5; 
+  if (l < 0.4) l = 0.6; 
+  if (l > 0.7) l = 0.55; 
+  const c1 = hslToHex(h, s, l);
+  const c2 = hslToHex(h, s, Math.max(l - 0.18, 0.25));
+  const c3 = `hsla(${Math.round(h*360)}, ${Math.round(s*100)}%, ${Math.round(l*100)}%, 0.15)`;
+  document.documentElement.style.setProperty("--gold", c1);
+  document.documentElement.style.setProperty("--gold-deep", c2);
+  document.documentElement.style.setProperty("--gold-soft", c3);
+}
+
+function rgbToHsl(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  let h, s, l = (max + min) / 2;
+  if (max === min) { h = s = 0; }
+  else {
+    const d = max - min;
+    s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+    switch (max) {
+      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: h = (b - r) / d + 2; break;
+      case b: h = (r - g) / d + 4; break;
+    }
+    h /= 6;
+  }
+  return [h, s, l];
+}
+
+function hslToHex(h, s, l) {
+  let r, g, b;
+  if (s === 0) { r = g = b = l; }
+  else {
+    const hue2rgb = (p, q, t) => {
+      if(t < 0) t += 1; if(t > 1) t -= 1;
+      if(t < 1/6) return p + (q - p) * 6 * t;
+      if(t < 1/2) return q;
+      if(t < 2/3) return p + (q - p) * (2/3 - t) * 6;
+      return p;
+    };
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    r = hue2rgb(p, q, h + 1/3); g = hue2rgb(p, q, h); b = hue2rgb(p, q, h - 1/3);
+  }
+  const toHex = x => {
+    const hex = Math.round(x * 255).toString(16);
+    return hex.length === 1 ? "0" + hex : hex;
+  };
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
 }
