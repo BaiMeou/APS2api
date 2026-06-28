@@ -12,8 +12,6 @@ import (
 	"math"
 	"math/rand"
 	"net/url"
-	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +19,7 @@ import (
 	"time"
 
 	"github.com/bsfdsagfadg/vertex/internal/config"
+	"github.com/bsfdsagfadg/vertex/internal/db"
 )
 
 type Node struct {
@@ -54,15 +53,36 @@ func ensureLoaded() {
 		return
 	}
 	loaded = true
-	if b, err := os.ReadFile(filepath.Join(config.ConfigDir(), "nodes.json")); err == nil {
-		var d struct {
-			Nodes []Node `json:"nodes"`
-		}
-		_ = json.Unmarshal(b, &d)
-		nodeList = d.Nodes
+
+	if db.GlobalDB == nil {
+		return
 	}
-	if b, err := os.ReadFile(filepath.Join(config.ConfigDir(), "node_health.json")); err == nil {
-		_ = json.Unmarshal(b, &healthMap)
+
+	// Load nodes
+	rows, err := db.GlobalDB.Query("SELECT raw_uri, type, name, disabled FROM nodes")
+	if err == nil {
+		defer rows.Close()
+		var nodes []Node
+		for rows.Next() {
+			var n Node
+			if err := rows.Scan(&n.RawURI, &n.Type, &n.Name, &n.Disabled); err == nil {
+				nodes = append(nodes, n)
+			}
+		}
+		nodeList = nodes
+	}
+
+	// Load health
+	hRows, err := db.GlobalDB.Query("SELECT raw_uri, success_count, fail_count, consecutive_failures, last_test_ms, last_test_error, last_success_at, last_fail_at, cooldown_until FROM node_health")
+	if err == nil {
+		defer hRows.Close()
+		for hRows.Next() {
+			var uri string
+			h := &NodeHealth{}
+			if err := hRows.Scan(&uri, &h.SuccessCount, &h.FailCount, &h.ConsecutiveFailures, &h.LastTestMs, &h.LastTestError, &h.LastSuccessAt, &h.LastFailAt, &h.CooldownUntil); err == nil {
+				healthMap[uri] = h
+			}
+		}
 	}
 }
 
@@ -82,23 +102,53 @@ func LoadHealth() map[string]*NodeHealth {
 }
 
 func writeAtomicJSON(path string, v any) error {
-	if dir := filepath.Dir(path); dir != "" {
-		_ = os.MkdirAll(dir, 0o755)
-	}
-	data, _ := json.MarshalIndent(v, "", "  ")
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	// 废弃不用，但为了防止外部调用暂时保留个空实现或原逻辑
+	return nil
 }
 
 func saveNodesUnsafe() {
-	_ = writeAtomicJSON(filepath.Join(config.ConfigDir(), "nodes.json"), map[string]any{"nodes": nodeList})
+	if db.GlobalDB == nil {
+		return
+	}
+	tx, err := db.GlobalDB.Begin()
+	if err != nil {
+		return
+	}
+	// 为了简单起见，可以先全量删除再插入，但最好的方式是逐个插入或在添加删除时调用单个 SQL
+	// 这里保持原来 saveNodesUnsafe 的全量保存语义，执行全量同步
+	tx.Exec("DELETE FROM nodes")
+	stmt, _ := tx.Prepare("INSERT INTO nodes (raw_uri, type, name, disabled) VALUES (?, ?, ?, ?)")
+	for _, n := range nodeList {
+		if stmt != nil {
+			stmt.Exec(n.RawURI, n.Type, n.Name, n.Disabled)
+		}
+	}
+	if stmt != nil {
+		stmt.Close()
+	}
+	tx.Commit()
 }
 
 func saveHealthUnsafe() {
-	_ = writeAtomicJSON(filepath.Join(config.ConfigDir(), "node_health.json"), healthMap)
+	if db.GlobalDB == nil {
+		return
+	}
+	tx, err := db.GlobalDB.Begin()
+	if err != nil {
+		return
+	}
+	stmt, _ := tx.Prepare(`INSERT OR REPLACE INTO node_health 
+		(raw_uri, success_count, fail_count, consecutive_failures, last_test_ms, last_test_error, last_success_at, last_fail_at, cooldown_until) 
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	if stmt == nil {
+		tx.Rollback()
+		return
+	}
+	for uri, h := range healthMap {
+		stmt.Exec(uri, h.SuccessCount, h.FailCount, h.ConsecutiveFailures, h.LastTestMs, h.LastTestError, h.LastSuccessAt, h.LastFailAt, h.CooldownUntil)
+	}
+	stmt.Close()
+	tx.Commit()
 }
 
 func MergeNodes(newNodes []Node) {
