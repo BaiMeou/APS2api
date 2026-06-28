@@ -39,8 +39,10 @@ const (
 
 // adminSessions 是 token → 过期时刻 的内存表。单进程服务用包级全局即可。
 var (
+	//nolint:gochecknoglobals // Session cache needs to be global for the process
 	adminSessionsMu sync.Mutex
-	adminSessions   = map[string]time.Time{}
+	//nolint:gochecknoglobals // Session cache needs to be global for the process
+	adminSessions = map[string]time.Time{}
 )
 
 // issueAdminToken 生成一个新 session token（crypto/rand 32 字节 hex）并登记过期时刻。
@@ -306,7 +308,7 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[Admin] 管理后台登录成功。来源 IP: %s", r.RemoteAddr)
 	cleanupAdminSessions() // 登录时顺手清过期，避免内存里堆死 token
 	tok := issueAdminToken()
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ //nolint:exhaustruct
 		Name:     adminCookieName,
 		Value:    tok,
 		Path:     "/",
@@ -321,7 +323,7 @@ func (s *Server) adminLogin(w http.ResponseWriter, r *http.Request) {
 // adminLogout 处理 POST /api/admin/logout：删该 session + 清 cookie。
 func (s *Server) adminLogout(w http.ResponseWriter, r *http.Request) {
 	dropAdminToken(adminTokenFromRequest(r))
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ //nolint:exhaustruct
 		Name:     adminCookieName,
 		Value:    "",
 		Path:     "/",
@@ -363,7 +365,7 @@ func (s *Server) adminGetSettings(w http.ResponseWriter, _ *http.Request) {
 		"anti_tracking":     cfg.AntiTracking,
 		"drop_max_tokens":   cfg.DropMaxTokens,
 		"telemetry_enabled": telEnabled,
-		"proxy_url":                cfg.ProxyURL, "parallel_pool_enabled": cfg.ParallelPoolEnabled, "parallel_pool_size": cfg.ParallelPoolSize, "active_node_uri": cfg.ActiveNodeURI,
+		"proxy_url":         cfg.ProxyURL, "parallel_pool_enabled": cfg.ParallelPoolEnabled, "parallel_pool_size": cfg.ParallelPoolSize, "active_node_uri": cfg.ActiveNodeURI,
 		"parallel_pool_delay_dynamic": cfg.ParallelPoolDelayDynamic,
 		"parallel_pool_delay_ms":      cfg.ParallelPoolDelayMs,
 		"recaptcha_expire_seconds":    cfg.RecaptchaExpireSeconds,
@@ -372,6 +374,8 @@ func (s *Server) adminGetSettings(w http.ResponseWriter, _ *http.Request) {
 }
 
 // adminAllowedSettings 是面板可写回 config.json 的字段白名单（避免前端塞任意键污染配置）。
+//
+//nolint:gochecknoglobals // Read-only configuration map
 var adminAllowedSettings = map[string]bool{
 	"max_retries": true, "token_pool_size": true, "max_spill_mb": true,
 	"max_request_mb": true, "max_n": true, "anti429_enabled": true,
@@ -388,6 +392,7 @@ var adminAllowedSettings = map[string]bool{
 
 // adminPutSettings 处理 PUT /api/admin/settings：合并 {settings:{...}} 写回 config.json 并清缓存。
 func (s *Server) adminPutSettings(w http.ResponseWriter, r *http.Request) {
+	//nolint:govet // Intentionally unaligned
 	var body struct {
 		Settings map[string]any `json:"settings"`
 	}
@@ -533,7 +538,7 @@ func (s *Server) adminGetModels(w http.ResponseWriter, _ *http.Request) {
 
 // adminPutModels 处理 PUT /api/admin/models：{models,alias_map} 写回 models.json 并热重载。
 func (s *Server) adminPutModels(w http.ResponseWriter, r *http.Request) {
-	var body struct {
+	var body struct { //nolint:govet
 		Models   []string          `json:"models"`
 		AliasMap map[string]string `json:"alias_map"`
 	}

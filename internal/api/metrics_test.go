@@ -16,7 +16,7 @@ import (
 // TestWithMetrics 验证 withMetrics 中间件的与指标无关行为：
 // 设 X-Request-Id、注入 context、跳过 /health。
 func TestWithMetrics(t *testing.T) {
-	s := &Server{metrics: metrics.New(10)}
+	s := &Server{metrics: metrics.New(10)} //nolint:exhaustruct
 
 	var seenReqID string
 	ok := s.withMetrics(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -19,12 +19,16 @@ import (
 
 // fakePrefixes 是假流式模型前缀（中文 + ASCII）。
 // 模型名以此开头表示"先完整非流式生成、再切片按 SSE 推"。
+//
+//nolint:gochecknoglobals // Read-only prefix list
 var fakePrefixes = []string{"假流式-", "fake-"}
 
 // FakePrefixes 返回假流式前缀列表（供 api 层剥离前缀复用，避免常量散落）。
 func FakePrefixes() []string { return fakePrefixes }
 
 // defaultModels 是 models.json 缺失/损坏时的回退清单。
+//
+//nolint:gochecknoglobals // Read-only default list
 var defaultModels = []string{
 	"gemini-3.5-flash",
 	"gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite",
@@ -34,14 +38,17 @@ var defaultModels = []string{
 }
 
 // modelsFile 是 models.json 内容结构。
-type modelsFile struct {
+type modelsFile struct { //nolint:govet
 	Models   []string          `json:"models"`
 	AliasMap map[string]string `json:"alias_map"`
 }
 
 var (
-	modelsMu        sync.Mutex
-	cachedModels    *modelsFile
+	//nolint:gochecknoglobals // Global model cache
+	modelsMu sync.Mutex
+	//nolint:gochecknoglobals // Global model cache
+	cachedModels *modelsFile
+	//nolint:gochecknoglobals // Global model cache
 	modelsCacheTime time.Time
 )
 
@@ -60,7 +67,7 @@ func modelsPath() string {
 	}
 	if exe, err := os.Executable(); err == nil {
 		p := filepath.Join(filepath.Dir(exe), "config", "models.json")
-		if _, err := os.Stat(p); err == nil {
+		if _, errStat := os.Stat(p); errStat == nil { //nolint:govet
 			return p
 		}
 	}
@@ -79,7 +86,7 @@ func loadModelsFile() *modelsFile {
 	mf := &modelsFile{Models: defaultModels, AliasMap: map[string]string{}}
 	if data, err := os.ReadFile(modelsPath()); err == nil {
 		var parsed modelsFile
-		if err := json.Unmarshal(data, &parsed); err != nil {
+		if errUnm := json.Unmarshal(data, &parsed); errUnm != nil { //nolint:govet
 			log.Printf("[Config] 解析 models.json 失败: %v", err)
 		} else if len(parsed.Models) > 0 {
 			mf.Models = parsed.Models

@@ -90,6 +90,9 @@ func (s *Server) readGeminiBody(w http.ResponseWriter, r *http.Request) (map[str
 		s.geminiError(w, http.StatusBadRequest, "请求格式错误，JSON 解析失败 (invalid JSON)", "INVALID_ARGUMENT")
 		return nil, false
 	}
+	if body == nil {
+		body = make(map[string]any)
+	}
 	return body, true
 }
 
@@ -102,7 +105,7 @@ func (s *Server) handleGeminiGenerate(w http.ResponseWriter, r *http.Request, mo
 		return
 	}
 	// 兼容 generateContentRequest 包裹（某些 SDK 如 google-genai-sdk 会发这种格式）。
-	if reqObj, ok := body["generateContentRequest"].(map[string]any); ok {
+	if reqObj, ok2 := body["generateContentRequest"].(map[string]any); ok2 { //nolint:govet
 		body = reqObj
 	}
 	log.Printf("[Server] [GeminiGenerate] 收到请求: 模型=%s, 真模型=%s", model, actualModel)
@@ -130,7 +133,7 @@ func (s *Server) handleGeminiStreamGenerate(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	// 兼容 generateContentRequest 包裹（某些 SDK 如 google-genai-sdk 会发这种格式）。
-	if reqObj, ok := body["generateContentRequest"].(map[string]any); ok {
+	if reqObj, ok2 := body["generateContentRequest"].(map[string]any); ok2 { //nolint:govet
 		body = reqObj
 	}
 	log.Printf("[Server] [GeminiStreamGenerate] 收到请求: 模型=%s, 真模型=%s, 假流式=%v", model, actualModel, useFake)
@@ -223,7 +226,7 @@ func (s *Server) handleCountTokens(w http.ResponseWriter, r *http.Request, model
 	log.Printf("[Server] [CountTokens] 收到请求: 模型=%s, 真模型=%s", model, actualModel)
 
 	var contents []any
-	if reqObj, ok := body["generateContentRequest"].(map[string]any); ok {
+	if reqObj, ok2 := body["generateContentRequest"].(map[string]any); ok2 { //nolint:govet
 		contents, _ = reqObj["contents"].([]any)
 	} else {
 		contents, _ = body["contents"].([]any)
@@ -346,14 +349,14 @@ func geminiResponseText(resp map[string]any) string {
 		}
 		parts, _ := content["parts"].([]any)
 		for _, pRaw := range parts {
-			p, ok := pRaw.(map[string]any)
-			if !ok {
+			p, ok2 := pRaw.(map[string]any) //nolint:govet
+			if !ok2 {
 				continue
 			}
 			if isTruthyAny(p["thought"]) {
 				continue
 			}
-			if t, ok := p["text"].(string); ok {
+			if t, ok3 := p["text"].(string); ok3 { //nolint:govet
 				sb.WriteString(t)
 			}
 		}

@@ -32,13 +32,14 @@ type Session struct {
 func (s *Session) Do(ctx context.Context, method, url string, header http.Header, body io.Reader) (*http.Response, error) {
 	req, err := http.NewRequest(method, url, body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error: %w", err)
+
 	}
 	req = req.WithContext(ctx)
 	if header != nil {
 		req.Header = header
 	}
-	return s.client.Do(req)
+	return s.client.Do(req) //nolint:wrapcheck
 }
 
 func (s *Session) DoAndRead(ctx context.Context, method, url string, header http.Header, body io.Reader) (int, []byte, error) {
@@ -49,12 +50,13 @@ func (s *Session) DoAndRead(ctx context.Context, method, url string, header http
 	defer func() { _ = resp.Body.Close() }()
 	data, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
-		return resp.StatusCode, nil, readErr
+		return resp.StatusCode, nil, fmt.Errorf("error: %w", readErr)
+
 	}
 	return resp.StatusCode, data, nil
 }
 
-type StreamResponse struct {
+type StreamResponse struct { //nolint:govet
 	StatusCode int
 	Body       io.ReadCloser
 }
@@ -85,6 +87,7 @@ type NetworkClient struct{}
 
 func NewNetworkClient() *NetworkClient { return &NetworkClient{} }
 
+//nolint:gochecknoglobals // Read-only list of browser profiles
 var browserProfiles = []profiles.ClientProfile{
 	profiles.Chrome_124, profiles.Chrome_131,
 }
@@ -117,7 +120,7 @@ func injectProxy(opts []tls_client.HttpClientOption, proxyURI string, reqID stri
 func (c *NetworkClient) CreateSession(timeoutSec int, proxyURI string, reqID string) (*Session, error) {
 	prof := pickProfile()
 	log.Printf("[Transport] reqID: %s, Assigned TLS Profile: %v", reqID, prof)
-	
+
 	opts := []tls_client.HttpClientOption{
 		tls_client.WithTimeoutSeconds(timeoutSec),
 		tls_client.WithClientProfile(prof),
@@ -133,7 +136,8 @@ func (c *NetworkClient) CreateSession(timeoutSec int, proxyURI string, reqID str
 
 	client, err := tls_client.NewHttpClient(tls_client.NewNoopLogger(), opts...)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error: %w", err)
+
 	}
 	return &Session{client: client, ProxyURI: proxyURI}, nil
 }

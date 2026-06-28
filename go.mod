@@ -5,13 +5,14 @@ go 1.26.3
 require (
 	github.com/bogdanfinn/fhttp v0.6.8
 	github.com/bogdanfinn/tls-client v1.15.1
+	github.com/glebarez/go-sqlite v1.22.0
+	github.com/gosuri/uilive v0.0.4
 	github.com/metacubex/mihomo v1.19.27
 	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/glebarez/go-sqlite v1.22.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	modernc.org/libc v1.37.6 // indirect

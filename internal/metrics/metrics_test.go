@@ -23,7 +23,7 @@ func TestCollector(t *testing.T) {
 	c.Reset()
 
 	snap := c.Snapshot()
-	expectedSnap := Snapshot{}
+	expectedSnap := Snapshot{} //nolint:exhaustruct
 	if !reflect.DeepEqual(snap, expectedSnap) {
 		t.Errorf("Snapshot() = %v, want %v", snap, expectedSnap)
 	}

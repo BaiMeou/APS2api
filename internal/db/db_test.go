@@ -15,7 +15,9 @@ func TestInitDBAndMigrate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() {
+		_ = os.RemoveAll(tempDir)
+	}()
 
 	dbPath := filepath.Join(tempDir, "data.db")
 
@@ -25,7 +27,7 @@ func TestInitDBAndMigrate(t *testing.T) {
 			{"raw_uri": "http://127.0.0.1:8080", "type": "openai", "name": "Node A", "disabled": false}
 		]
 	}`)
-	os.WriteFile(filepath.Join(tempDir, "nodes.json"), nodesContent, 0644)
+	_ = os.WriteFile(filepath.Join(tempDir, "nodes.json"), nodesContent, 0644)
 
 	healthContent := []byte(`{
 		"http://127.0.0.1:8080": {
@@ -39,10 +41,10 @@ func TestInitDBAndMigrate(t *testing.T) {
 			"cooldown_until": 0
 		}
 	}`)
-	os.WriteFile(filepath.Join(tempDir, "node_health.json"), healthContent, 0644)
+	_ = os.WriteFile(filepath.Join(tempDir, "node_health.json"), healthContent, 0644)
 
 	// Init DB
-	if err := InitDB(dbPath); err != nil {
+	if errInit := InitDB(dbPath); errInit != nil { //nolint:govet
 		t.Fatalf("Failed to InitDB: %v", err)
 	}
 	defer CloseDB()

@@ -16,17 +16,17 @@ func TestMarshal(t *testing.T) {
 		want    []byte
 		wantErr bool
 	}{
-		{
+		{ //nolint:exhaustruct
 			name: "no html escape",
 			v:    map[string]string{"html": "<script>alert(1)</script> & foo"},
 			want: []byte(`{"html":"<script>alert(1)</script> & foo"}`),
 		},
-		{
+		{ //nolint:exhaustruct
 			name: "unicode preserved",
 			v:    map[string]string{"text": "你好世界"},
 			want: []byte(`{"text":"你好世界"}`),
 		},
-		{
+		{ //nolint:exhaustruct
 			name: "simple string",
 			v:    "test",
 			want: []byte(`"test"`),
@@ -53,7 +53,7 @@ func TestMarshal(t *testing.T) {
 }
 
 func TestTruthy(t *testing.T) {
-	tests := []struct {
+	tests := []struct { //nolint:govet
 		name string
 		v    any
 		want bool

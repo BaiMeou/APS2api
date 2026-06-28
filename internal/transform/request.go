@@ -15,7 +15,7 @@ import (
 )
 
 // safetyCategories 是默认安全设置覆盖的 5 个类别（缺省全 BLOCK_NONE）。
-var safetyCategories = []string{
+var safetyCategories = []string{ //nolint:gochecknoglobals
 	"HARM_CATEGORY_HARASSMENT",
 	"HARM_CATEGORY_HATE_SPEECH",
 	"HARM_CATEGORY_SEXUALLY_EXPLICIT",
@@ -24,7 +24,7 @@ var safetyCategories = []string{
 }
 
 // supportedVarFields 是从 geminiPayload 透传进 variables 的字段（统一 camelCase）。
-var supportedVarFields = []string{
+var supportedVarFields = []string{ //nolint:gochecknoglobals
 	"contents", "tools", "toolConfig", "systemInstruction", "safetySettings", "generationConfig",
 }
 
@@ -1172,7 +1172,7 @@ func parseModelName(model string) string {
 }
 
 // toolKeys 是 Vertex AI tools 列表里可与 functionDeclarations 共存的内置工具键集合。
-var toolKeys = map[string]bool{
+var toolKeys = map[string]bool{ //nolint:gochecknoglobals
 	"functionDeclarations": true, "googleSearch": true, "googleSearchRetrieval": true,
 	"codeExecution": true, "retrieval": true, "urlContext": true,
 }

@@ -38,7 +38,7 @@ type Snapshot struct {
 }
 
 // Default 是进程级全局采集器。
-var Default = New(0)
+var Default = New(0) //nolint:gochecknoglobals
 
 // New 构造采集器；maxLatency 为延迟采样窗口大小（当前实现未消费）。
 func New(maxLatency int) *Collector { return &Collector{} }
@@ -51,7 +51,7 @@ func (c *Collector) EndRequest(success bool, latencySec float64)                
 func (c *Collector) IncUpstream429()                                                 {}
 func (c *Collector) IncUpstreamEmpty()                                               {}
 func (c *Collector) IncUpstreamAuth()                                                {}
-func (c *Collector) Snapshot() Snapshot                                              { return Snapshot{} }
+func (c *Collector) Snapshot() Snapshot                                              { return Snapshot{} } //nolint:exhaustruct
 func (c *Collector) Reset()                                                          {}
 func (c *Collector) RecordRequest(path string, success bool, lat float64, at string) {}
 func (c *Collector) RecentRequests() []RequestRecord                                 { return nil }

@@ -125,7 +125,7 @@ func (s *Server) handleImageEdits(w http.ResponseWriter, r *http.Request) {
 	}
 	var mask *transform.InlineImage
 	if maskUploads := formUploads(r, "mask"); len(maskUploads) > 0 {
-		m, err := uploadToInlineImage(maskUploads[0])
+		m, err := uploadToInlineImage(maskUploads[0]) //nolint:govet
 		if err != nil {
 			s.oaiBadRequest(w, err.Error())
 			return

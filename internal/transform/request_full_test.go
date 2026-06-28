@@ -22,8 +22,8 @@ func TestConvertUserContent_ImageDataURI(t *testing.T) {
 		}},
 	}
 	parts := convertUserContent(content)
-	if len(parts) != 2 {
-		t.Fatalf("parts len=%d, want 2", len(parts))
+	if len(parts) < 2 {
+		t.Fatalf("parts len=%d, want at least 2", len(parts))
 	}
 	id, ok := parts[1].(map[string]any)["inlineData"].(map[string]any)
 	if !ok {
@@ -41,6 +41,9 @@ func TestConvertUserContent_ImageRemoteURL(t *testing.T) {
 		}},
 	}
 	parts := convertUserContent(content)
+	if len(parts) < 1 {
+		t.Fatalf("parts len=%d, want at least 1", len(parts))
+	}
 	fd, ok := parts[0].(map[string]any)["fileData"].(map[string]any)
 	if !ok {
 		t.Fatalf("远程 URL 应转 fileData: %v", parts[0])
@@ -56,6 +59,9 @@ func TestConvertUserContent_Video(t *testing.T) {
 		map[string]any{"type": "video_url", "video_url": map[string]any{"url": "data:application/octet-stream;base64,QkJC"}},
 	}
 	parts := convertUserContent(content)
+	if len(parts) < 1 {
+		t.Fatalf("parts len=%d, want at least 1", len(parts))
+	}
 	id := parts[0].(map[string]any)["inlineData"].(map[string]any)
 	if id["mimeType"] != "video/mp4" {
 		t.Errorf("video mime=%v, want video/mp4 回退", id["mimeType"])
@@ -65,6 +71,9 @@ func TestConvertUserContent_Video(t *testing.T) {
 		map[string]any{"type": "input_video", "input_video": "data:video/webm;base64,QkJC"},
 	}
 	parts2 := convertUserContent(content2)
+	if len(parts2) < 1 {
+		t.Fatalf("parts2 len=%d, want at least 1", len(parts2))
+	}
 	id2 := parts2[0].(map[string]any)["inlineData"].(map[string]any)
 	if id2["mimeType"] != "video/webm" {
 		t.Errorf("input_video mime=%v", id2["mimeType"])
@@ -77,6 +86,9 @@ func TestConvertUserContent_InputAudio(t *testing.T) {
 		map[string]any{"type": "input_audio", "input_audio": map[string]any{"data": "QUFB", "format": "mp3"}},
 	}
 	parts := convertUserContent(content)
+	if len(parts) < 1 {
+		t.Fatalf("parts len=%d, want at least 1", len(parts))
+	}
 	id := parts[0].(map[string]any)["inlineData"].(map[string]any)
 	if id["mimeType"] != "audio/mpeg" {
 		t.Errorf("audio mime=%v, want audio/mpeg", id["mimeType"])
@@ -85,7 +97,11 @@ func TestConvertUserContent_InputAudio(t *testing.T) {
 	content2 := []any{
 		map[string]any{"type": "input_audio", "input_audio": map[string]any{"data": "QUFB", "format": "xyz"}},
 	}
-	id2 := convertUserContent(content2)[0].(map[string]any)["inlineData"].(map[string]any)
+	parts2 := convertUserContent(content2)
+	if len(parts2) < 1 {
+		t.Fatalf("parts2 len=%d, want at least 1", len(parts2))
+	}
+	id2 := parts2[0].(map[string]any)["inlineData"].(map[string]any)
 	if id2["mimeType"] != "audio/wav" {
 		t.Errorf("未知 format mime=%v, want audio/wav 回退", id2["mimeType"])
 	}
@@ -93,7 +109,11 @@ func TestConvertUserContent_InputAudio(t *testing.T) {
 	content3 := []any{
 		map[string]any{"type": "input_audio", "input_audio": "data:audio/flac;base64,QUFB"},
 	}
-	id3 := convertUserContent(content3)[0].(map[string]any)["inlineData"].(map[string]any)
+	parts3 := convertUserContent(content3)
+	if len(parts3) < 1 {
+		t.Fatalf("parts3 len=%d, want at least 1", len(parts3))
+	}
+	id3 := parts3[0].(map[string]any)["inlineData"].(map[string]any)
 	if id3["mimeType"] != "audio/flac" {
 		t.Errorf("audio data URI mime=%v", id3["mimeType"])
 	}

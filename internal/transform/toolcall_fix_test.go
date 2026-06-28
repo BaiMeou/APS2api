@@ -145,7 +145,7 @@ func TestConvertToolsFormat_NumericConstraints(t *testing.T) {
 			}},
 		}},
 	}
-	vars := BuildVertexVariables("gemini-3-flash", geminiPayload, config.AppConfig{})
+	vars := BuildVertexVariables("gemini-3-flash", geminiPayload, config.AppConfig{}) //nolint:exhaustruct
 	dump, _ := json.Marshal(vars["tools"])
 	if !strings.Contains(string(dump), `"minItems":"1"`) {
 		t.Errorf("minItems 应转为字符串 \"1\": %s", dump)

@@ -9,7 +9,7 @@ import (
 	"runtime"
 )
 
-func init() {
+func setupTermuxCerts() {
 	// Termux (Android) 的 CA 证书路径与标准 Linux 不同。
 	// Go 静态编译的二进制默认查 /etc/ssl/certs/，但 Termux 的证书在 $PREFIX/etc/tls/。
 	// 如果用户未手动设置 SSL_CERT_FILE，自动探测并设置。
@@ -26,7 +26,7 @@ func init() {
 			}
 			for _, c := range candidates {
 				if _, err := os.Stat(c); err == nil {
-					os.Setenv("SSL_CERT_FILE", c)
+					_ = os.Setenv("SSL_CERT_FILE", c)
 					break
 				}
 			}

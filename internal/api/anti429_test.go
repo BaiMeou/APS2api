@@ -62,7 +62,7 @@ func is100Digits(s string) bool {
 // ---- injectAnti429：target=system ----
 
 func TestInjectAnti429System(t *testing.T) {
-	s := &Server{cfg: config.AppConfig{Anti429Enabled: true, Anti429Target: "system"}}
+	s := &Server{cfg: config.AppConfig{Anti429Enabled: true, Anti429Target: "system"}} //nolint:exhaustruct
 	payload := map[string]any{
 		"contents": []any{
 			map[string]any{"role": "user", "parts": []any{map[string]any{"text": "hi"}}},
@@ -87,7 +87,7 @@ func TestInjectAnti429System(t *testing.T) {
 
 // 默认 target 为空字符串时应回退 system。
 func TestInjectAnti429DefaultTargetSystem(t *testing.T) {
-	s := &Server{cfg: config.AppConfig{Anti429Enabled: true, Anti429Target: ""}}
+	s := &Server{cfg: config.AppConfig{Anti429Enabled: true, Anti429Target: ""}} //nolint:exhaustruct
 	payload := map[string]any{}
 	s.injectAnti429(payload)
 	si, ok := payload["systemInstruction"].(map[string]any)
@@ -103,7 +103,7 @@ func TestInjectAnti429DefaultTargetSystem(t *testing.T) {
 
 // system 注入应保留已有 parts（前插）。
 func TestInjectAnti429SystemPrepends(t *testing.T) {
-	s := &Server{cfg: config.AppConfig{Anti429Enabled: true, Anti429Target: "system"}}
+	s := &Server{cfg: config.AppConfig{Anti429Enabled: true, Anti429Target: "system"}} //nolint:exhaustruct
 	payload := map[string]any{
 		"systemInstruction": map[string]any{
 			"parts": []any{map[string]any{"text": "original-system"}},

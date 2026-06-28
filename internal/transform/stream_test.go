@@ -86,6 +86,9 @@ func TestConvertRealtimeChunk_MaxTokensLength(t *testing.T) {
 		"finishReason": "MAX_TOKENS",
 	}}}
 	events := ConvertRealtimeChunk(chunk, "m", "r", false)
+	if len(events) == 0 {
+		t.Fatalf("events is empty")
+	}
 	last := events[len(events)-1]
 	if !strings.Contains(last, `"finish_reason":"length"`) {
 		t.Errorf("MAX_TOKENS → length: %s", last)
@@ -137,6 +140,9 @@ func TestConvertRealtimeChunk_ToolCall(t *testing.T) {
 		t.Errorf("tool_call 应含函数名: %s", toolEvt)
 	}
 	// STOP + 有 tool_call → finish_reason=tool_calls。
+	if len(events) == 0 {
+		t.Fatalf("events is empty")
+	}
 	last := events[len(events)-1]
 	if !strings.Contains(last, `"finish_reason":"tool_calls"`) {
 		t.Errorf("有工具调用应 finish_reason=tool_calls: %s", last)

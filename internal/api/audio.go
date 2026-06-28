@@ -27,6 +27,8 @@ const ttsDefaultModel = "gemini-3.1-flash-tts-preview"
 const ttsDefaultVoice = "Kore"
 
 // ttsVoiceMap：OpenAI voice → Gemini prebuilt voiceName。
+//
+//nolint:gochecknoglobals // Read-only map
 var ttsVoiceMap = map[string]string{
 	"alloy": "Kore", "echo": "Puck", "fable": "Charon", "onyx": "Fenrir",
 	"nova": "Aoede", "shimmer": "Leda", "ash": "Orus", "ballad": "Zephyr",
@@ -34,6 +36,8 @@ var ttsVoiceMap = map[string]string{
 }
 
 // ttsGeminiVoices：Gemini 原生 voiceName 集合（命中直接透传，不走映射表）。
+//
+//nolint:gochecknoglobals // Read-only set
 var ttsGeminiVoices = map[string]bool{
 	"Kore": true, "Puck": true, "Charon": true, "Aoede": true, "Fenrir": true, "Leda": true,
 	"Orus": true, "Zephyr": true, "Autonoe": true, "Enceladus": true, "Iapetus": true,
@@ -50,6 +54,7 @@ type ttsFormat struct {
 	wrapWAV     bool
 }
 
+//nolint:gochecknoglobals // Read-only configuration map
 var ttsFormatInfo = map[string]ttsFormat{
 	"mp3":  {"audio/wav", true},
 	"wav":  {"audio/wav", true},
@@ -139,7 +144,7 @@ func ttsResolveVoice(voice any) string {
 	if ttsGeminiVoices[v] {
 		return v
 	}
-	if mapped, ok := ttsVoiceMap[strings.ToLower(v)]; ok {
+	if mapped, ok2 := ttsVoiceMap[strings.ToLower(v)]; ok2 { //nolint:govet
 		return mapped
 	}
 	return ttsDefaultVoice

@@ -16,7 +16,7 @@ import (
 )
 
 // ParseResult 是 batchGraphql 响应的解析结果（解析状态）。
-type ParseResult struct {
+type ParseResult struct { //nolint:govet
 	Parts             []map[string]any
 	FinishReason      string
 	FinishMessage     any

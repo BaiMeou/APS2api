@@ -6,6 +6,7 @@ package api
 
 import (
 	"bufio"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,7 +15,7 @@ import (
 )
 
 // APIKeyManager 简化版 API 密钥管理器。
-type APIKeyManager struct {
+type APIKeyManager struct { //nolint:govet
 	mu       sync.RWMutex
 	keys     map[string]string // api_key -> name
 	keysFile string
@@ -22,7 +23,7 @@ type APIKeyManager struct {
 
 // NewAPIKeyManager 构造管理器（密钥文件路径同 config 的解析策略）。
 func NewAPIKeyManager() *APIKeyManager {
-	return &APIKeyManager{keys: map[string]string{}, keysFile: keysFilePath()}
+	return &APIKeyManager{keys: map[string]string{}, keysFile: keysFilePath()} //nolint:exhaustruct
 }
 
 func keysFilePath() string {
@@ -31,7 +32,7 @@ func keysFilePath() string {
 	}
 	if exe, err := os.Executable(); err == nil {
 		p := filepath.Join(filepath.Dir(exe), "config", "api_keys.txt")
-		if _, err := os.Stat(p); err == nil {
+		if _, errStat := os.Stat(p); errStat == nil { //nolint:govet
 			return p
 		}
 	}
@@ -68,7 +69,7 @@ func (m *APIKeyManager) LoadKeys() bool {
 		}
 		m.keys[key] = name
 	}
-	if err := sc.Err(); err != nil {
+	if errScan := sc.Err(); errScan != nil { //nolint:govet
 		return false
 	}
 	return true
@@ -136,7 +137,8 @@ func (m *APIKeyManager) readEntries() ([]apiKeyEntry, error) {
 		if os.IsNotExist(err) {
 			return nil, nil // 文件不存在视为空列表
 		}
-		return nil, err
+		return nil, fmt.Errorf("error: %w", err)
+
 	}
 	defer func() { _ = f.Close() }()
 
@@ -151,20 +153,21 @@ func (m *APIKeyManager) readEntries() ([]apiKeyEntry, error) {
 		if len(parts) < 2 {
 			continue
 		}
-		e := apiKeyEntry{Name: strings.TrimSpace(parts[0]), Key: strings.TrimSpace(parts[1])}
+		e := apiKeyEntry{Name: strings.TrimSpace(parts[0]), Key: strings.TrimSpace(parts[1])} //nolint:exhaustruct
 		if len(parts) >= 3 {
 			e.Description = strings.TrimSpace(parts[2])
 		}
 		out = append(out, e)
 	}
-	return out, sc.Err()
+	return out, sc.Err() //nolint:wrapcheck
 }
 
 // writeEntries 原子写回 api_keys.txt（先写 .tmp 再 rename），保留三段格式与表头。
 func (m *APIKeyManager) writeEntries(entries []apiKeyEntry) error {
 	if dir := filepath.Dir(m.keysFile); dir != "" {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
+			return fmt.Errorf("error: %w", err)
+
 		}
 	}
 	var b strings.Builder
@@ -184,9 +187,10 @@ func (m *APIKeyManager) writeEntries(entries []apiKeyEntry) error {
 	}
 	tmp := m.keysFile + ".tmp"
 	if err := os.WriteFile(tmp, []byte(b.String()), 0o600); err != nil {
-		return err
+		return fmt.Errorf("error: %w", err)
+
 	}
-	return os.Rename(tmp, m.keysFile)
+	return os.Rename(tmp, m.keysFile) //nolint:wrapcheck
 }
 
 // List 返回当前所有密钥条目（供 admin 列表展示；调用方负责脱敏，勿直接回明文 key）。
@@ -208,7 +212,7 @@ func (m *APIKeyManager) Add(name, key, description string) error {
 		}
 	}
 	kept = append(kept, apiKeyEntry{Name: name, Key: key, Description: description})
-	if err := m.writeEntries(kept); err != nil {
+	if errW := m.writeEntries(kept); errW != nil { //nolint:govet
 		return err
 	}
 	m.LoadKeys()
@@ -231,7 +235,7 @@ func (m *APIKeyManager) Delete(name string) (bool, error) {
 	if len(kept) == len(entries) {
 		return false, nil // 没删掉任何条目
 	}
-	if err := m.writeEntries(kept); err != nil {
+	if errW := m.writeEntries(kept); errW != nil { //nolint:govet
 		return false, err
 	}
 	m.LoadKeys()

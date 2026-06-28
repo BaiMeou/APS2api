@@ -29,7 +29,7 @@ type Node struct {
 	Disabled bool   `json:"disabled"`
 }
 
-type NodeHealth struct {
+type NodeHealth struct { //nolint:govet
 	SuccessCount        int     `json:"success_count"`
 	FailCount           int     `json:"fail_count"`
 	ConsecutiveFailures int     `json:"consecutive_failures"`
@@ -41,11 +41,11 @@ type NodeHealth struct {
 }
 
 var (
-	mu                 sync.Mutex
-	nodeList           []Node
-	healthMap          = make(map[string]*NodeHealth)
-	loaded             bool
-	DeleteNodeCallback func(uri string)
+	mu                 sync.Mutex                     //nolint:gochecknoglobals
+	nodeList           []Node                         //nolint:gochecknoglobals
+	healthMap          = make(map[string]*NodeHealth) //nolint:gochecknoglobals
+	loaded             bool                           //nolint:gochecknoglobals
+	DeleteNodeCallback func(uri string)               //nolint:gochecknoglobals
 )
 
 func ensureLoaded() {
@@ -61,8 +61,10 @@ func ensureLoaded() {
 	// Load nodes
 	rows, err := db.GlobalDB.Query("SELECT raw_uri, type, name, disabled FROM nodes")
 	if err == nil {
-		defer rows.Close()
-		var nodes []Node
+		defer func() {
+			_ = rows.Close()
+		}()
+		nodes := []Node{}
 		for rows.Next() {
 			var n Node
 			if err := rows.Scan(&n.RawURI, &n.Type, &n.Name, &n.Disabled); err == nil {
@@ -75,10 +77,12 @@ func ensureLoaded() {
 	// Load health
 	hRows, err := db.GlobalDB.Query("SELECT raw_uri, success_count, fail_count, consecutive_failures, last_test_ms, last_test_error, last_success_at, last_fail_at, cooldown_until FROM node_health")
 	if err == nil {
-		defer hRows.Close()
+		defer func() {
+			_ = hRows.Close()
+		}()
 		for hRows.Next() {
 			var uri string
-			h := &NodeHealth{}
+			h := &NodeHealth{} //nolint:exhaustruct
 			if err := hRows.Scan(&uri, &h.SuccessCount, &h.FailCount, &h.ConsecutiveFailures, &h.LastTestMs, &h.LastTestError, &h.LastSuccessAt, &h.LastFailAt, &h.CooldownUntil); err == nil {
 				healthMap[uri] = h
 			}
@@ -101,10 +105,7 @@ func LoadHealth() map[string]*NodeHealth {
 	return healthMap
 }
 
-func writeAtomicJSON(path string, v any) error {
-	// 废弃不用，但为了防止外部调用暂时保留个空实现或原逻辑
-	return nil
-}
+// writeAtomicJSON has been removed because it is unused
 
 func saveNodesUnsafe() {
 	if db.GlobalDB == nil {
@@ -116,17 +117,17 @@ func saveNodesUnsafe() {
 	}
 	// 为了简单起见，可以先全量删除再插入，但最好的方式是逐个插入或在添加删除时调用单个 SQL
 	// 这里保持原来 saveNodesUnsafe 的全量保存语义，执行全量同步
-	tx.Exec("DELETE FROM nodes")
+	_, _ = tx.Exec("DELETE FROM nodes")
 	stmt, _ := tx.Prepare("INSERT INTO nodes (raw_uri, type, name, disabled) VALUES (?, ?, ?, ?)")
 	for _, n := range nodeList {
 		if stmt != nil {
-			stmt.Exec(n.RawURI, n.Type, n.Name, n.Disabled)
+			_, _ = stmt.Exec(n.RawURI, n.Type, n.Name, n.Disabled)
 		}
 	}
 	if stmt != nil {
-		stmt.Close()
+		_ = stmt.Close()
 	}
-	tx.Commit()
+	_ = tx.Commit()
 }
 
 func saveHealthUnsafe() {
@@ -141,14 +142,14 @@ func saveHealthUnsafe() {
 		(raw_uri, success_count, fail_count, consecutive_failures, last_test_ms, last_test_error, last_success_at, last_fail_at, cooldown_until) 
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if stmt == nil {
-		tx.Rollback()
+		_ = tx.Rollback()
 		return
 	}
 	for uri, h := range healthMap {
-		stmt.Exec(uri, h.SuccessCount, h.FailCount, h.ConsecutiveFailures, h.LastTestMs, h.LastTestError, h.LastSuccessAt, h.LastFailAt, h.CooldownUntil)
+		_, _ = stmt.Exec(uri, h.SuccessCount, h.FailCount, h.ConsecutiveFailures, h.LastTestMs, h.LastTestError, h.LastSuccessAt, h.LastFailAt, h.CooldownUntil)
 	}
-	stmt.Close()
-	tx.Commit()
+	_ = stmt.Close()
+	_ = tx.Commit()
 }
 
 func MergeNodes(newNodes []Node) {
@@ -413,9 +414,13 @@ func parseNodeIdentity(rawURI string) (scheme, userinfo, host string, port int, 
 			b, err := base64.StdEncoding.DecodeString(padB64(body[:idx]))
 			if err == nil {
 				parts := strings.SplitN(string(b), ":", 2)
-				hp := strings.Split(body[idx+1:], ":")
-				p, _ := strconv.Atoi(hp[1])
-				return "ss", parts[0] + ":" + parts[1], hp[0], p, true
+				if len(parts) >= 2 {
+					hp := strings.Split(body[idx+1:], ":")
+					if len(hp) >= 2 {
+						p, _ := strconv.Atoi(hp[1])
+						return "ss", parts[0] + ":" + parts[1], hp[0], p, true
+					}
+				}
 			}
 		}
 		return "", "", "", 0, false
@@ -464,7 +469,7 @@ func RecordTest(uri string, ok bool, ms float64, errStr string) {
 	ensureLoaded()
 	h, exists := healthMap[uri]
 	if !exists {
-		h = &NodeHealth{}
+		h = &NodeHealth{} //nolint:exhaustruct
 		healthMap[uri] = h
 	}
 	h.LastTestMs = ms
@@ -497,7 +502,7 @@ func RecordRateLimit(uri string, cooldownSec int) {
 	ensureLoaded()
 	h, exists := healthMap[uri]
 	if !exists {
-		h = &NodeHealth{}
+		h = &NodeHealth{} //nolint:exhaustruct
 		healthMap[uri] = h
 	}
 	h.CooldownUntil = time.Now().Unix() + int64(cooldownSec)

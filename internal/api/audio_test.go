@@ -136,7 +136,7 @@ func TestTTSResolveVoice(t *testing.T) {
 // ---- coerceSpeed ----
 
 func TestCoerceSpeed(t *testing.T) {
-	cases := []struct {
+	cases := []struct { //nolint:govet
 		name string
 		in   any
 		want float64

@@ -40,8 +40,8 @@ func TestNodesLifecycle(t *testing.T) {
 
 	resetState()
 
-	n1 := Node{RawURI: "uri1", Name: "node1"}
-	n2 := Node{RawURI: "uri2", Name: "node2"}
+	n1 := Node{RawURI: "uri1", Name: "node1"} //nolint:exhaustruct
+	n2 := Node{RawURI: "uri2", Name: "node2"} //nolint:exhaustruct
 
 	MergeNodes([]Node{n1, n2})
 
@@ -64,13 +64,15 @@ func TestNodesLifecycle(t *testing.T) {
 	// Test RecordTest
 	RecordTest("uri1", true, 10.5, "")
 	health := LoadHealth()
-	if health["uri1"] == nil || health["uri1"].SuccessCount != 1 {
-		t.Errorf("Expected success count 1, got %v", health["uri1"])
+	hUri1 := health["uri1"]
+	if hUri1 == nil || hUri1.SuccessCount != 1 {
+		t.Errorf("Expected success count 1, got %v", hUri1)
 	}
 
 	RecordTest("uri1", false, 0, "timeout")
-	if health["uri1"].FailCount != 1 {
-		t.Errorf("Expected fail count 1, got %v", health["uri1"])
+	hUri1 = health["uri1"]
+	if hUri1 == nil || hUri1.FailCount != 1 {
+		t.Errorf("Expected fail count 1, got %v", hUri1)
 	}
 
 	// Test BatchUpdateNodesDisabled
@@ -109,7 +111,7 @@ func TestNodesLifecycle(t *testing.T) {
 }
 
 func TestParseNodeIdentity(t *testing.T) {
-	tests := []struct {
+	tests := []struct { //nolint:govet
 		name     string
 		uri      string
 		wantOK   bool
@@ -151,34 +153,36 @@ func TestUpdateNodeTestResult(t *testing.T) {
 	defer resetState()
 
 	// Setup: one enabled node
-	n1 := Node{RawURI: "uri1", Name: "node1"}
+	n1 := Node{RawURI: "uri1", Name: "node1"} //nolint:exhaustruct
 	MergeNodes([]Node{n1})
 
 	// Test: fail the node
 	UpdateNodeTestResult("uri1", false, 100, "timeout")
 	health := LoadHealth()
-	if health["uri1"] == nil || health["uri1"].ConsecutiveFailures != 1 {
+	h1 := health["uri1"]
+	if h1 == nil || h1.ConsecutiveFailures != 1 {
 		t.Errorf("Expected 1 consecutive failure")
 	}
 	nodes := LoadNodes()
 	if len(nodes) != 1 || nodes[0].Disabled {
 		t.Errorf("Expected node1 to NOT be disabled after failed test (cooldown replaces disable)")
 	}
-	if health["uri1"].CooldownUntil == 0 {
+	if h1 == nil || h1.CooldownUntil == 0 {
 		t.Errorf("Expected cooldown to be set after failed test")
 	}
 
 	// Test: succeed the node
 	UpdateNodeTestResult("uri1", true, 50, "")
 	health = LoadHealth()
-	if health["uri1"].SuccessCount != 1 {
+	h2 := health["uri1"]
+	if h2 == nil || h2.SuccessCount != 1 {
 		t.Errorf("Expected 1 success")
 	}
-	if health["uri1"].CooldownUntil != 0 {
+	if h2 == nil || h2.CooldownUntil != 0 {
 		t.Errorf("Expected cooldown to be cleared after success")
 	}
 	nodes = LoadNodes()
-	if nodes[0].Disabled {
+	if len(nodes) == 0 || nodes[0].Disabled {
 		t.Errorf("Expected node1 to be enabled after success")
 	}
 }
@@ -187,7 +191,7 @@ func TestEnableNode(t *testing.T) {
 	resetState()
 	defer resetState()
 
-	n1 := Node{RawURI: "uri1", Name: "node1", Disabled: true}
+	n1 := Node{RawURI: "uri1", Name: "node1", Disabled: true} //nolint:exhaustruct
 	MergeNodes([]Node{n1})
 
 	// Also set cooldown

@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bsfdsagfadg/vertex/internal/cli"
 	"github.com/bsfdsagfadg/vertex/internal/config"
 	"github.com/bsfdsagfadg/vertex/internal/jsonx"
 	"github.com/bsfdsagfadg/vertex/internal/metrics"
@@ -130,6 +131,9 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		s.oaiError(w, http.StatusBadRequest, "请求格式错误，JSON 解析失败 (invalid JSON)", "invalid_request_error")
 		return
 	}
+	if body == nil {
+		body = make(map[string]any)
+	}
 
 	// model 必填校验
 	rawModel, _ := body["model"].(string)
@@ -144,6 +148,8 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// 假流式前缀剥离（把剥离后的真名写回 body，使后续 ConvertChatRequest 用真名构建 payload）。
 	actualModel, useFake := stripFakePrefix(rawModel)
 	body["model"] = actualModel
+	// ⚡ 注入模型名称
+	cli.UpdateReqModel(vertex.RequestIDFromContext(r.Context()), actualModel)
 
 	// force_no_stream：强制非流式。
 	stream, _ := body["stream"].(bool)
@@ -316,6 +322,8 @@ func (s *Server) streamChatCompletions(ctx context.Context, w http.ResponseWrite
 	s.vc.StreamChat(ctx, model, geminiPayload, func(ch vertex.StreamChunk) bool {
 		if isFirst && ch.Err == nil {
 			log.Printf("[Server] [Stream] 请求ID=%s 首字响应耗时: %.2fs", requestID, time.Since(startTime).Seconds())
+			// ⚡ 变更为流式输出状态
+			cli.UpdateReqState(requestID, "💬 流式打字", "\033[36m", "正在输出...")
 		}
 		// 错误 chunk（重试耗尽）：发 OAI error 事件 + [DONE] 后终止。
 		if ch.Err != nil {
@@ -525,7 +533,7 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 	if !w.wroteHeader {
 		w.wroteHeader = true // 隐式 200
 	}
-	return w.ResponseWriter.Write(b)
+	return w.ResponseWriter.Write(b) //nolint:wrapcheck
 }
 
 // Flush 透传底层 Flusher（流式 SSE 关键：handler 用 w.(http.Flusher) 断言需能命中）。
@@ -561,13 +569,19 @@ func (s *Server) withMetrics(next http.Handler) http.Handler {
 		}
 		reqID := reqID24()
 		w.Header().Set("X-Request-Id", reqID)
-		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK} //nolint:exhaustruct
 		ctx := context.WithValue(r.Context(), vertex.RequestIDKey{}, reqID)
+
+		// ⚡ 开始追踪
+		cli.StartReq(reqID)
 
 		start := time.Now()
 		s.metrics.StartRequest()
 		next.ServeHTTP(sw, r.WithContext(ctx))
 		elapsed := time.Since(start)
+
+		// ⚡ 结束追踪
+		cli.FinishReq(reqID)
 
 		success := sw.status < 400
 		s.metrics.EndRequest(success, elapsed.Seconds())

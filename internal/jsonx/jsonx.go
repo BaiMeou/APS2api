@@ -12,6 +12,7 @@ package jsonx
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 )
 
 // Marshal 序列化为 JSON，不做 HTML 转义、不转义非 ASCII。
@@ -20,7 +21,8 @@ func Marshal(v any) ([]byte, error) {
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(v); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error: %w", err)
+
 	}
 	// json.Encoder.Encode 会在末尾追加一个换行符，去掉以与 json.Marshal 输出一致。
 	b := buf.Bytes()

@@ -55,7 +55,7 @@ func (s *Server) newSSEWriter(w http.ResponseWriter, contentType string) *sseWri
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
-	sw := &sseWriter{w: w}
+	sw := &sseWriter{w: w} //nolint:exhaustruct
 	if flusher != nil {
 		sw.flush = flusher.Flush
 	}
@@ -126,7 +126,7 @@ func firstChoiceContent(oai map[string]any) string {
 	if !ok {
 		return ""
 	}
-	if c, ok := msg["content"].(string); ok {
+	if c, ok2 := msg["content"].(string); ok2 { //nolint:govet
 		return c
 	}
 	return ""

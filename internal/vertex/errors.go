@@ -28,7 +28,7 @@ const (
 // Kind 用于区分语义（auth/ratelimit/invalid/...），便于 IsRetryable 判定与对外错误映射。
 // 认证错误对外返回 502 而非 401：这是我方 recaptcha/token 的临时问题，返 401 会让上游
 // 网关误判为“密钥失效”并自动禁用渠道，造成误杀；用 502 让网关当作可重试的服务端错误。
-type VertexError struct {
+type VertexError struct { //nolint:govet
 	Message          string
 	Code             int
 	Status           string
@@ -54,12 +54,12 @@ func (e *VertexError) IsRetryable() bool {
 
 // NewAuthenticationError 认证错误（recaptcha/token 过期）。code=502（见类型注释）。
 func NewAuthenticationError(msg string) *VertexError {
-	return &VertexError{Message: msg, Code: 502, Status: StatusUnauthenticated, Kind: "auth"}
+	return &VertexError{Message: msg, Code: 502, Status: StatusUnauthenticated, Kind: "auth"} //nolint:exhaustruct
 }
 
 // NewPermissionDeniedError 权限拒绝（403）。
 func NewPermissionDeniedError(msg string) *VertexError {
-	return &VertexError{Message: msg, Code: 403, Status: StatusPermissionDenied, Kind: "permission"}
+	return &VertexError{Message: msg, Code: 403, Status: StatusPermissionDenied, Kind: "permission"} //nolint:exhaustruct
 }
 
 // NewInvalidArgumentError 参数错误（400）。

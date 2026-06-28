@@ -14,7 +14,7 @@ import (
 
 // FinishReasonMap 把 Gemini finishReason 映射到 OpenAI finish_reason。
 // 未命中（含 FINISH_REASON_UNSPECIFIED）→ "stop"。
-var FinishReasonMap = map[string]string{
+var FinishReasonMap = map[string]string{ //nolint:gochecknoglobals
 	"STOP":                    "stop",
 	"MAX_TOKENS":              "length",
 	"SAFETY":                  "content_filter",

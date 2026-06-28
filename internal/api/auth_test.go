@@ -24,7 +24,7 @@ func newReq(t *testing.T, headers map[string]string, query string) *http.Request
 	if err != nil {
 		t.Fatalf("parse url: %v", err)
 	}
-	r := &http.Request{Header: http.Header{}, URL: u}
+	r := &http.Request{Header: http.Header{}, URL: u} //nolint:exhaustruct
 	for k, v := range headers {
 		r.Header.Set(k, v)
 	}
@@ -38,17 +38,17 @@ func TestExtractAPIKey(t *testing.T) {
 		query   string
 		want    string
 	}{
-		{
+		{ //nolint:exhaustruct
 			name:    "bearer header",
 			headers: map[string]string{"Authorization": "Bearer sk-abc123"},
 			want:    "sk-abc123",
 		},
-		{
+		{ //nolint:exhaustruct
 			name:    "bearer case-insensitive scheme",
 			headers: map[string]string{"Authorization": "bearer sk-low"},
 			want:    "sk-low",
 		},
-		{
+		{ //nolint:exhaustruct
 			name:    "bearer trims whitespace",
 			headers: map[string]string{"Authorization": "Bearer   sk-pad  "},
 			want:    "sk-pad",
@@ -69,7 +69,7 @@ func TestExtractAPIKey(t *testing.T) {
 			query:   "key=sk-query",
 			want:    "sk-goog",
 		},
-		{
+		{ //nolint:exhaustruct
 			name:  "query key fallback",
 			query: "key=sk-query",
 			want:  "sk-query",
@@ -80,7 +80,7 @@ func TestExtractAPIKey(t *testing.T) {
 			query:   "key=sk-query",
 			want:    "sk-query",
 		},
-		{
+		{ //nolint:exhaustruct
 			name: "nothing returns empty",
 			want: "",
 		},
@@ -209,7 +209,7 @@ func TestAPIKeyManagerAddListDelete(t *testing.T) {
 	}
 
 	// 同名覆盖：alice 换新 key，旧 key 失效。
-	if err := m.Add("alice", "sk-alice2", "Alice2"); err != nil {
+	if errAdd := m.Add("alice", "sk-alice2", "Alice2"); errAdd != nil { //nolint:govet
 		t.Fatalf("Add 覆盖 alice: %v", err)
 	}
 	if m.ValidateKey("sk-alice") {
@@ -218,7 +218,7 @@ func TestAPIKeyManagerAddListDelete(t *testing.T) {
 	if !m.ValidateKey("sk-alice2") {
 		t.Fatalf("覆盖后新 key 应有效")
 	}
-	if entries, _ := m.List(); len(entries) != 2 {
+	if entries2, _ := m.List(); len(entries2) != 2 { //nolint:govet
 		t.Fatalf("覆盖不应新增条目，应仍为 2，got %d", len(entries))
 	}
 
@@ -232,7 +232,7 @@ func TestAPIKeyManagerAddListDelete(t *testing.T) {
 	}
 
 	// 删除不存在的 → false、无错。
-	if ok, err := m.Delete("ghost"); err != nil || ok {
+	if ok2, errDel := m.Delete("ghost"); errDel != nil || ok2 { //nolint:govet
 		t.Fatalf("删除不存在的应返回 false 无错，got ok=%v err=%v", ok, err)
 	}
 

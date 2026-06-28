@@ -95,7 +95,7 @@ func TestFirstNonEmptyStr(t *testing.T) {
 // ---- hasImageSize ----
 
 func TestHasImageSize(t *testing.T) {
-	cases := []struct {
+	cases := []struct { //nolint:govet
 		name    string
 		payload map[string]any
 		want    bool

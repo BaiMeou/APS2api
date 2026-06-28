@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bsfdsagfadg/vertex/internal/cli"
 	"github.com/bsfdsagfadg/vertex/internal/config"
 	"github.com/bsfdsagfadg/vertex/internal/nodes"
 )
@@ -89,14 +90,18 @@ func RunParallel[T any](ctx context.Context, cfg config.AppConfig, run func(cont
 		return run(ctx, proxy)
 	}
 
-	log.Printf("[Vertex] [RunParallel] 开启对冲延迟竞速, %d 个节点参与", len(cands))
-	for _, c := range cands {
-		log.Printf("[Vertex] [RunParallel] 参与节点: %s", c.Name)
+	if cfg.DebugMode {
+		log.Printf("[Vertex] [RunParallel] 开启对冲延迟竞速, %d 个节点参与", len(cands))
+		for _, c := range cands {
+			log.Printf("[Vertex] [RunParallel] 参与节点: %s", c.Name)
+		}
 	}
+
+	cli.UpdateReqState(RequestIDFromContext(ctx), "⚡ 并发竞速", "\033[33m", fmt.Sprintf("并行节点: %d", len(cands)))
 
 	ctxRace, cancel := context.WithCancel(ctx)
 
-	type result struct {
+	type result struct { //nolint:govet
 		uri string
 		val T
 		err error
@@ -143,11 +148,13 @@ func RunParallel[T any](ctx context.Context, cfg config.AppConfig, run func(cont
 		select {
 		case <-ctx.Done():
 			cancel()
-			return zero, ctx.Err()
+			return zero, ctx.Err() //nolint:wrapcheck
 
 		case <-timer.C:
 			if nextIdx < len(cands) {
-				log.Printf("[Racing] 对冲延迟唤醒，启动备份节点: %s", cands[nextIdx].Name)
+				if cfg.DebugMode {
+					log.Printf("[Racing] 对冲延迟唤醒，启动备份节点: %s", cands[nextIdx].Name)
+				}
 				launchNode(cands[nextIdx].RawURI)
 				nextIdx++
 				timer.Reset(delay)
@@ -159,9 +166,13 @@ func RunParallel[T any](ctx context.Context, cfg config.AppConfig, run func(cont
 
 			if res.err == nil {
 				log.Printf("[Racing] 竞速胜出节点: %s", name)
+				cli.UpdateReqWinner(RequestIDFromContext(ctx), name)
+				cli.UpdateReqState(RequestIDFromContext(ctx), "🟢 数据传输", "\033[32m", "已建立连接")
 				nodes.RecordTest(res.uri, true, 50, "")
 				stickyPool.Add(res.uri)
-				log.Printf("[Racing] 胜出节点 %s 加入粘性池", name)
+				if cfg.DebugMode {
+					log.Printf("[Racing] 胜出节点 %s 加入粘性池", name)
+				}
 
 				go func() {
 					collectCtx, collectCancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -185,35 +196,47 @@ func RunParallel[T any](ctx context.Context, cfg config.AppConfig, run func(cont
 			}
 
 			if res.err != context.Canceled && !errors.Is(res.err, context.Canceled) {
-				log.Printf("[Racing] 节点 %s 失败: %s", name, res.err.Error())
+				if cfg.DebugMode {
+					log.Printf("[Racing] 节点 %s 失败: %s", name, res.err.Error())
+				}
 
 				ve := asVertexError(res.err)
 				if ve != nil && ve.Kind == "ratelimit" {
-					log.Printf("[Racing] 节点 %s 触发 429 API 限制，进入 30 秒短时歇息", name)
+					if cfg.DebugMode {
+						log.Printf("[Racing] 节点 %s 触发 429 API 限制，进入 30 秒短时歇息", name)
+					}
 					nodes.RecordRateLimit(res.uri, 30)
 				} else {
 					nodes.RecordTest(res.uri, false, 0, res.err.Error())
 				}
 
 				if stickyPool.IsSticky(res.uri) {
-					log.Printf("[Racing] 节点 %s 从粘性池逐出", name)
+					if cfg.DebugMode {
+						log.Printf("[Racing] 节点 %s 从粘性池逐出", name)
+					}
 					stickyPool.Evict(res.uri)
 				}
 
 				if ve != nil && !ve.IsRetryable() {
-					log.Printf("[Racing] 节点 %s 触发不可重试的硬性错误，终止竞速", name)
+					if cfg.DebugMode {
+						log.Printf("[Racing] 节点 %s 触发不可重试的硬性错误，终止竞速", name)
+					}
 					cancel()
 					return zero, res.err
 				}
 
 				if nextIdx < len(cands) {
-					log.Printf("[Racing] 竞速失败触发极速对冲接力...")
+					if cfg.DebugMode {
+						log.Printf("[Racing] 竞速失败触发极速对冲接力...")
+					}
 					launchNode(cands[nextIdx].RawURI)
 					nextIdx++
 					safeResetTimer(timer, delay)
 				}
 			} else {
-				log.Printf("[Racing] 节点 %s 拨号取消", name)
+				if cfg.DebugMode {
+					log.Printf("[Racing] 节点 %s 拨号取消", name)
+				}
 			}
 
 			if atomic.LoadInt32(&active) == 0 && nextIdx >= len(cands) {
@@ -312,15 +335,19 @@ func StreamParallel(ctx context.Context, cfg config.AppConfig, op func(ctx conte
 		return
 	}
 
-	log.Printf("[Vertex] [StreamParallel] 开启对冲延迟流式竞速, %d 个节点参与", len(cands))
-	for _, c := range cands {
-		log.Printf("[Vertex] [StreamParallel] 参与节点: %s", c.Name)
+	if cfg.DebugMode {
+		log.Printf("[Vertex] [StreamParallel] 开启对冲延迟流式竞速, %d 个节点参与", len(cands))
+		for _, c := range cands {
+			log.Printf("[Vertex] [StreamParallel] 参与节点: %s", c.Name)
+		}
 	}
+
+	cli.UpdateReqState(RequestIDFromContext(ctx), "⚡ 并发竞速", "\033[33m", fmt.Sprintf("并行节点: %d", len(cands)))
 
 	ctxRace, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	type res struct {
+	type res struct { //nolint:govet
 		uri   string
 		ch    <-chan StreamChunk
 		first StreamChunk
@@ -389,36 +416,50 @@ loop:
 
 			if r.err == nil {
 				winner = &r
-				log.Printf("[Vertex] [StreamParallel] 节点胜出: %s", name)
+				log.Printf("[Racing] 竞速胜出节点: %s", name)
+				cli.UpdateReqWinner(RequestIDFromContext(ctx), name)
+				cli.UpdateReqState(RequestIDFromContext(ctx), "🟢 数据传输", "\033[32m", "已建立连接")
 				nodes.RecordTest(r.uri, true, 50, "")
 				stickyPool.Add(r.uri)
-				log.Printf("[Vertex] [StreamParallel] 胜出节点 %s 加入粘性池", name)
+				if cfg.DebugMode {
+					log.Printf("[Vertex] [StreamParallel] 胜出节点 %s 加入粘性池", name)
+				}
 				break loop
 			} else if ctx.Err() == nil && r.err != context.Canceled && !errors.Is(r.err, context.Canceled) {
-				log.Printf("[Racing] 节点 %s 失败: %s", name, r.err.Error())
+				if cfg.DebugMode {
+					log.Printf("[Racing] 节点 %s 失败: %s", name, r.err.Error())
+				}
 
 				ve := asVertexError(r.err)
 				if ve != nil && ve.Kind == "ratelimit" {
-					log.Printf("[Racing] 节点 %s 触发 429 API 限制，进入 30 秒短时歇息", name)
+					if cfg.DebugMode {
+						log.Printf("[Racing] 节点 %s 触发 429 API 限制，进入 30 秒短时歇息", name)
+					}
 					nodes.RecordRateLimit(r.uri, 30)
 				} else {
 					nodes.RecordTest(r.uri, false, 0, r.err.Error())
 				}
 
 				if stickyPool.IsSticky(r.uri) {
-					log.Printf("[Racing] 节点 %s 从粘性池逐出", name)
+					if cfg.DebugMode {
+						log.Printf("[Racing] 节点 %s 从粘性池逐出", name)
+					}
 					stickyPool.Evict(r.uri)
 				}
 
 				if ve != nil && !ve.IsRetryable() {
-					log.Printf("[Racing] 节点 %s 触发不可重试的硬性错误，终止竞速", name)
+					if cfg.DebugMode {
+						log.Printf("[Racing] 节点 %s 触发不可重试的硬性错误，终止竞速", name)
+					}
 					cancel()
 					yield(StreamChunk{Err: ve})
 					return
 				}
 
 				if candIdx < len(cands) {
-					log.Printf("[Racing] 竞速失败触发极速对冲接力...")
+					if cfg.DebugMode {
+						log.Printf("[Racing] 竞速失败触发极速对冲接力...")
+					}
 					launchNode(cands[candIdx].RawURI)
 					candIdx++
 					safeResetTimer(timer, delay)
@@ -431,7 +472,9 @@ loop:
 
 		case <-timer.C:
 			if candIdx < len(cands) {
-				log.Printf("[Racing] 对冲延迟唤醒，启动备份节点: %s", cands[candIdx].Name)
+				if cfg.DebugMode {
+					log.Printf("[Racing] 对冲延迟唤醒，启动备份节点: %s", cands[candIdx].Name)
+				}
 				launchNode(cands[candIdx].RawURI)
 				candIdx++
 				timer.Reset(delay)

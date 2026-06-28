@@ -11,12 +11,15 @@ package spool
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 )
 
 var (
-	maxMemSize   int64 // 0 = unlimited（永不落盘）
+	//nolint:gochecknoglobals // Internal spool state
+	maxMemSize int64 // 0 = unlimited（永不落盘）
+	//nolint:gochecknoglobals // Internal spool state
 	spilledBytes int64
 )
 
@@ -31,7 +34,7 @@ func SpilledBytes() int64 { return spilledBytes }
 // Buffer 是"先写后读"字节缓冲，支持自动磁盘溢出。
 //
 // 非并发安全——约定单个逻辑请求内串行 Write→Reader→Close 使用。
-type Buffer struct {
+type Buffer struct { //nolint:govet
 	mem          []byte
 	file         *os.File
 	filePath     string
@@ -40,7 +43,7 @@ type Buffer struct {
 }
 
 // New 构造一个空 Buffer。
-func New() *Buffer { return &Buffer{} }
+func New() *Buffer { return &Buffer{} } //nolint:exhaustruct
 
 // Write 实现 io.Writer：优先写入内存，超出 maxMemSize 后溢出到临时文件。
 func (b *Buffer) Write(p []byte) (int, error) {
@@ -50,12 +53,14 @@ func (b *Buffer) Write(p []byte) (int, error) {
 			b.totalWritten += int64(n)
 		}
 		return n, err
+
 	}
 
 	if maxMemSize > 0 && int64(len(b.mem)+len(p)) > maxMemSize {
 		tmp, err := os.CreateTemp("", "spool-*")
 		if err != nil {
-			return 0, err
+			return 0, fmt.Errorf("error: %w", err)
+
 		}
 		b.file = tmp
 		b.filePath = tmp.Name()
@@ -63,7 +68,8 @@ func (b *Buffer) Write(p []byte) (int, error) {
 
 		if len(b.mem) > 0 {
 			if _, err := b.file.Write(b.mem); err != nil {
-				return 0, err
+				return 0, fmt.Errorf("error: %w", err)
+
 			}
 		}
 		n, err := b.file.Write(p)
@@ -73,6 +79,7 @@ func (b *Buffer) Write(p []byte) (int, error) {
 		b.mem = nil
 		spilledBytes += b.totalWritten
 		return n, err
+
 	}
 
 	b.mem = append(b.mem, p...)
@@ -93,7 +100,8 @@ func (b *Buffer) Len() int64 {
 func (b *Buffer) Reader() (io.Reader, error) {
 	if b.spilled {
 		if _, err := b.file.Seek(0, 0); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("error: %w", err)
+
 		}
 		return b.file, nil
 	}
@@ -141,7 +149,8 @@ func EncodeJSON(v any) (*Buffer, error) {
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(v); err != nil {
 		_ = b.Close()
-		return nil, err
+		return nil, fmt.Errorf("error: %w", err)
+
 	}
 	b.trimTrailingNewline()
 	return b, nil

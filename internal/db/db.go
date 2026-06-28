@@ -7,6 +7,7 @@ package db
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -16,8 +17,8 @@ import (
 )
 
 var (
-	GlobalDB *sql.DB
-	mu       sync.Mutex
+	GlobalDB *sql.DB    //nolint:gochecknoglobals
+	mu       sync.Mutex //nolint:gochecknoglobals
 )
 
 // InitDB initializes the SQLite database at the given path.
@@ -32,7 +33,8 @@ func InitDB(dbPath string) error {
 
 	dir := filepath.Dir(dbPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return err
+		return fmt.Errorf("error: %w", err)
+
 	}
 
 	isNewDB := false
@@ -44,12 +46,14 @@ func InitDB(dbPath string) error {
 	dsn := dbPath + "?_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
-		return err
+		return fmt.Errorf("error: %w", err)
+
 	}
 
 	// Ensure DB is reachable
-	if err := db.Ping(); err != nil {
-		return err
+	if errPing := db.Ping(); errPing != nil { //nolint:govet
+		return fmt.Errorf("error: %w", errPing)
+
 	}
 
 	GlobalDB = db
@@ -92,7 +96,11 @@ func createTables(db *sql.DB) error {
 	);
 	`
 	_, err := db.Exec(schema)
-	return err
+	if err != nil {
+		return fmt.Errorf("error: %w", err)
+	}
+	return nil
+
 }
 
 func migrateFromFiles(db *sql.DB, configDir string) {
@@ -107,14 +115,14 @@ func migrateFromFiles(db *sql.DB, configDir string) {
 				Disabled bool   `json:"disabled"`
 			} `json:"nodes"`
 		}
-		if err := json.Unmarshal(data, &d); err == nil {
+		if errUnm := json.Unmarshal(data, &d); errUnm == nil { //nolint:govet
 			tx, _ := db.Begin()
 			stmt, _ := tx.Prepare("INSERT OR IGNORE INTO nodes (raw_uri, type, name, disabled) VALUES (?, ?, ?, ?)")
 			for _, n := range d.Nodes {
-				stmt.Exec(n.RawURI, n.Type, n.Name, n.Disabled)
+				_, _ = stmt.Exec(n.RawURI, n.Type, n.Name, n.Disabled)
 			}
-			stmt.Close()
-			tx.Commit()
+			_ = stmt.Close()
+			_ = tx.Commit()
 			log.Printf("[DB] Migrated %d nodes from nodes.json", len(d.Nodes))
 		}
 	}
@@ -122,7 +130,7 @@ func migrateFromFiles(db *sql.DB, configDir string) {
 	// Migrate node_health
 	healthPath := filepath.Join(configDir, "node_health.json")
 	if data, err := os.ReadFile(healthPath); err == nil {
-		var healthMap map[string]struct {
+		var healthMap map[string]struct { //nolint:govet
 			SuccessCount        int     `json:"success_count"`
 			FailCount           int     `json:"fail_count"`
 			ConsecutiveFailures int     `json:"consecutive_failures"`
@@ -132,20 +140,20 @@ func migrateFromFiles(db *sql.DB, configDir string) {
 			LastFailAt          int64   `json:"last_fail_at"`
 			CooldownUntil       int64   `json:"cooldown_until"`
 		}
-		if err := json.Unmarshal(data, &healthMap); err == nil {
+		if errUnm := json.Unmarshal(data, &healthMap); errUnm == nil { //nolint:govet
 			tx, _ := db.Begin()
 			stmt, _ := tx.Prepare(`INSERT OR REPLACE INTO node_health 
 				(raw_uri, success_count, fail_count, consecutive_failures, last_test_ms, last_test_error, last_success_at, last_fail_at, cooldown_until) 
 				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 			migrated := 0
 			for uri, h := range healthMap {
-				_, err := stmt.Exec(uri, h.SuccessCount, h.FailCount, h.ConsecutiveFailures, h.LastTestMs, h.LastTestError, h.LastSuccessAt, h.LastFailAt, h.CooldownUntil)
+				_, err := stmt.Exec(uri, h.SuccessCount, h.FailCount, h.ConsecutiveFailures, h.LastTestMs, h.LastTestError, h.LastSuccessAt, h.LastFailAt, h.CooldownUntil) //nolint:govet
 				if err == nil {
 					migrated++
 				}
 			}
-			stmt.Close()
-			tx.Commit()
+			_ = stmt.Close()
+			_ = tx.Commit()
 			log.Printf("[DB] Migrated %d node health records from node_health.json", migrated)
 		}
 	}
@@ -156,7 +164,7 @@ func CloseDB() {
 	mu.Lock()
 	defer mu.Unlock()
 	if GlobalDB != nil {
-		GlobalDB.Close()
+		_ = GlobalDB.Close()
 		GlobalDB = nil
 	}
 }

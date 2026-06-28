@@ -47,7 +47,7 @@ func NewFcNameTracker(names []string) *FcNameTracker {
 			filtered = append(filtered, n)
 		}
 	}
-	return &FcNameTracker{names: filtered}
+	return &FcNameTracker{names: filtered} //nolint:exhaustruct
 }
 
 // NextName 返回下一个未用的名称，用尽返回 ("", false)。

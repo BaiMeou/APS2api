@@ -29,9 +29,9 @@ const (
 	anonAPIKey       = "AIzaSyCI-zsRP85UVOi0DjtiCwWBwQ1djDy741g"
 )
 
-var batchGraphqlURL = anonBaseURL + batchGraphqlPath + "?key=" + anonAPIKey + "&prettyPrint=false"
+var batchGraphqlURL = anonBaseURL + batchGraphqlPath + "?key=" + anonAPIKey + "&prettyPrint=false" //nolint:gochecknoglobals
 
-var defaultSafetySettings = []any{
+var defaultSafetySettings = []any{ //nolint:gochecknoglobals
 	map[string]any{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
 	map[string]any{"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
 	map[string]any{"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
@@ -95,7 +95,7 @@ func (c *VertexAIClient) CompleteChatN(ctx context.Context, model string, gemini
 			defer wg.Done()
 			defer func() {
 				if rec := recover(); rec != nil {
-					results[idx] = res{err: NewInternalError(fmt.Sprintf("candidate panic: %v", rec))}
+					results[idx] = res{err: NewInternalError(fmt.Sprintf("candidate panic: %v", rec))} //nolint:exhaustruct
 				}
 			}()
 			r, err := c.CompleteChat(ctx, model, geminiPayload)
@@ -288,7 +288,8 @@ func (c *VertexAIClient) executeCompleteRequest(ctx context.Context, sess *trans
 	status, raw, err := sess.DoAndRead(ctx, "POST", batchGraphqlURL, header, reader)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
-			return nil, err
+			return nil, fmt.Errorf("error: %w", err)
+
 		}
 		return nil, NewInternalError("upstream request: " + err.Error())
 	}
@@ -452,7 +453,7 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	defer t.Stop()
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return ctx.Err() //nolint:wrapcheck
 	case <-t.C:
 		return nil
 	}

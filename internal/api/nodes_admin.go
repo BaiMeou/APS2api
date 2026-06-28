@@ -40,11 +40,11 @@ func (s *Server) adminGetNodes(w http.ResponseWriter, _ *http.Request) {
 	}
 	sp := nodes.GetStickyPool()
 	s.writeJSON(w, http.StatusOK, map[string]any{
-		"nodes":                list,
-		"health":               nodes.LoadHealth(),
-		"total":                len(list),
-		"enabled_count":        enabledCount,
-		"disabled_count":       disabledCount,
+		"nodes":                 list,
+		"health":                nodes.LoadHealth(),
+		"total":                 len(list),
+		"enabled_count":         enabledCount,
+		"disabled_count":        disabledCount,
 		"sticky_pool_available": sp.AvailableCount(),
 		"sticky_pool_in_use":    sp.StaleCount(),
 		"sticky_pool_enabled":   config.Load().StickyPoolEnabled,
@@ -393,56 +393,10 @@ func decodeSubBase64(s string) ([]byte, error) {
 	if pad := len(t) % 4; pad != 0 {
 		t += strings.Repeat("=", 4-pad)
 	}
-	return base64.StdEncoding.DecodeString(t)
+	return base64.StdEncoding.DecodeString(t) //nolint:wrapcheck
 }
 
-// parseClashYamlToURIs 解析极简 yaml 格式，提取 proxies 列表并转换为 URI 节点
-func parseClashYamlToURIs(yamlText string) []string {
-	var uris []string
-
-	// 我们按行流式扫描 proxies 字段
-	lines := strings.Split(yamlText, "\n")
-	inProxies := false
-
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			continue
-		}
-
-		// 判断 proxies 的开始和结束
-		if strings.HasPrefix(trimmed, "proxies:") {
-			inProxies = true
-			continue
-		}
-
-		// 如果遇到了其他顶层字段（非缩进），则 proxies 块结束
-		if inProxies && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") && strings.Contains(trimmed, ":") {
-			inProxies = false
-		}
-
-		if !inProxies {
-			continue
-		}
-
-		// 支持单行简写形式：
-		// - {name: "xxx", type: ss, server: "xxx", port: 123, cipher: "aes-256-gcm", password: "xxx"}
-		// - {name: xxx, server: xxx, port: xxx, type: vmess, uuid: xxx, ...}
-		if strings.HasPrefix(trimmed, "- {") && strings.HasSuffix(trimmed, "}") {
-			cleaned := trimmed[3 : len(trimmed)-1]
-			// 我们写一个健壮的 key-value 解析器
-			attrs := parseInlineYamlAttrs(cleaned)
-			if uri := clashProxyToURI(attrs); uri != "" {
-				uris = append(uris, uri)
-			}
-			continue
-		}
-
-		// 支持标准缩进列表形式（暂且不用处理复杂的 yaml 嵌套，dev 内全部是单行简写形式，
-		// 但为了健壮性，我们可以只处理 {} 单行形式）
-	}
-	return uris
-}
+// parseClashYamlToURIs has been removed because it is unused
 
 func parseInlineYamlAttrs(s string) map[string]string {
 	attrs := make(map[string]string)
@@ -569,7 +523,7 @@ func parseInlineYamlObject(s string) map[string]string {
 }
 
 func buildProxyURI(scheme, credential, server, port, name string, query url.Values) string {
-	u := &url.URL{
+	u := &url.URL{ //nolint:exhaustruct
 		Scheme:   scheme,
 		User:     url.User(credential),
 		Host:     net.JoinHostPort(server, port),
@@ -1323,11 +1277,11 @@ func looksLikeClashProxyMap(obj map[string]any) bool {
 
 func buildImportedNodeFromProxyMap(proxy map[string]any) (nodes.Node, bool) {
 	if len(proxy) == 0 {
-		return nodes.Node{}, false
+		return nodes.Node{}, false //nolint:exhaustruct
 	}
 	raw := buildClashURI(proxy)
 	if raw == "" {
-		return nodes.Node{}, false
+		return nodes.Node{}, false //nolint:exhaustruct
 	}
 	return parseImportedNodeLine(raw)
 }
@@ -1345,7 +1299,7 @@ func buildImportedNodeFromMap(obj map[string]any) (nodes.Node, bool) {
 	if looksLikeClashProxyMap(obj) {
 		return buildClashNode(obj)
 	}
-	return nodes.Node{}, false
+	return nodes.Node{}, false //nolint:exhaustruct
 }
 
 func buildImportedNodesFromSlice(items []any) []nodes.Node {
@@ -1355,7 +1309,7 @@ func buildImportedNodesFromSlice(items []any) []nodes.Node {
 		if len(obj) == 0 {
 			continue
 		}
-		if node, ok := buildImportedNodeFromMap(obj); ok {
+		if node, ok2 := buildImportedNodeFromMap(obj); ok2 {
 			imported = append(imported, node)
 		}
 	}
@@ -1384,7 +1338,7 @@ func parseJSONImportedNodes(text string) []nodes.Node {
 		if servers := buildImportedNodesFromSlice(sliceValue(obj["servers"])); len(servers) > 0 {
 			return servers
 		}
-		if node, ok := buildImportedNodeFromMap(obj); ok {
+		if node, ok2 := buildImportedNodeFromMap(obj); ok2 { //nolint:govet
 			return []nodes.Node{node}
 		}
 		return nil
@@ -1419,7 +1373,7 @@ func parseV2RayNNodeLine(line string) (nodes.Node, bool) {
 	}
 
 	var obj map[string]any
-	if err := json.Unmarshal(decoded, &obj); err != nil {
+	if errUnm := json.Unmarshal(decoded, &obj); errUnm != nil { //nolint:govet
 		return nodes.Node{}, false
 	}
 
@@ -1713,7 +1667,7 @@ func parseImportedNodeLine(line string) (nodes.Node, bool) {
 	if nodeName == "" {
 		nodeName = raw[:min(len(raw), 40)]
 	}
-	return nodes.Node{Type: nodeType, Name: nodeName, RawURI: raw}, true
+	return nodes.Node{Type: nodeType, Name: nodeName, RawURI: raw}, true //nolint:exhaustruct
 }
 
 func extractImportedNodeName(raw string, out map[string]any) string {
@@ -1735,7 +1689,7 @@ func extractImportedNodeName(raw string, out map[string]any) string {
 		}
 		if b, err := base64.StdEncoding.DecodeString(b64Str); err == nil {
 			var d map[string]any
-			if err := json.Unmarshal(b, &d); err == nil {
+			if errUnm := json.Unmarshal(b, &d); errUnm == nil { //nolint:govet
 				if ps, ok := d["ps"].(string); ok {
 					return strings.TrimSpace(ps)
 				}
@@ -1793,7 +1747,7 @@ func parseStructuredClashYAMLNodes(yamlText string) []nodes.Node {
 	var proxy map[string]any
 	if err := yaml.Unmarshal([]byte(yamlText), &proxy); err == nil && len(proxy) > 0 {
 		if normalized, ok := normalizeYAMLValue(proxy).(map[string]any); ok && looksLikeClashProxyMap(normalized) {
-			if node, ok := buildClashNode(normalized); ok {
+			if node, ok2 := buildClashNode(normalized); ok2 { //nolint:govet
 				return []nodes.Node{node}
 			}
 		}
@@ -1940,20 +1894,26 @@ func fetchSubscriptionDataDirect(ctx context.Context, rawURL string) ([]byte, er
 	client := netx.NewHTTPClient(30 * time.Second)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error: %w", err)
+
 	}
 	req.Header.Set("User-Agent", subscriptionFetchUserAgent)
 	req.Header.Set("Accept", "*/*")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error: %w", err)
+
+	}
+	if resp == nil {
+		return nil, fmt.Errorf("nil response received")
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error: %w", err)
+
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("status code %d", resp.StatusCode)
@@ -1968,7 +1928,8 @@ func fetchSubscriptionDataViaProxy(ctx context.Context, netClient *transport.Net
 
 	sess, err := netClient.CreateSession(30, proxyURI, "admin-fetch-sub")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error: %w", err)
+
 	}
 	defer sess.Close()
 
@@ -1978,7 +1939,8 @@ func fetchSubscriptionDataViaProxy(ctx context.Context, netClient *transport.Net
 	}
 	statusCode, data, err := sess.DoAndRead(ctx, http.MethodGet, rawURL, header, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error: %w", err)
+
 	}
 	if statusCode != http.StatusOK {
 		return nil, fmt.Errorf("status code %d", statusCode)

@@ -73,7 +73,11 @@ func asMapSlice(v any) []map[string]any {
 
 // trimLowerSuffix 是给响应/猜测 mime 用的小工具，去掉 query/fragment 后转小写。
 func trimLowerSuffix(s string) string {
-	s = strings.SplitN(s, "?", 2)[0]
-	s = strings.SplitN(s, "#", 2)[0]
+	if parts := strings.SplitN(s, "?", 2); len(parts) > 0 {
+		s = parts[0]
+	}
+	if parts := strings.SplitN(s, "#", 2); len(parts) > 0 {
+		s = parts[0]
+	}
 	return strings.ToLower(s)
 }

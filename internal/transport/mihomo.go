@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/bsfdsagfadg/vertex/internal/config"
 	"github.com/bsfdsagfadg/vertex/internal/nodes"
 	"github.com/metacubex/mihomo/adapter"
 	"github.com/metacubex/mihomo/constant"
@@ -27,7 +28,9 @@ type proxyInfo struct {
 }
 
 var (
-	proxyMap   = make(map[string]*proxyInfo)
+	//nolint:gochecknoglobals // Internal proxy connection cache
+	proxyMap = make(map[string]*proxyInfo)
+	//nolint:gochecknoglobals // Internal proxy connection cache
 	proxyMutex sync.RWMutex
 )
 
@@ -60,7 +63,7 @@ func getOrStartProxyDialer(uri string, reqID string) (func(ctx context.Context, 
 			_ = closer.Close()
 		}
 	}
-	proxyMap[uri] = &proxyInfo{proxy: proxy, lastUsedAt: time.Now()}
+	proxyMap[uri] = &proxyInfo{proxy: proxy, lastUsedAt: time.Now()} //nolint:exhaustruct
 	proxyMutex.Unlock()
 
 	return makeDialer(proxy), nil
@@ -70,12 +73,13 @@ func makeDialer(p constant.Proxy) func(ctx context.Context, network, addr string
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(addr)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("error: %w", err)
+
 		}
 
 		portInt, _ := strconv.Atoi(port)
 
-		metadata := &constant.Metadata{
+		metadata := &constant.Metadata{ //nolint:exhaustruct
 			NetWork: constant.TCP,
 			Type:    constant.HTTP,
 			Host:    host,
@@ -86,10 +90,14 @@ func makeDialer(p constant.Proxy) func(ctx context.Context, network, addr string
 		if err != nil {
 			// 若是因为上下文取消导致拨号中止，属于并发竞速中的正常现象，直接退出，不打印误报
 			if ctx.Err() != nil || errors.Is(err, context.Canceled) {
-				return nil, err
+				return nil, fmt.Errorf("error: %w", err)
+
 			}
-			log.Printf("[Transport] Mihomo 拨号失败 [%s:%d]: %v", host, portInt, err)
-			return nil, err
+			if config.Load().DebugMode {
+				log.Printf("[Transport] Mihomo 拨号失败 [%s:%d]: %v", host, portInt, err)
+			}
+			return nil, fmt.Errorf("error: %w", err)
+
 		}
 
 		return conn, nil

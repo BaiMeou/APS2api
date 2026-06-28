@@ -2,20 +2,20 @@ package nodes
 
 import "sync"
 
-type StickyNodePool struct {
+type StickyNodePool struct { //nolint:govet
 	mu    sync.Mutex
 	pool  map[string]bool
 	inUse map[string]bool
 }
 
-var globalStickyPool = NewStickyNodePool()
+var globalStickyPool = NewStickyNodePool() //nolint:gochecknoglobals
 
 func GetStickyPool() *StickyNodePool {
 	return globalStickyPool
 }
 
 func NewStickyNodePool() *StickyNodePool {
-	return &StickyNodePool{
+	return &StickyNodePool{ //nolint:exhaustruct
 		pool:  make(map[string]bool),
 		inUse: make(map[string]bool),
 	}

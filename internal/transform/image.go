@@ -18,11 +18,15 @@ import (
 const DefaultImageModel = "gemini-3.1-flash-image"
 
 // openaiImageModelAliases 是会被回退到 DefaultImageModel 的 OpenAI 图模型名。
+//
+//nolint:gochecknoglobals // Read-only alias map
 var openaiImageModelAliases = map[string]bool{
 	"gpt-image-1": true, "dall-e-2": true, "dall-e-3": true,
 }
 
 // imageAspectRatioSupported 是 Gemini imageConfig.aspectRatio 接受的比例集合。
+//
+//nolint:gochecknoglobals // Read-only set
 var imageAspectRatioSupported = map[string]bool{
 	"1:1": true, "3:4": true, "4:3": true, "9:16": true, "16:9": true, "2:3": true, "3:2": true,
 }

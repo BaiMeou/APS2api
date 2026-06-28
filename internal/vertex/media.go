@@ -183,5 +183,5 @@ func decodeBase64Loose(s string) ([]byte, error) {
 	if pad := len(t) % 4; pad != 0 {
 		t += strings.Repeat("=", 4-pad)
 	}
-	return base64.StdEncoding.DecodeString(t)
+	return base64.StdEncoding.DecodeString(t) //nolint:wrapcheck
 }

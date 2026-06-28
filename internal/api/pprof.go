@@ -7,14 +7,24 @@ package api
 import "net/http/pprof"
 
 var (
-	pprofIndex        = pprof.Index
-	pprintCmdline     = pprof.Cmdline
-	pprofProfile      = pprof.Profile
-	pprofSymbol       = pprof.Symbol
-	pprofTrace        = pprof.Trace
-	pprofGoroutine    = pprof.Handler("goroutine").ServeHTTP
-	pprofHeap         = pprof.Handler("heap").ServeHTTP
+	//nolint:gochecknoglobals // Function references for routing
+	pprofIndex = pprof.Index
+	//nolint:gochecknoglobals // Function references for routing
+	pprintCmdline = pprof.Cmdline
+	//nolint:gochecknoglobals // Function references for routing
+	pprofProfile = pprof.Profile
+	//nolint:gochecknoglobals // Function references for routing
+	pprofSymbol = pprof.Symbol
+	//nolint:gochecknoglobals // Function references for routing
+	pprofTrace = pprof.Trace
+	//nolint:gochecknoglobals // Function references for routing
+	pprofGoroutine = pprof.Handler("goroutine").ServeHTTP
+	//nolint:gochecknoglobals // Function references for routing
+	pprofHeap = pprof.Handler("heap").ServeHTTP
+	//nolint:gochecknoglobals // Function references for routing
 	pprofThreadcreate = pprof.Handler("threadcreate").ServeHTTP
-	pprofBlock        = pprof.Handler("block").ServeHTTP
-	pprofMutex        = pprof.Handler("mutex").ServeHTTP
+	//nolint:gochecknoglobals // Function references for routing
+	pprofBlock = pprof.Handler("block").ServeHTTP
+	//nolint:gochecknoglobals // Function references for routing
+	pprofMutex = pprof.Handler("mutex").ServeHTTP
 )

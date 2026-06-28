@@ -6,6 +6,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -18,7 +19,7 @@ const (
 	defaultCountTokensQuerySig = "2/mENOSldfC+HZM+tGhVuJLrl8M6gEyK3HRjUKuA5AM58="
 )
 
-type AppConfig struct {
+type AppConfig struct { //nolint:govet
 	PortAPI                   int               `json:"port_api"`
 	MaxRetries                int               `json:"max_retries"`
 	AdminPassword             string            `json:"admin_password"`
@@ -55,7 +56,7 @@ type AppConfig struct {
 }
 
 func DefaultConfig() AppConfig {
-	return AppConfig{
+	return AppConfig{ //nolint:exhaustruct
 		PortAPI:                   2156,
 		MaxRetries:                1, // 默认为 1 次
 		Anti429Target:             "system",
@@ -76,8 +77,11 @@ func DefaultConfig() AppConfig {
 }
 
 var (
-	mu        sync.Mutex
-	cached    *AppConfig
+	//nolint:gochecknoglobals // Global configuration cache
+	mu sync.Mutex
+	//nolint:gochecknoglobals // Global configuration cache
+	cached *AppConfig
+	//nolint:gochecknoglobals // Global configuration cache
 	cacheTime time.Time
 )
 
@@ -89,7 +93,7 @@ func configPath() string {
 	}
 	if exe, err := os.Executable(); err == nil {
 		p := filepath.Join(filepath.Dir(exe), "config", "config.json")
-		if _, err := os.Stat(p); err == nil {
+		if _, errStat := os.Stat(p); errStat == nil { //nolint:govet
 			return p
 		}
 	}
@@ -114,7 +118,7 @@ func WriteSettings(updates map[string]any) error {
 	if val, ok := raw["parallel_pool_size"].(float64); ok && val > 20 {
 		log.Printf("[Config] 面板设置并发数过高 (%v)，已强制保存为上限 20", val)
 		raw["parallel_pool_size"] = 20
-	} else if val, ok := raw["parallel_pool_size"].(int); ok && val > 20 {
+	} else if val, ok2 := raw["parallel_pool_size"].(int); ok2 && val > 20 { //nolint:govet
 		log.Printf("[Config] 面板设置并发数过高 (%v)，已强制保存为上限 20", val)
 		raw["parallel_pool_size"] = 20
 	}
@@ -133,9 +137,10 @@ func writeJSONFile(path string, v any) error {
 	data, _ := json.MarshalIndent(v, "", "  ")
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
+		return fmt.Errorf("error: %w", err)
+
 	}
-	return os.Rename(tmp, path)
+	return os.Rename(tmp, path) //nolint:wrapcheck
 }
 
 func Load() AppConfig {
@@ -146,7 +151,7 @@ func Load() AppConfig {
 	}
 	cfg := DefaultConfig()
 	if data, err := os.ReadFile(configPath()); err == nil {
-		if err := json.Unmarshal(data, &cfg); err != nil {
+		if errUnm := json.Unmarshal(data, &cfg); errUnm != nil { //nolint:govet
 			log.Printf("[Config] 解析 config.json 失败: %v", err)
 		} else {
 			// 拦截在文件读取配置时过高的并发数限制为 20

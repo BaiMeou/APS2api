@@ -17,13 +17,15 @@ import (
 const defaultTermuxPrefix = "/data/data/com.termux/files/usr"
 
 var (
-	termuxNameserverOnce  sync.Once
+	//nolint:gochecknoglobals // Global cache for Termux nameservers
+	termuxNameserverOnce sync.Once
+	//nolint:gochecknoglobals // Global cache for Termux nameservers
 	termuxNameserverAddrs []string
 )
 
 // NewHTTPClient returns a standard HTTP client with a Termux-aware DNS fallback.
 func NewHTTPClient(timeout time.Duration) *http.Client {
-	return &http.Client{
+	return &http.Client{ //nolint:exhaustruct
 		Timeout:   timeout,
 		Transport: newHTTPTransport(),
 	}
@@ -32,11 +34,11 @@ func NewHTTPClient(timeout time.Duration) *http.Client {
 func newHTTPTransport() *http.Transport {
 	base, _ := http.DefaultTransport.(*http.Transport)
 	if base == nil {
-		base = &http.Transport{}
+		base = &http.Transport{} //nolint:exhaustruct
 	}
 	transport := base.Clone()
 
-	dialer := &net.Dialer{
+	dialer := &net.Dialer{ //nolint:exhaustruct
 		Timeout:   30 * time.Second,
 		KeepAlive: 30 * time.Second,
 	}
@@ -56,10 +58,10 @@ func newTermuxResolver() *net.Resolver {
 		return nil
 	}
 
-	return &net.Resolver{
+	return &net.Resolver{ //nolint:exhaustruct
 		PreferGo: true,
 		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
-			dialer := &net.Dialer{Timeout: 5 * time.Second}
+			dialer := &net.Dialer{Timeout: 5 * time.Second} //nolint:exhaustruct
 			var lastErr error
 			for _, addr := range addrs {
 				conn, err := dialer.DialContext(ctx, network, addr)

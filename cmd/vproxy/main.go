@@ -25,6 +25,7 @@ import (
 	"unicode"
 
 	"github.com/bsfdsagfadg/vertex/internal/api"
+	"github.com/bsfdsagfadg/vertex/internal/cli"
 	"github.com/bsfdsagfadg/vertex/internal/config"
 	"github.com/bsfdsagfadg/vertex/internal/db"
 	"github.com/bsfdsagfadg/vertex/internal/metrics"
@@ -37,12 +38,16 @@ import (
 
 // version / buildCommit / buildTime 由构建脚本通过 -ldflags 注入。
 var (
-	version     = "dev"
+	//nolint:gochecknoglobals // Injected by build script
+	version = "dev"
+	//nolint:gochecknoglobals // Injected by build script
 	buildCommit = "unknown"
-	buildTime   = "unknown"
+	//nolint:gochecknoglobals // Injected by build script
+	buildTime = "unknown"
 )
 
 //go:embed rules.txt
+//nolint:gochecknoglobals // Embedded file
 var rulesText string
 
 const (
@@ -80,6 +85,8 @@ func inDocker() bool {
 }
 
 func main() {
+	setupTermuxCerts() // Initialize Termux certs first
+
 	// ---- 启动版权横幅 ----
 	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
 	fmt.Printf("║  Vertex AI Proxy  %-42s ║\n", version)
@@ -100,6 +107,9 @@ func main() {
 	fmt.Println("  ║                                                          ║")
 	fmt.Println("  ╚══════════════════════════════════════════════════════════╝")
 	fmt.Println()
+
+	// 初始化状态面板（自动接管并防闪烁）
+	cli.InitTracker()
 
 	// ---- 状态文件迁移（旧版 config/. 到新版 config/state/） ----
 	telemetry.MigrateStateFile("config/.instance_id", "config/state/.instance_id")
@@ -191,6 +201,7 @@ func main() {
 	telemetry.Start(version, runtime.GOOS+"/"+runtime.GOARCH, telemetryEnabled)
 
 	srv := api.NewServer(vc, keys, cfg)
+	//nolint:exhaustruct // We only need to configure a subset of fields
 	httpServer := &http.Server{
 		Addr:              "0.0.0.0:" + strconv.Itoa(cfg.PortAPI),
 		Handler:           srv.Handler(),

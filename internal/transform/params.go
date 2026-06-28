@@ -18,6 +18,8 @@ import (
 // reasoningEffortToThinkingLevel 把 OpenAI reasoning_effort 映射到 Gemini 3.x
 // thinkingConfig.thinkingLevel。
 // minimal/low/medium/high 与 Gemini 四档 1:1；none→NONE、xhigh→HIGH 收敛。
+//
+//nolint:gochecknoglobals // Read-only mapping
 var reasoningEffortToThinkingLevel = map[string]string{
 	"none":    "NONE",
 	"minimal": "MINIMAL",
@@ -29,6 +31,8 @@ var reasoningEffortToThinkingLevel = map[string]string{
 
 // audioFormatMIME 把 input_audio.format 映射到 Gemini inlineData mimeType。
 // 未知格式由调用处兜底为 audio/wav。
+//
+//nolint:gochecknoglobals // Read-only mapping
 var audioFormatMIME = map[string]string{
 	"wav":  "audio/wav",
 	"mp3":  "audio/mpeg",
@@ -46,10 +50,14 @@ var audioFormatMIME = map[string]string{
 }
 
 // imageSizeAllowed 是 Gemini imageConfig.imageSize 接受的档位（大写 K 逐字节透传）。
+//
+//nolint:gochecknoglobals // Read-only set
 var imageSizeAllowed = map[string]bool{"512": true, "1K": true, "2K": true, "4K": true}
 
 // pixelToImageSize 把像素长边映射到档位（取较大维度、>= 阈值）。
-var pixelToImageSize = []struct {
+//
+//nolint:gochecknoglobals // Read-only mapping
+var pixelToImageSize = []struct { //nolint:govet
 	threshold int
 	tier      string
 }{
@@ -60,6 +68,8 @@ var pixelToImageSize = []struct {
 }
 
 // mediaResolutionAllowed 是 generationConfig.mediaResolution 的完整枚举集合。
+//
+//nolint:gochecknoglobals // Read-only set
 var mediaResolutionAllowed = map[string]bool{
 	"MEDIA_RESOLUTION_UNSPECIFIED": true,
 	"MEDIA_RESOLUTION_LOW":         true,
@@ -69,6 +79,8 @@ var mediaResolutionAllowed = map[string]bool{
 }
 
 // mediaResolutionShorthand 接受简写并归一到完整枚举。
+//
+//nolint:gochecknoglobals // Read-only mapping
 var mediaResolutionShorthand = map[string]string{
 	"low":         "MEDIA_RESOLUTION_LOW",
 	"medium":      "MEDIA_RESOLUTION_MEDIUM",
@@ -83,6 +95,8 @@ var mediaResolutionShorthand = map[string]string{
 
 // geminiAllowedSchemaFields 是 functionDeclarations.parameters 的 JSON Schema 字段白名单。
 // 剔除 $schema/additionalProperties/$ref 等上游不支持的关键字，避免 400。
+//
+//nolint:gochecknoglobals // Read-only set
 var geminiAllowedSchemaFields = map[string]bool{
 	"anyOf": true, "default": true, "description": true, "enum": true,
 	"example": true, "format": true, "items": true,
@@ -133,12 +147,14 @@ func normalizeImageSize(value any) string {
 		low := strings.ToLower(s)
 		if strings.Contains(low, "x") {
 			parts := strings.SplitN(low, "x", 2)
-			w, errW := strconv.Atoi(strings.TrimSpace(parts[0]))
-			h, errH := strconv.Atoi(strings.TrimSpace(parts[1]))
-			if errW != nil || errH != nil {
-				return ""
+			if len(parts) >= 2 {
+				w, errW := strconv.Atoi(strings.TrimSpace(parts[0]))
+				h, errH := strconv.Atoi(strings.TrimSpace(parts[1]))
+				if errW != nil || errH != nil {
+					return ""
+				}
+				return pixelsToTier(maxInt(w, h))
 			}
-			return pixelsToTier(maxInt(w, h))
 		}
 		if isAllDigits(s) {
 			n, err := strconv.Atoi(s)
@@ -292,7 +308,7 @@ func guessMIMEFromURI(uri string) string {
 }
 
 // oaiToolCall 是从 OpenAI tool_call 提取出的归一结果。
-type oaiToolCall struct {
+type oaiToolCall struct { //nolint:govet
 	id   string // 可能为空
 	name string // 非空（否则不生成）
 	args any    // dict/对象（字符串已 JSON 解析）
@@ -429,6 +445,8 @@ func cleanFunctionParameters(schema any) any {
 // schemaUnsupportedKeys 是 Vertex AI 原生 Schema 不支持、需剥离的 JSON-Schema 关键字。
 // 注意：Gemini API 原生支持 default/nullable/examples（官方 Schema 规范有定义），
 // 只删真正不支持的 $schema/$defs/allOf 等 JSON-Schema 元关键字，否则会丢失参数语义。
+//
+//nolint:gochecknoglobals // Read-only set
 var schemaUnsupportedKeys = map[string]bool{
 	"$schema": true, "$id": true, "$defs": true, "$ref": true, "definitions": true,
 	"additionalProperties": true, "patternProperties": true, "unevaluatedProperties": true,

@@ -11,7 +11,7 @@ import (
 )
 
 func TestResolveN(t *testing.T) {
-	cases := []struct {
+	cases := []struct { //nolint:govet
 		name    string
 		raw     any
 		maxN    int
@@ -50,7 +50,7 @@ func TestResolveN(t *testing.T) {
 // TestStatusWriterFlush 验证 statusWriter 透传 Flush（保 SSE 流式不被破坏）。
 func TestStatusWriterFlush(t *testing.T) {
 	rec := httptest.NewRecorder()
-	sw := &statusWriter{ResponseWriter: rec, status: http.StatusOK}
+	sw := &statusWriter{ResponseWriter: rec, status: http.StatusOK} //nolint:exhaustruct
 	// httptest.ResponseRecorder 实现 http.Flusher；断言能命中且不 panic。
 	if _, ok := interface{}(sw).(http.Flusher); !ok {
 		t.Fatal("statusWriter 应实现 http.Flusher")
