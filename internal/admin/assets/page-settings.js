@@ -76,6 +76,7 @@ async function loadSettings() {
       const disabled = !parallelEl.checked;
       
       stickyEl.disabled = disabled;
+      if (disabled) stickyEl.checked = false;
       const container = stickyEl.closest('.field');
       if (container) {
         container.style.opacity = disabled ? '0.5' : '1';
@@ -87,6 +88,7 @@ async function loadSettings() {
       }
       
       parallelRetryEl.disabled = disabled;
+      if (disabled) parallelRetryEl.checked = false;
       const retryContainer = parallelRetryEl.closest('.field');
       if (retryContainer) {
         retryContainer.style.opacity = disabled ? '0.5' : '1';
@@ -116,6 +118,10 @@ async function saveSettings() {
   // Keep sending whatever telemetry_enabled is in curSettings to prevent config loss/errors
   if (curSettings.telemetry_enabled !== undefined) {
     out['telemetry_enabled'] = curSettings.telemetry_enabled;
+  }
+  if (!out['parallel_pool_enabled']) {
+    out['sticky_pool_enabled'] = false;
+    out['parallel_pool_retry_enabled'] = false;
   }
   await API.settings.put(out); toast('设置已保存');
 }
