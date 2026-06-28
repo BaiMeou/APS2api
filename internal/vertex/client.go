@@ -149,7 +149,7 @@ func (c *VertexAIClient) completeChatNSerial(ctx context.Context, model string, 
 func (c *VertexAIClient) completeInner(ctx context.Context, model string, geminiPayload map[string]any, proxyURI string) (map[string]any, error) {
 	cfg := config.Load()
 	maxRetries := cfg.MaxRetries
-	if cfg.ParallelPoolEnabled && ctx.Value(stickyModeKey{}) == nil {
+	if cfg.ParallelPoolEnabled && !cfg.ParallelPoolRetryEnabled && ctx.Value(stickyModeKey{}) == nil {
 		maxRetries = 0
 	}
 	recaptchaToken := ""

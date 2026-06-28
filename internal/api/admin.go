@@ -18,10 +18,14 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -219,6 +223,9 @@ func (s *Server) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 	case "/nodes/import":
 		s.adminImportNodes(w, r)
 		return
+	case "/nodes/import-json":
+		s.adminImportNodesJson(w, r)
+		return
 	case "/subscriptions/fetch":
 		s.adminFetchSub(w, r)
 		return
@@ -236,6 +243,9 @@ func (s *Server) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		return
 	case "/nodes/sort":
 		s.adminSortNodesByLatency(w, r)
+		return
+	case "/upload-bg":
+		s.adminUploadBg(w, r)
 		return
 	}
 
@@ -370,6 +380,7 @@ func (s *Server) adminGetSettings(w http.ResponseWriter, _ *http.Request) {
 		"parallel_pool_delay_ms":      cfg.ParallelPoolDelayMs,
 		"recaptcha_expire_seconds":    cfg.RecaptchaExpireSeconds,
 		"sticky_pool_enabled":         cfg.StickyPoolEnabled,
+		"background_image":            cfg.BackgroundImage,
 	}})
 }
 
@@ -388,6 +399,8 @@ var adminAllowedSettings = map[string]bool{
 	"recaptcha_expire_seconds":    true,
 	"active_node_uri":             true,
 	"sticky_pool_enabled":         true,
+	"parallel_pool_retry_enabled": true,
+	"background_image":            true,
 }
 
 // adminPutSettings 处理 PUT /api/admin/settings：合并 {settings:{...}} 写回 config.json 并清缓存。
@@ -654,4 +667,51 @@ func (s *Server) decodeAdminBody(w http.ResponseWriter, r *http.Request, dst any
 		return false
 	}
 	return true
+}
+
+func (s *Server) adminUploadBg(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		s.adminMethodNotAllowed(w)
+		return
+	}
+
+	err := r.ParseMultipartForm(10 << 20) // 10MB limit
+	if err != nil {
+		s.writeJSON(w, http.StatusBadRequest, adminErr("解析上传文件失败 (parse error)"))
+		return
+	}
+
+	file, _, err := r.FormFile("file")
+	if err != nil {
+		s.writeJSON(w, http.StatusBadRequest, adminErr("未找到文件字段 (missing file)"))
+		return
+	}
+	defer file.Close()
+
+	assetsDir := filepath.Join(filepath.Dir(config.ConfigDir()), "assets")
+	_ = os.MkdirAll(assetsDir, 0o755)
+
+	filename := fmt.Sprintf("background%d.jpg", time.Now().UnixMilli())
+	targetPath := filepath.Join(assetsDir, filename)
+
+	out, err := os.Create(targetPath)
+	if err != nil {
+		s.writeJSON(w, http.StatusInternalServerError, adminErr("无法保存文件 (create error)"))
+		return
+	}
+	defer out.Close()
+
+	if _, err = io.Copy(out, file); err != nil {
+		s.writeJSON(w, http.StatusInternalServerError, adminErr("保存文件失败 (copy error)"))
+		return
+	}
+
+	bgURL := "url('/assets/" + filename + "')"
+	err = config.WriteSettings(map[string]any{"background_image": bgURL})
+	if err != nil {
+		s.writeJSON(w, http.StatusInternalServerError, adminErr("更新配置失败 (save config error)"))
+		return
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true, "url": bgURL})
 }

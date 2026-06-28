@@ -358,4 +358,24 @@ function importFileNodes(replace) {
   reader.readAsText(file);
 }
 
+function importJsonNodes(replace) {
+  const fileInput = document.getElementById('nodeJsonImportFile');
+  if (!fileInput.files.length) return toast('请先选择一个 nodes.json 配置文件');
+  const file = fileInput.files[0];
+  const reader = new FileReader();
+  toast('正在读取配置文件并解析...');
+  reader.onload = async function(e) {
+    const text = e.target.result;
+    try {
+      const res = await API.nodes.importJson(text, replace);
+      await loadNodes();
+      fileInput.value = '';
+      toast(replace ? '替换成功，导入了 ' + res.count + ' 个节点' : '导入成功，追加了 ' + res.count + ' 个节点');
+    } catch (err) {
+      toast('nodes.json 导入解析失败: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
 async function saveGlobalProxy() { await API.settings.put({ proxy_url: $('#globalProxy').value }); loadSettings(); toast('全局代理已保存'); }
