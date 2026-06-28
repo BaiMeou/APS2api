@@ -21,12 +21,14 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	_ "time/tzdata"
 	"unicode"
 
 	"github.com/bsfdsagfadg/vertex/internal/api"
 	"github.com/bsfdsagfadg/vertex/internal/cli"
 	"github.com/bsfdsagfadg/vertex/internal/config"
 	"github.com/bsfdsagfadg/vertex/internal/db"
+	"github.com/bsfdsagfadg/vertex/internal/logger"
 	"github.com/bsfdsagfadg/vertex/internal/metrics"
 	"github.com/bsfdsagfadg/vertex/internal/nodes"
 	"github.com/bsfdsagfadg/vertex/internal/spool"
@@ -103,6 +105,9 @@ func printLegacyBanner() {
 func main() {
 	setupTermuxCerts() // 优先初始化 Termux 证书
 
+	logDir := filepath.Join(filepath.Dir(config.ConfigDir()), "logs")
+	dailyLogger := logger.NewDailyLogger(logDir)
+
 	// ---- 状态文件迁移（提前执行，无输出） ----
 	telemetry.MigrateStateFile("config/.instance_id", "config/state/.instance_id")
 	telemetry.MigrateStateFile("config/.telemetry_state", "config/state/.telemetry_state")
@@ -159,7 +164,7 @@ func main() {
 	}
 
 	// ---- 同意通过之后，干净地启动 TUI 看板，坚决不影响前面的交互输入 ───
-	cli.InitTracker()
+	cli.InitTracker(dailyLogger)
 	cli.SetAppInfo(version, buildCommit, buildTime, runtime.GOOS, runtime.GOARCH)
 
 	cfg := config.Load()
@@ -217,6 +222,7 @@ func main() {
 			transport.StopAllProxies()
 			vc.StopTokenPool()
 			telemetry.Stop()
+			_ = dailyLogger.Close()
 			close(shutdownDone)
 			return
 		}

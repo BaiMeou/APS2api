@@ -3,6 +3,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"sort"
@@ -127,10 +128,15 @@ func truncateAndPad(s string, maxCol int) string {
 	return sb.String()
 }
 
+var additionalLogWriter io.Writer
+
 // logInterceptor 拦截器：劫持标准 log 输出
 type logInterceptor struct{}
 
 func (logInterceptor) Write(p []byte) (int, error) {
+	if additionalLogWriter != nil {
+		_, _ = additionalLogWriter.Write(p)
+	}
 	if enabled {
 		addLogLine(string(p))
 	} else {
@@ -165,7 +171,8 @@ func addLogLine(text string) {
 }
 
 // InitTracker 初始化 uilive 状态面板与日志拦截器
-func InitTracker() {
+func InitTracker(fileLogger io.Writer) {
+	additionalLogWriter = fileLogger
 	fileInfo, err := osStdout.Stat()
 	if err == nil && (fileInfo.Mode()&os.ModeCharDevice) != 0 {
 		enabled = true
@@ -250,7 +257,7 @@ func drawTUI() {
 	headerPrefix := "╭── 📢 Vertex AI Proxy "
 	headerPrefixWidth := stringWidth(headerPrefix)
 	headerDashes := boxWidth + 1 - headerPrefixWidth
-	sb.WriteString("\n\033[33m" + headerPrefix + strings.Repeat("─", headerDashes) + "╮\033[0m\n")
+	fmt.Fprintf(&sb, "\n\033[33m%s%s╮\033[0m\n", headerPrefix, strings.Repeat("─", headerDashes))
 
 	line1 := fmt.Sprintf("Version: %s | %s", appVersion, platformInfo)
 	sb.WriteString(fmt.Sprintf("\033[33m│\033[0m %s \033[33m│\033[0m\n", truncateAndPad(line1, boxInnerWidth)))
@@ -261,13 +268,13 @@ func drawTUI() {
 	line3 := "⚠️  警告：本软件完全免费！如果你是付费购买的，你被骗了，请退款。"
 	sb.WriteString(fmt.Sprintf("\033[33m│\033[0m \033[31m%s\033[0m \033[33m│\033[0m\n", truncateAndPad(line3, boxInnerWidth)))
 
-	sb.WriteString("\033[33m" + bottomBorder + "\033[0m")
+	fmt.Fprintf(&sb, "\033[33m%s\033[0m", bottomBorder)
 
 	// 2. ─── 绘制日志沙盒窗口 (Recent Logs Window) ───
 	logPrefix := "╭── 📝 最近系统日志 "
 	logPrefixWidth := stringWidth(logPrefix)
 	logDashes := boxWidth + 1 - logPrefixWidth
-	sb.WriteString("\033[36m" + logPrefix + strings.Repeat("─", logDashes) + "╮\033[0m\n")
+	fmt.Fprintf(&sb, "\033[36m%s%s╮\033[0m\n", logPrefix, strings.Repeat("─", logDashes))
 
 	for i := 0; i < maxLogs; i++ {
 		var line string
@@ -278,7 +285,7 @@ func drawTUI() {
 		}
 		sb.WriteString(fmt.Sprintf("\033[36m│\033[0m %s \033[36m│\033[0m\n", line))
 	}
-	sb.WriteString("\033[36m" + bottomBorder + "\033[0m")
+	fmt.Fprintf(&sb, "\033[36m%s\033[0m", bottomBorder)
 
 	// 3. ─── 绘制请求追踪面板 (Active Requests) ───
 	if len(activeReqs) > 0 {
@@ -293,7 +300,7 @@ func drawTUI() {
 		reqPrefix := "╭── 🚀 请求追踪器 "
 		reqPrefixWidth := stringWidth(reqPrefix)
 		reqDashes := boxWidth + 1 - reqPrefixWidth
-		sb.WriteString("\033[36m" + reqPrefix + strings.Repeat("─", reqDashes) + "╮\033[0m\n")
+		fmt.Fprintf(&sb, "\033[36m%s%s╮\033[0m\n", reqPrefix, strings.Repeat("─", reqDashes))
 		sb.WriteString("\033[36m│\033[0m ID       \033[36m│\033[0m Model              \033[36m│\033[0m State        \033[36m│\033[0m Time  \033[36m│\033[0m Details                   \033[36m│\033[0m\n")
 		sb.WriteString("\033[36m├──────────┼────────────────────┼──────────────┼───────┼───────────────────────────┤\033[0m\n")
 
@@ -322,7 +329,7 @@ func drawTUI() {
 
 			sb.WriteString(line)
 		}
-		sb.WriteString("\033[36m" + bottomBorder + "\033[0m")
+		fmt.Fprintf(&sb, "\033[36m%s\033[0m", bottomBorder)
 	}
 
 	_, _ = fmt.Fprint(liveWriter, sb.String())
