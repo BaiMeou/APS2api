@@ -357,7 +357,11 @@ func (s *Server) adminLogout(w http.ResponseWriter, r *http.Request) {
 // adminCheckAuth 处理 GET /api/admin/check-auth：不返回 401，避免浏览器 DevTools 红色标记。
 func (s *Server) adminCheckAuth(w http.ResponseWriter, r *http.Request) {
 	authenticated := requireAdmin(r)
-	s.writeJSON(w, http.StatusOK, map[string]any{"authenticated": authenticated})
+	cfg := config.Load()
+	s.writeJSON(w, http.StatusOK, map[string]any{
+		"authenticated":    authenticated,
+		"background_image": cfg.BackgroundImage,
+	})
 }
 
 // ---- 端点：设置 ----

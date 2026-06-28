@@ -2,8 +2,8 @@ function applyBg(v) { document.documentElement.style.setProperty('--bg-img', v);
 
 async function initBg() {
   try {
-    const res = await API.settings.get();
-    const bg = res?.settings?.background_image || res?.background_image;
+    const res = await API.checkAuth();
+    const bg = res?.background_image;
     if (bg) {
       applyBg(bg);
       return;
