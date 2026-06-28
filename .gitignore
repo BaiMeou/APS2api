@@ -4,6 +4,11 @@ config/api_keys.txt
 config/nodes.json
 config/node_health.json
 
+# SQLite database and WAL files
+config/data.db
+config/data.db-shm
+config/data.db-wal
+
 # Binaries
 vertex-proxy
 vertex-proxy-*
@@ -29,3 +34,6 @@ cmd/telemetry-server/
 
 # Runtime state (auto-generated, never commit)
 config/state/
+
+# Logs
+logs/
