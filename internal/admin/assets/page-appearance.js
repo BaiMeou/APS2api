@@ -153,6 +153,7 @@ function extractAndSetColors(ctx) {
   const rgb2 = toRgbString(c2);
   
   document.documentElement.style.setProperty("--gold", c1);
+  document.documentElement.style.setProperty("--gold-rgb", rgb1);
   document.documentElement.style.setProperty("--gold-deep", c2);
   document.documentElement.style.setProperty("--gold-soft", `rgba(${rgb1}, 0.15)`);
   document.documentElement.style.setProperty("--gold-shadow1", `rgba(${rgb1}, 0.3)`);
@@ -163,6 +164,23 @@ function extractAndSetColors(ctx) {
   const cBlue = hslToHex(blueH, s, l);
   const rgbBlue = toRgbString(cBlue);
   document.documentElement.style.setProperty("--blue-soft", `rgba(${rgbBlue}, 0.1)`);
+  
+  // Background panels adaptive colors (dark theme)
+  const glassHex = hslToHex(h, Math.min(s, 0.2), 0.11);
+  const veilHex = hslToHex(h, Math.min(s, 0.25), 0.06);
+  const veilDarkHex = hslToHex(h, Math.min(s, 0.25), 0.04);
+  const strokeHex = hslToHex(h, Math.min(s, 0.4), 0.95);
+  
+  const glassRgb = toRgbString(glassHex);
+  const veilRgb = toRgbString(veilHex);
+  const veilDarkRgb = toRgbString(veilDarkHex);
+  const strokeRgb = toRgbString(strokeHex);
+  
+  document.documentElement.style.setProperty("--glass", `rgba(${glassRgb}, 0.38)`);
+  document.documentElement.style.setProperty("--glass-solid", `rgba(${glassRgb}, 0.68)`);
+  document.documentElement.style.setProperty("--veil-light", `rgba(${veilRgb}, 0.42)`);
+  document.documentElement.style.setProperty("--veil-dark", `rgba(${veilDarkRgb}, 0.62)`);
+  document.documentElement.style.setProperty("--stroke", `rgba(${strokeRgb}, 0.14)`);
 }
 
 function rgbToHsl(r, g, b) {

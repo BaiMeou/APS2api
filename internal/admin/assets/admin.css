@@ -1,9 +1,10 @@
 :root {
   --gold: #f0bd5c;
+  --gold-rgb: 240, 189, 92;
   --gold-deep: #e0a13c;
-  --gold-soft: rgba(240, 189, 92, .15);
-  --gold-shadow1: rgba(224, 161, 60, .3);
-  --gold-shadow2: rgba(224, 161, 60, .42);
+  --gold-soft: rgba(var(--gold-rgb), .15);
+  --gold-shadow1: rgba(var(--gold-rgb), .3);
+  --gold-shadow2: rgba(var(--gold-rgb), .42);
   --blue: #8fd0e8;
   --blue-soft: rgba(120, 150, 190, .1);
   --green: #84d6a0;
@@ -11,6 +12,9 @@
   --text: #f6f1e9;
   --text-dim: #c3b6a4;
   --glass: rgba(34, 27, 22, .38);
+  --glass-solid: rgba(34, 27, 22, .68);
+  --veil-light: rgba(20, 15, 11, .42);
+  --veil-dark: rgba(13, 10, 8, .62);
   --stroke: rgba(255, 246, 232, .14);
   --hi: rgba(255, 250, 240, .18);
   --radius: 18px;
@@ -45,11 +49,11 @@ option { background: #1f1813; color: var(--text); }
   background:
     radial-gradient(1200px 800px at 82% -6%, var(--gold-soft), transparent 55%),
     radial-gradient(900px 700px at 10% 110%, var(--blue-soft), transparent 55%),
-    linear-gradient(180deg, rgba(20, 15, 11, .42), rgba(13, 10, 8, .62));
+    linear-gradient(180deg, var(--veil-light), var(--veil-dark));
 }
 
 .glass {
-  background: rgba(34, 27, 22, .68);
+  background: var(--glass-solid);
   border: 1px solid var(--stroke); border-radius: var(--radius);
   box-shadow: 0 18px 50px rgba(0, 0, 0, .4), inset 0 1px 0 var(--hi);
 }
@@ -69,14 +73,14 @@ option { background: #1f1813; color: var(--text); }
 .toggle input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
 .toggle .track { position: absolute; inset: 0; border-radius: 99px; background: rgba(255, 255, 255, .1); border: 1px solid var(--stroke); transition: background .26s var(--ease), border-color .26s; }
 .toggle .track::after { content: ''; position: absolute; top: 2.5px; left: 3px; width: 19px; height: 19px; border-radius: 50%; background: #ece4d6; box-shadow: 0 2px 6px rgba(0, 0, 0, .45); transition: left .28s var(--ease), background .26s; }
-.toggle input:checked + .track { background: linear-gradient(180deg, var(--gold), var(--gold-deep)); border-color: transparent; box-shadow: 0 0 14px rgba(240, 189, 92, .4); }
+.toggle input:checked + .track { background: linear-gradient(180deg, var(--gold), var(--gold-deep)); border-color: transparent; box-shadow: 0 0 14px rgba(var(--gold-rgb), .4); }
 .toggle input:checked + .track::after { left: 22px; background: #fff; }
 
 #login { position: fixed; inset: 0; display: grid; place-items: center; transition: opacity .42s var(--ease), transform .42s var(--ease), filter .42s; }
 #login.out { opacity: 0; transform: scale(.97); filter: blur(4px); pointer-events: none; }
 #login .box { width: 372px; padding: 42px 36px; text-align: center; animation: pop .55s var(--ease); }
 @keyframes pop { from { opacity: 0; transform: translateY(18px) scale(.95); } to { opacity: 1; transform: none; } }
-#login .logo { width: 56px; height: 56px; margin: 0 auto; border-radius: 16px; background: linear-gradient(135deg, var(--gold), var(--gold-deep)); display: grid; place-items: center; font-size: 26px; font-weight: 800; color: #2c1d08; box-shadow: 0 8px 22px rgba(240, 189, 92, .4); }
+#login .logo { width: 56px; height: 56px; margin: 0 auto; border-radius: 16px; background: linear-gradient(135deg, var(--gold), var(--gold-deep)); display: grid; place-items: center; font-size: 26px; font-weight: 800; color: #2c1d08; box-shadow: 0 8px 22px rgba(var(--gold-rgb), .4); }
 #login h1 { font-size: 21px; margin: 16px 0 5px; letter-spacing: .02em; }
 #login .sub { color: var(--text-dim); font-size: 12.5px; margin-bottom: 26px; }
 #login input { text-align: left; margin-bottom: 14px; }
@@ -97,13 +101,13 @@ nav button {
 }
 nav button .ic { font-size: 16px; width: 20px; text-align: center; }
 nav button:hover { background: rgba(255, 255, 255, .07); color: var(--text); transform: translateX(3px); }
-nav button.active { background: var(--gold-soft); color: var(--gold); font-weight: 600; box-shadow: inset 0 0 0 1px rgba(240, 189, 92, .32), 0 4px 16px rgba(240, 189, 92, .14); }
+nav button.active { background: var(--gold-soft); color: var(--gold); font-weight: 600; box-shadow: inset 0 0 0 1px rgba(var(--gold-rgb), .32), 0 4px 16px rgba(var(--gold-rgb), .14); }
 aside .spacer { flex: 1; }
 
 main { position: relative; overflow: hidden; border-radius: var(--radius); }
 .main-glass-bg {
   position: absolute; inset: -1px; z-index: 0; pointer-events: none;
-  background: rgba(34, 27, 22, .68);
+  background: var(--glass-solid);
   border: 1px solid var(--stroke); border-radius: var(--radius);
   box-shadow: 0 18px 50px rgba(0, 0, 0, .4), inset 0 1px 0 var(--hi);
 }
@@ -120,13 +124,13 @@ section.entering { opacity: 0; transform: translateY(14px); }
 .grid { display: grid; gap: 16px; }
 .grid.stats { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); }
 .card { padding: 20px 22px; transition: transform .22s var(--ease), box-shadow .22s, border-color .22s; }
-.card.hoverable:hover { transform: translateY(-4px); box-shadow: 0 22px 54px rgba(0, 0, 0, .46), inset 0 1px 0 var(--hi); border-color: rgba(240, 189, 92, .32); }
+.card.hoverable:hover { transform: translateY(-4px); box-shadow: 0 22px 54px rgba(0, 0, 0, .46), inset 0 1px 0 var(--hi); border-color: rgba(var(--gold-rgb), .32); }
 .grid.stats .card { animation: rise .55s var(--ease) both; }
 .grid.stats .card:nth-child(2){animation-delay:.06s} .grid.stats .card:nth-child(3){animation-delay:.12s} .grid.stats .card:nth-child(4){animation-delay:.18s}
 @keyframes rise { from { opacity: 0; transform: translateY(18px) scale(.98); } to { opacity: 1; transform: none; } }
 .stat .label { color: var(--text-dim); font-size: 12px; letter-spacing: .03em; }
 .stat .value { font-size: 30px; font-weight: 700; margin-top: 8px; line-height: 1.1; }
-.stat .value.gold { color: var(--gold); text-shadow: 0 0 26px rgba(240, 189, 92, .4); }
+.stat .value.gold { color: var(--gold); text-shadow: 0 0 26px rgba(var(--gold-rgb), .4); }
 .stat .value.blue { color: var(--blue); } .stat .value.green { color: var(--green); }
 .stat .sub { color: var(--text-dim); font-size: 11.5px; margin-top: 6px; }
 
