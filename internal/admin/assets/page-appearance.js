@@ -2,14 +2,15 @@ function applyBg(v) { document.documentElement.style.setProperty('--bg-img', v);
 
 async function initBg() {
   try {
-    const data = await API.settings.get();
-    if (data && data.background_image) {
-      applyBg(data.background_image);
+    const res = await API.settings.get();
+    const bg = res?.settings?.background_image || res?.background_image;
+    if (bg) {
+      applyBg(bg);
+      return;
     }
-  } catch (e) {
-    const s = localStorage.getItem('vproxy_bg');
-    if (s) applyBg(s);
-  }
+  } catch (e) {}
+  const s = localStorage.getItem('vproxy_bg');
+  if (s) applyBg(s);
 }
 initBg();
 
@@ -63,10 +64,20 @@ function resetBg() {
 async function loadAppearance() {
   const presets = [
     { name: '默认', val: "url('background.jpg')" },
-    { name: '纯白', val: 'white' },
+    { name: '克莱因蓝', val: '#002fa7' },
+    { name: '暗夜紫', val: '#2e1065' },
+    { name: '酒红', val: '#4c0519' },
+    { name: '深海绿', val: '#064e3b' },
     { name: '极暗蓝', val: '#0f172a' },
-    { name: '纯黑', val: 'black' },
+    { name: '琥珀黄', val: '#78350f' },
+    { name: '苍穹蓝', val: '#1e3a8a' },
+    { name: '焦糖', val: '#7c2d12' },
+    { name: '松石绿', val: '#0f766e' },
+    { name: '莫兰迪粉', val: '#831843' },
+    { name: '纯白', val: '#ffffff' },
+    { name: '纯黑', val: '#000000' },
     { name: '银灰', val: '#f3f4f6' },
+    { name: '暗灰', val: '#3f3f46' },
   ];
   
   try {
