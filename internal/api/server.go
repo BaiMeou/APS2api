@@ -14,6 +14,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"path/filepath"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -63,6 +64,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/admin", s.handleAdminPage)
 	mux.HandleFunc("/admin/", s.handleAdminPage)
 	mux.HandleFunc("/api/admin/", s.handleAdminAPI)
+	mux.HandleFunc("/assets/", s.handleAssets)
 	// Gemini 原生端点 + 单模型详情 + countTokens：path 形如 /v1beta/models/{model}:method
 	// 或 /v1beta/models/{model}，无法用静态 mux 表达（{model} 含点、:method 是末段后缀），
 	// 故对 /v1beta/models/ 与 /v1/models/ 前缀走自定义分发器。
@@ -90,6 +92,12 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) handleFavicon(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleAssets(w http.ResponseWriter, r *http.Request) {
+	assetsDir := filepath.Join(filepath.Dir(config.ConfigDir()), "assets")
+	fs := http.StripPrefix("/assets/", http.FileServer(http.Dir(assetsDir)))
+	fs.ServeHTTP(w, r)
 }
 
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
@@ -592,7 +600,7 @@ func (s *Server) withMetrics(next http.Handler) http.Handler {
 
 // isAdminPath 报告 path 是否属于管理后台（静态面板或 JSON 接口），用于在业务中间件里整体跳过。
 func isAdminPath(path string) bool {
-	return path == "/admin" || strings.HasPrefix(path, "/admin/") || strings.HasPrefix(path, "/api/admin/")
+	return path == "/admin" || strings.HasPrefix(path, "/admin/") || strings.HasPrefix(path, "/api/admin/") || strings.HasPrefix(path, "/assets/")
 }
 
 func (s *Server) withAPIKey(next http.Handler) http.Handler {

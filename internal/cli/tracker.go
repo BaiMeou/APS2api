@@ -3,6 +3,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"sort"
@@ -227,9 +228,14 @@ func dashBar(w int) string {
 
 // ─── 日志拦截 ───
 
+var additionalLogWriter io.Writer
+
 type logInterceptor struct{}
 
 func (logInterceptor) Write(p []byte) (int, error) {
+	if additionalLogWriter != nil {
+		_, _ = additionalLogWriter.Write(p)
+	}
 	if enabled {
 		addLogLine(string(p))
 	} else {
@@ -262,7 +268,8 @@ func addLogLine(text string) {
 
 // ─── 公共 API ───
 
-func InitTracker() {
+func InitTracker(fileLogger io.Writer) {
+	additionalLogWriter = fileLogger
 	fileInfo, err := osStdout.Stat()
 	if err == nil && (fileInfo.Mode()&os.ModeCharDevice) != 0 {
 		enabled = true

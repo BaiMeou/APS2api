@@ -25,3 +25,4 @@ logs/
 
 # 运行时状态（自动生成，不打包）
 config/state/
+config/migrated/

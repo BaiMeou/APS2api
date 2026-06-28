@@ -41,6 +41,7 @@ type AppConfig struct { //nolint:govet
 	ActiveNodeURI            string `json:"active_node_uri"`
 	ParallelPoolEnabled      bool   `json:"parallel_pool_enabled"`
 	StickyPoolEnabled        bool   `json:"sticky_pool_enabled"`
+	ParallelPoolRetryEnabled bool   `json:"parallel_pool_retry_enabled"`
 	ParallelPoolSize         int    `json:"parallel_pool_size"`
 	ParallelPoolMaxRounds    int    `json:"parallel_pool_max_rounds"`
 	DebugPprof               bool   `json:"debug_pprof"`
@@ -53,6 +54,9 @@ type AppConfig struct { //nolint:govet
 	// 匿名遥测：仅发送实例 ID + 版本 + 平台，不含任何用户/网络/隐私数据。
 	// 用于了解软件的版本分布和活跃数。指针类型区分"未设置"和"显式 false"，未设置时默认开启。
 	TelemetryEnabled *bool `json:"telemetry_enabled,omitempty"`
+
+	// 外观配置
+	BackgroundImage string `json:"background_image"`
 }
 
 func DefaultConfig() AppConfig {
@@ -73,6 +77,7 @@ func DefaultConfig() AppConfig {
 		ParallelPoolDelayDynamic:  false, // 建议默认关闭动态对冲，改为稳定的秒级接力
 		ParallelPoolDelayMs:       2500,  // 固定对冲间隔设为 2500ms（2.5秒），单节点撞墙后触发接力
 		RecaptchaExpireSeconds:    60,
+		BackgroundImage:           "url('background.jpg')",
 	}
 }
 

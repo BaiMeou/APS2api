@@ -1,6 +1,7 @@
 const SETTINGS_FIELDS = [
   // 🚀 Group: pool (并发与 Token 池管理)
   { k: 'parallel_pool_enabled', label: '并发请求池', type: 'bool', group: 'pool', desc: '同时请求多个健康节点，首包到达即采纳，降低延迟' },
+  { k: 'parallel_pool_retry_enabled', label: '并发池单点重试', type: 'bool', group: 'pool', desc: '开启后并发池内即使节点撞库也依然强制等待并重试（不推荐，仅限节点极少时开启）' },
   { k: 'sticky_pool_enabled', label: '粘性节点池', type: 'bool', group: 'pool', desc: '竞速成功后缓存可靠节点，优先复用减少配额浪费。需启用并发请求池' },
   { k: 'parallel_pool_size', label: '并发数', type: 'number', max: 20, min: 1, group: 'pool', desc: '并发抢跑的节点数 (默认 15，最大 20)' },
   { k: 'parallel_pool_delay_dynamic', label: '动态对冲延迟', type: 'bool', group: 'pool', desc: '根据节点平均响应时间动态调整并发启动间隔，平衡延迟与流量消耗' },
@@ -68,11 +69,14 @@ async function loadSettings() {
     '<button class="btn mt-14px" onclick="saveSettings()">保存设置</button>';
 
   const stickyEl = $('#set_sticky_pool_enabled');
+  const parallelRetryEl = $('#set_parallel_pool_retry_enabled');
   const parallelEl = $('#set_parallel_pool_enabled');
-  if (stickyEl && parallelEl) {
+  if (stickyEl && parallelEl && parallelRetryEl) {
     const updateStickyDisabled = () => {
       const disabled = !parallelEl.checked;
+      
       stickyEl.disabled = disabled;
+      if (disabled) stickyEl.checked = false;
       const container = stickyEl.closest('.field');
       if (container) {
         container.style.opacity = disabled ? '0.5' : '1';
@@ -80,6 +84,18 @@ async function loadSettings() {
         const desc = container.querySelector('.desc');
         if (desc) {
           desc.textContent = disabled ? '需先启用并发请求池' : '竞速成功后缓存可靠节点，优先复用减少配额浪费。需启用并发请求池';
+        }
+      }
+      
+      parallelRetryEl.disabled = disabled;
+      if (disabled) parallelRetryEl.checked = false;
+      const retryContainer = parallelRetryEl.closest('.field');
+      if (retryContainer) {
+        retryContainer.style.opacity = disabled ? '0.5' : '1';
+        retryContainer.style.pointerEvents = disabled ? 'none' : '';
+        const retryDesc = retryContainer.querySelector('.desc');
+        if (retryDesc) {
+          retryDesc.textContent = disabled ? '需先启用并发请求池' : '开启后并发池内即使节点撞库也依然强制等待并重试（不推荐，仅限节点极少时开启）';
         }
       }
     };
@@ -102,6 +118,10 @@ async function saveSettings() {
   // Keep sending whatever telemetry_enabled is in curSettings to prevent config loss/errors
   if (curSettings.telemetry_enabled !== undefined) {
     out['telemetry_enabled'] = curSettings.telemetry_enabled;
+  }
+  if (!out['parallel_pool_enabled']) {
+    out['sticky_pool_enabled'] = false;
+    out['parallel_pool_retry_enabled'] = false;
   }
   await API.settings.put(out); toast('设置已保存');
 }
