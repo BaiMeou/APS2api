@@ -104,6 +104,8 @@ func createTables(db *sql.DB) error {
 }
 
 func migrateFromFiles(db *sql.DB, configDir string) {
+	migratedFolder := filepath.Join(configDir, "migrated")
+
 	// Migrate nodes
 	nodesPath := filepath.Join(configDir, "nodes.json")
 	if data, err := os.ReadFile(nodesPath); err == nil {
@@ -124,6 +126,9 @@ func migrateFromFiles(db *sql.DB, configDir string) {
 			_ = stmt.Close()
 			_ = tx.Commit()
 			log.Printf("[DB] Migrated %d nodes from nodes.json", len(d.Nodes))
+
+			_ = os.MkdirAll(migratedFolder, 0755)
+			_ = os.Rename(nodesPath, filepath.Join(migratedFolder, "nodes.json.migrated"))
 		}
 	}
 
@@ -155,6 +160,9 @@ func migrateFromFiles(db *sql.DB, configDir string) {
 			_ = stmt.Close()
 			_ = tx.Commit()
 			log.Printf("[DB] Migrated %d node health records from node_health.json", migrated)
+
+			_ = os.MkdirAll(migratedFolder, 0755)
+			_ = os.Rename(healthPath, filepath.Join(migratedFolder, "node_health.json.migrated"))
 		}
 	}
 }

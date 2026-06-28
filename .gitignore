@@ -34,6 +34,7 @@ cmd/telemetry-server/
 
 # Runtime state (auto-generated, never commit)
 config/state/
+config/migrated/
 
 # Logs
 logs/
