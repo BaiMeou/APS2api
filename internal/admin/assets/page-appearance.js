@@ -60,7 +60,7 @@ function resetBg() {
   toast('已恢复默认'); 
 }
 
-function loadAppearance() {
+async function loadAppearance() {
   const presets = [
     { name: '默认', val: "url('background.jpg')" },
     { name: '纯白', val: 'white' },
@@ -68,6 +68,17 @@ function loadAppearance() {
     { name: '纯黑', val: 'black' },
     { name: '银灰', val: '#f3f4f6' },
   ];
+  
+  try {
+    const res = await fetch('/api/admin/list-bgs');
+    const data = await res.json();
+    if (res.ok && data.ok && data.files) {
+      data.files.forEach((f, i) => {
+        presets.push({ name: `自定义${i+1}`, val: `url('/assets/${f}')` });
+      });
+    }
+  } catch (e) {}
+
   const curBg = document.documentElement.style.getPropertyValue('--bg-img').trim();
   if (curBg && !presets.find(p => p.val === curBg)) {
     presets.unshift({ name: '当前', val: curBg });

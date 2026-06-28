@@ -247,6 +247,13 @@ func (s *Server) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 	case "/upload-bg":
 		s.adminUploadBg(w, r)
 		return
+	case "/list-bgs":
+		if r.Method != http.MethodGet {
+			s.adminMethodNotAllowed(w)
+			return
+		}
+		s.adminListBgs(w, r)
+		return
 	}
 
 	switch path {
@@ -715,4 +722,22 @@ func (s *Server) adminUploadBg(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true, "url": bgURL})
+}
+
+
+func (s *Server) adminListBgs(w http.ResponseWriter, r *http.Request) {
+	assetsDir := filepath.Join(filepath.Dir(config.ConfigDir()), "assets")
+	files, err := os.ReadDir(assetsDir)
+	if err != nil {
+		s.writeJSON(w, http.StatusOK, map[string]any{"ok": true, "files": []string{}})
+		return
+	}
+
+	var bgs []string
+	for _, f := range files {
+		if !f.IsDir() && strings.HasPrefix(f.Name(), "background") {
+			bgs = append(bgs, f.Name())
+		}
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true, "files": bgs})
 }
