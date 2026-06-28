@@ -380,6 +380,7 @@ func (s *Server) adminGetSettings(w http.ResponseWriter, _ *http.Request) {
 		"parallel_pool_delay_ms":      cfg.ParallelPoolDelayMs,
 		"recaptcha_expire_seconds":    cfg.RecaptchaExpireSeconds,
 		"sticky_pool_enabled":         cfg.StickyPoolEnabled,
+		"parallel_pool_retry_enabled": cfg.ParallelPoolRetryEnabled,
 		"background_image":            cfg.BackgroundImage,
 	}})
 }
