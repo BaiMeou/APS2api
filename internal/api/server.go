@@ -600,7 +600,7 @@ func (s *Server) withMetrics(next http.Handler) http.Handler {
 
 // isAdminPath 报告 path 是否属于管理后台（静态面板或 JSON 接口），用于在业务中间件里整体跳过。
 func isAdminPath(path string) bool {
-	return path == "/admin" || strings.HasPrefix(path, "/admin/") || strings.HasPrefix(path, "/api/admin/")
+	return path == "/admin" || strings.HasPrefix(path, "/admin/") || strings.HasPrefix(path, "/api/admin/") || strings.HasPrefix(path, "/assets/")
 }
 
 func (s *Server) withAPIKey(next http.Handler) http.Handler {
