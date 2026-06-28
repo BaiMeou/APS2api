@@ -2,7 +2,6 @@
 // Use of this source code is governed by the PolyForm Noncommercial License 1.0.0
 // that can be found in the LICENSE file.
 
-// Command vproxy 是 Vertex AI Proxy（Go 重写）的入口。
 package main
 
 import (
@@ -36,7 +35,6 @@ import (
 	"github.com/bsfdsagfadg/vertex/internal/vertex"
 )
 
-// version / buildCommit / buildTime 由构建脚本通过 -ldflags 注入。
 var (
 	//nolint:gochecknoglobals // Injected by build script
 	version = "dev"
@@ -56,8 +54,6 @@ const (
 	rulesAgreedFileDocker = "config/state/agreed-rules-docker.txt"
 )
 
-// rulesHash 是当前内嵌 rules.txt 内容的 SHA256（前 16 位十六进制）。
-// rules.txt 一旦变动，hash 就变 → 用户必须重新同意（裸机交互或 Docker 重写文件）。
 func rulesHash() string {
 	cleanText := strings.Map(func(r rune) rune {
 		if unicode.IsSpace(r) {
@@ -69,8 +65,6 @@ func rulesHash() string {
 	return hex.EncodeToString(sum[:])[:16]
 }
 
-// inDocker 通过 /.dockerenv 与 cgroup 判断当前是否运行于 Docker 容器。
-// Docker 环境中 stdin 通常无 TTY，无法交互同意 → 走文件同意路径。
 func inDocker() bool {
 	if _, err := os.Stat("/.dockerenv"); err == nil {
 		return true
@@ -84,10 +78,8 @@ func inDocker() bool {
 	return false
 }
 
-func main() {
-	setupTermuxCerts() // Initialize Termux certs first
-
-	// ---- 启动版权横幅 ----
+// 提取原有的终端普通打印，仅在需要同意规则阶段展示
+func printLegacyBanner() {
 	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
 	fmt.Printf("║  Vertex AI Proxy  %-42s ║\n", version)
 	fmt.Println("║  Copyright (c) 2026 BaiMeow. All rights reserved.          ║")
@@ -96,7 +88,6 @@ func main() {
 	fmt.Printf("║  Platform: %s/%s                                       ║\n", runtime.GOOS, runtime.GOARCH)
 	fmt.Println("╚══════════════════════════════════════════════════════════════╝")
 
-	// ---- 反诈播报（每次启动必显示） ----
 	fmt.Println()
 	fmt.Println("  ╔══════════════════════════════════════════════════════════╗")
 	fmt.Println("  ║                                                          ║")
@@ -107,24 +98,22 @@ func main() {
 	fmt.Println("  ║                                                          ║")
 	fmt.Println("  ╚══════════════════════════════════════════════════════════╝")
 	fmt.Println()
+}
 
-	// 初始化状态面板（自动接管并防闪烁）
-	cli.InitTracker()
+func main() {
+	setupTermuxCerts() // 优先初始化 Termux 证书
 
-	// ---- 状态文件迁移（旧版 config/. 到新版 config/state/） ----
+	// ---- 状态文件迁移（提前执行，无输出） ----
 	telemetry.MigrateStateFile("config/.instance_id", "config/state/.instance_id")
 	telemetry.MigrateStateFile("config/.telemetry_state", "config/state/.telemetry_state")
 	telemetry.MigrateStateFile("config/.rules_agreed", "config/state/.rules_agreed")
 	telemetry.MigrateStateFile("config/agreed-rules-docker.txt", "config/state/agreed-rules-docker.txt")
 
-	// ---- 规则同意检查（含版本/哈希追踪：rules.txt 一变，必须重新同意） ----
+	// ---- 规则同意检查 ----
 	curHash := rulesHash()
 	if inDocker() {
-		// Docker 环境：stdin 通常无 TTY，改走文件同意。
-		// 用户需在挂载的 config/state/ 目录里创建 agreed-rules-docker.txt，
-		// 内容只要包含当前 rules 的哈希字符串即视为同意。
 		if !checkRulesAgreedDocker(curHash) {
-			fmt.Println(rulesText)
+			printLegacyBanner()
 			fmt.Println()
 			fmt.Println("  ╔══════════════════════════════════════════════════════════╗")
 			fmt.Println("  ║  📦 检测到 Docker 环境                                   ║")
@@ -143,14 +132,11 @@ func main() {
 			fmt.Println()
 			fmt.Println("  3) 重启容器即可。")
 			fmt.Println()
-			fmt.Println("  注意：规则更新后哈希会变化，需要重新执行此步骤。")
-			fmt.Println("        此机制仅在 Docker 容器内严格生效；裸机部署走交互式同意。")
-			fmt.Println()
 			os.Exit(0)
 		}
 	} else {
-		// 裸机/非 Docker：交互式同意，hash 不一致也要重新同意。
 		if !checkRulesAgreed(curHash) {
+			printLegacyBanner()
 			fmt.Println(rulesText)
 			fmt.Println()
 			if hasOldAgreement() {
@@ -172,6 +158,10 @@ func main() {
 		}
 	}
 
+	// ---- 同意通过之后，干净地启动 TUI 看板，坚决不影响前面的交互输入 ───
+	cli.InitTracker()
+	cli.SetAppInfo(version, buildCommit, buildTime, runtime.GOOS, runtime.GOARCH)
+
 	cfg := config.Load()
 	if err := db.InitDB(filepath.Join(config.ConfigDir(), "data.db")); err != nil {
 		log.Fatalf("[vproxy] failed to init database: %v", err)
@@ -192,8 +182,6 @@ func main() {
 
 	vc := vertex.NewVertexAIClient()
 
-	// 启动匿名遥测（默认开启，可在 config.json 设置 telemetry_enabled=false 关闭）。
-	// 仅采集软件版本/平台/Go运行时/CPU/内存/容器/时区/语言/启动次数等非敏感信息。
 	telemetryEnabled := true
 	if cfg.TelemetryEnabled != nil {
 		telemetryEnabled = *cfg.TelemetryEnabled
@@ -201,7 +189,7 @@ func main() {
 	telemetry.Start(version, runtime.GOOS+"/"+runtime.GOARCH, telemetryEnabled)
 
 	srv := api.NewServer(vc, keys, cfg)
-	//nolint:exhaustruct // We only need to configure a subset of fields
+	//nolint:exhaustruct
 	httpServer := &http.Server{
 		Addr:              "0.0.0.0:" + strconv.Itoa(cfg.PortAPI),
 		Handler:           srv.Handler(),
@@ -243,8 +231,6 @@ func main() {
 	log.Printf("[vproxy] 优雅关闭完成，vproxy 退出")
 }
 
-// checkRulesAgreed 检查用户是否已同意当前版本规则（裸机交互路径）。
-// 文件内容须包含当前 rulesHash() —— rules.txt 修改后哈希变化，旧同意失效。
 func checkRulesAgreed(curHash string) bool {
 	data, err := os.ReadFile(rulesAgreedFile)
 	if err != nil {
@@ -253,7 +239,6 @@ func checkRulesAgreed(curHash string) bool {
 	return strings.Contains(string(data), curHash)
 }
 
-// hasOldAgreement 判断是否存在过往任意版本的同意记录（用于提示"规则已更新"）。
 func hasOldAgreement() bool {
 	data, err := os.ReadFile(rulesAgreedFile)
 	if err != nil {
@@ -262,15 +247,12 @@ func hasOldAgreement() bool {
 	return len(strings.TrimSpace(string(data))) > 0
 }
 
-// saveRulesAgreed 记录"用户已同意 curHash 版本规则"。
 func saveRulesAgreed(curHash string) {
 	_ = os.MkdirAll("config/state", 0o700)
 	line := fmt.Sprintf("%s\t%s\n", time.Now().Format(time.RFC3339), curHash)
 	_ = os.WriteFile(rulesAgreedFile, []byte(line), 0o600)
 }
 
-// checkRulesAgreedDocker 检查 Docker 环境下用户提供的同意文件。
-// 仅检查文件内容是否包含当前 rules 哈希（允许多行/空白容错）。
 func checkRulesAgreedDocker(curHash string) bool {
 	data, err := os.ReadFile(rulesAgreedFileDocker)
 	if err != nil {

@@ -23,6 +23,12 @@ type ReqState struct {
 	StartTime  time.Time
 }
 
+const (
+	boxWidth      = 86 // 面板总宽度（不含两端边框）
+	boxInnerWidth = 84 // 面板内部可容纳的纯文本视觉列宽
+	maxLogs       = 10 // 日志窗口固定显示的行数
+)
+
 var (
 	//nolint:gochecknoglobals // Internal CLI state
 	mu sync.Mutex
@@ -33,15 +39,40 @@ var (
 	//nolint:gochecknoglobals // Internal CLI state
 	osStdout = os.Stdout
 
+	// 环形日志缓冲区，存放最近 maxLogs 条日志
+	//nolint:gochecknoglobals // Internal CLI state
+	logBuffer []string
+
 	// uilive 托管的 live 写入器
 	//nolint:gochecknoglobals // Internal CLI state
 	liveWriter *uilive.Writer
+
+	// 软件版本与平台常驻信息
+	//nolint:gochecknoglobals // Internal CLI state
+	appVersion = "dev"
+	//nolint:gochecknoglobals // Internal CLI state
+	buildInfo = "Build: unknown / unknown"
+	//nolint:gochecknoglobals // Internal CLI state
+	platformInfo = "Platform: unknown"
 
 	//nolint:gochecknoglobals // Internal CLI state
 	spinners = []rune(`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`)
 	//nolint:gochecknoglobals // Internal CLI state
 	spinnerIdx int
 )
+
+// SetAppInfo 供 main.go 初始化时传入版本及编译属性
+func SetAppInfo(ver, commit, bTime, goos, goarch string) {
+	mu.Lock()
+	defer mu.Unlock()
+	appVersion = ver
+	buildInfo = fmt.Sprintf("Build: %s / %s", commit, bTime)
+	platformInfo = fmt.Sprintf("Platform: %s/%s", goos, goarch)
+
+	// 存储格式化后的头部信息
+	logBuffer = append(logBuffer, truncateAndPad(fmt.Sprintf("[vproxy] 启动成功: Version=%s, Commit=%s, Built=%s", ver, commit, bTime), boxInnerWidth))
+	logBuffer = append(logBuffer, truncateAndPad(fmt.Sprintf("[vproxy] 运行平台: %s/%s", goos, goarch), boxInnerWidth))
+}
 
 // runeWidth 估算单个字符在终端中所占的视觉单元宽度（1 或 2）
 func runeWidth(r rune) int {
@@ -96,21 +127,54 @@ func truncateAndPad(s string, maxCol int) string {
 	return sb.String()
 }
 
-// InitTracker 初始化 uilive 状态面板
+// logInterceptor 拦截器：劫持标准 log 输出
+type logInterceptor struct{}
+
+func (logInterceptor) Write(p []byte) (int, error) {
+	if enabled {
+		addLogLine(string(p))
+	} else {
+		// 非 TTY (Docker/Systemd) 自动回退，向标准错误直接输出，防止吞日志
+		_, _ = os.Stderr.Write(p)
+	}
+	return len(p), nil
+}
+
+// addLogLine 将新日志 line 写入环形队列
+func addLogLine(text string) {
+	lines := strings.Split(text, "\n")
+	mu.Lock()
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		lineVal := truncateAndPad(line, boxInnerWidth)
+		logBuffer = append(logBuffer, lineVal)
+	}
+	for len(logBuffer) > maxLogs {
+		logBuffer = logBuffer[1:]
+	}
+	mu.Unlock()
+
+	if enabled {
+		mu.Lock()
+		drawTUI()
+		mu.Unlock()
+	}
+}
+
+// InitTracker 初始化 uilive 状态面板与日志拦截器
 func InitTracker() {
 	fileInfo, err := osStdout.Stat()
 	if err == nil && (fileInfo.Mode()&os.ModeCharDevice) != 0 {
 		enabled = true
 
-		// 创建并启动 uilive 写入器
 		liveWriter = uilive.New()
 		liveWriter.Start()
 
-		// 重定向标准 log 输出到 uilive.Bypass()，
-		// 这样所有的 log.Printf 日志会自动显示在动态面板的上方，不会破坏面板结构
-		log.SetOutput(liveWriter.Bypass())
+		log.SetOutput(logInterceptor{})
 
-		// 定时更新底部动态面板的动画帧与时间
 		go func() {
 			ticker := time.NewTicker(120 * time.Millisecond)
 			for range ticker.C {
@@ -118,10 +182,6 @@ func InitTracker() {
 				spinnerIdx = (spinnerIdx + 1) % len(spinners)
 				if len(activeReqs) > 0 {
 					drawTUI()
-				} else {
-					// 无活跃请求时，清空面板输出
-					_, _ = fmt.Fprint(liveWriter, "")
-					_ = liveWriter.Flush()
 				}
 				mu.Unlock()
 			}
@@ -134,7 +194,7 @@ func StartReq(id string) {
 	defer mu.Unlock()
 	activeReqs[id] = &ReqState{ //nolint:exhaustruct
 		ID:        id,
-		Model:     "初始化中...",
+		Model:     "连接中...",
 		State:     "🔗 连接中",
 		Color:     "\033[90m", // 灰色
 		StartTime: time.Now(),
@@ -183,52 +243,88 @@ func FinishReq(id string) {
 
 // drawTUI 构建并向 uilive.Writer 刷入面板内容
 func drawTUI() {
-	if len(activeReqs) == 0 {
-		return
-	}
-
-	var reqs []*ReqState
-	for _, r := range activeReqs {
-		reqs = append(reqs, r)
-	}
-	sort.Slice(reqs, func(i, j int) bool {
-		return reqs[i].StartTime.Before(reqs[j].StartTime)
-	})
-
 	var sb strings.Builder
-	sb.WriteString("\n\033[36m╭── 🚀 请求追踪器 ─────────────────────────────────────────────────────────────────────╮\033[0m\n")
-	sb.WriteString("\033[36m│\033[0m ID       \033[36m│\033[0m Model              \033[36m│\033[0m State        \033[36m│\033[0m Time  \033[36m│\033[0m Details                   \033[36m│\033[0m\n")
-	sb.WriteString("\033[36m├──────────┼────────────────────┼──────────────┼───────┼───────────────────────────┤\033[0m\n")
+	bottomBorder := "╰" + strings.Repeat("─", boxWidth) + "╯\n"
 
-	for _, r := range reqs {
-		elapsed := time.Since(r.StartTime).Seconds()
-		id := r.ID
-		if len(id) > 6 {
-			id = id[:6]
+	// 1. ─── 绘制常驻版权与安全防诈声明（已统一采用单线圆角风格，修复视觉错位） ───
+	headerPrefix := "╭── 📢 Vertex AI Proxy "
+	headerPrefixWidth := stringWidth(headerPrefix)
+	headerDashes := boxWidth + 1 - headerPrefixWidth
+	sb.WriteString("\n\033[33m" + headerPrefix + strings.Repeat("─", headerDashes) + "╮\033[0m\n")
+
+	line1 := fmt.Sprintf("Version: %s | %s", appVersion, platformInfo)
+	sb.WriteString(fmt.Sprintf("\033[33m│\033[0m %s \033[33m│\033[0m\n", truncateAndPad(line1, boxInnerWidth)))
+
+	line2 := buildInfo
+	sb.WriteString(fmt.Sprintf("\033[33m│\033[0m %s \033[33m│\033[0m\n", truncateAndPad(line2, boxInnerWidth)))
+
+	line3 := "⚠️  警告：本软件完全免费！如果你是付费购买的，你被骗了，请退款。"
+	sb.WriteString(fmt.Sprintf("\033[33m│\033[0m \033[31m%s\033[0m \033[33m│\033[0m\n", truncateAndPad(line3, boxInnerWidth)))
+
+	sb.WriteString("\033[33m" + bottomBorder + "\033[0m")
+
+	// 2. ─── 绘制日志沙盒窗口 (Recent Logs Window) ───
+	logPrefix := "╭── 📝 最近系统日志 "
+	logPrefixWidth := stringWidth(logPrefix)
+	logDashes := boxWidth + 1 - logPrefixWidth
+	sb.WriteString("\033[36m" + logPrefix + strings.Repeat("─", logDashes) + "╮\033[0m\n")
+
+	for i := 0; i < maxLogs; i++ {
+		var line string
+		if i < len(logBuffer) {
+			line = logBuffer[i]
+		} else {
+			line = strings.Repeat(" ", boxInnerWidth)
 		}
-
-		detailStr := r.Detail
-		if r.WinnerNode != "" {
-			detailStr = "🏆 " + r.WinnerNode
-			if r.Detail != "" {
-				detailStr += " | " + r.Detail
-			}
-		}
-
-		// 精准对齐中英文和 Emoji
-		idVal := truncateAndPad(id, 6)
-		modelVal := truncateAndPad(r.Model, 18)
-		stateVal := truncateAndPad(r.State, 12)
-		detailVal := truncateAndPad(detailStr, 25)
-
-		line := fmt.Sprintf("\033[36m│\033[0m \033[36m%c\033[0m %s \033[36m│\033[0m %s \033[36m│\033[0m %s%s\033[0m \033[36m│\033[0m %4.1fs \033[36m│\033[0m \033[90m%s\033[0m \033[36m│\033[0m\n",
-			spinners[spinnerIdx], idVal, modelVal, r.Color, stateVal, elapsed, detailVal)
-
-		sb.WriteString(line)
+		sb.WriteString(fmt.Sprintf("\033[36m│\033[0m %s \033[36m│\033[0m\n", line))
 	}
-	sb.WriteString("\033[36m╰──────────────────────────────────────────────────────────────────────────────────────╯\033[0m\n")
+	sb.WriteString("\033[36m" + bottomBorder + "\033[0m")
 
-	// 直接写入 uilive.Writer 并 Flush
+	// 3. ─── 绘制请求追踪面板 (Active Requests) ───
+	if len(activeReqs) > 0 {
+		var reqs []*ReqState
+		for _, r := range activeReqs {
+			reqs = append(reqs, r)
+		}
+		sort.Slice(reqs, func(i, j int) bool {
+			return reqs[i].StartTime.Before(reqs[j].StartTime)
+		})
+
+		reqPrefix := "╭── 🚀 请求追踪器 "
+		reqPrefixWidth := stringWidth(reqPrefix)
+		reqDashes := boxWidth + 1 - reqPrefixWidth
+		sb.WriteString("\033[36m" + reqPrefix + strings.Repeat("─", reqDashes) + "╮\033[0m\n")
+		sb.WriteString("\033[36m│\033[0m ID       \033[36m│\033[0m Model              \033[36m│\033[0m State        \033[36m│\033[0m Time  \033[36m│\033[0m Details                   \033[36m│\033[0m\n")
+		sb.WriteString("\033[36m├──────────┼────────────────────┼──────────────┼───────┼───────────────────────────┤\033[0m\n")
+
+		for _, r := range reqs {
+			elapsed := time.Since(r.StartTime).Seconds()
+			id := r.ID
+			if len(id) > 6 {
+				id = id[:6]
+			}
+
+			detailStr := r.Detail
+			if r.WinnerNode != "" {
+				detailStr = "🏆 " + r.WinnerNode
+				if r.Detail != "" {
+					detailStr += " | " + r.Detail
+				}
+			}
+
+			idVal := truncateAndPad(id, 6)
+			modelVal := truncateAndPad(r.Model, 18)
+			stateVal := truncateAndPad(r.State, 12)
+			detailVal := truncateAndPad(detailStr, 25)
+
+			line := fmt.Sprintf("\033[36m│\033[0m \033[36m%c\033[0m %s \033[36m│\033[0m %s \033[36m│\033[0m %s%s\033[0m \033[36m│\033[0m %4.1fs \033[36m│\033[0m \033[90m%s\033[0m \033[36m│\033[0m\n",
+				spinners[spinnerIdx], idVal, modelVal, r.Color, stateVal, elapsed, detailVal)
+
+			sb.WriteString(line)
+		}
+		sb.WriteString("\033[36m" + bottomBorder + "\033[0m")
+	}
+
 	_, _ = fmt.Fprint(liveWriter, sb.String())
 	_ = liveWriter.Flush()
 }
