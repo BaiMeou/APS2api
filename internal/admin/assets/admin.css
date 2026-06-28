@@ -379,12 +379,15 @@ td code { background: rgba(0, 0, 0, .3); padding: 2px 9px; border-radius: 8px; f
   }
 
   /* ── 1. 代理节点页面卡片伪类标签（精准限制） ── */
-  #page-nodes td:nth-of-type(1) { padding-left: 0 !important; text-align: left !important; }
-  #page-nodes td:nth-of-type(1):before { content: "选择节点"; }
-  #page-nodes td:nth-of-type(2):before { content: "节点名称"; }
-  #page-nodes td:nth-of-type(3):before { content: "协议类型"; }
-  #page-nodes td:nth-of-type(4):before { content: "状态延迟"; }
-  #page-nodes td:nth-of-type(5):before { content: "管理操作"; }
+  #page-nodes td:nth-of-type(1):not([colspan]) { padding-left: 0 !important; text-align: left !important; }
+  #page-nodes td:nth-of-type(1):not([colspan]):before { content: "选择节点"; }
+  #page-nodes td:nth-of-type(2):not([colspan]):before { content: "节点名称"; }
+  #page-nodes td:nth-of-type(3):not([colspan]):before { content: "协议类型"; }
+  #page-nodes td:nth-of-type(4):not([colspan]):before { content: "状态延迟"; }
+  #page-nodes td:nth-of-type(5):not([colspan]):before { content: "管理操作"; }
+
+  /* 修复手机端无节点时暂无节点 td padding */
+  #page-nodes td[colspan="5"] { padding-left: 14px !important; text-align: center !important; }
 
   /* ── 2. 密钥页面卡片伪类标签（新增专属标签，杜绝借用代理页面标签） ── */
   #page-keys td:nth-of-type(1):before { content: "密钥名称"; }
