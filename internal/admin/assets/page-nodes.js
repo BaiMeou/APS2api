@@ -11,6 +11,17 @@ document.getElementById('nodesBody').addEventListener('click', function(e) {
 });
 
 async function loadNodes() {
+  try {
+    const sd = await API.settings.get();
+    if (typeof curSettings !== 'undefined') {
+      curSettings = sd.settings || sd;
+    }
+    const gpEl = document.getElementById('globalProxy');
+    if (gpEl && (sd.settings || sd).proxy_url !== undefined) {
+      gpEl.value = (sd.settings || sd).proxy_url;
+    }
+  } catch (e) {}
+
   const d = await API.nodes.list();
   const nodes = d.nodes || [];
 
