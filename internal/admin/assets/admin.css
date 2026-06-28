@@ -2,7 +2,10 @@
   --gold: #f0bd5c;
   --gold-deep: #e0a13c;
   --gold-soft: rgba(240, 189, 92, .15);
+  --gold-shadow1: rgba(224, 161, 60, .3);
+  --gold-shadow2: rgba(224, 161, 60, .42);
   --blue: #8fd0e8;
+  --blue-soft: rgba(120, 150, 190, .1);
   --green: #84d6a0;
   --red: #ec8a7c;
   --text: #f6f1e9;
@@ -17,7 +20,7 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; }
 body { font: 14px/1.55 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; color: var(--text); overflow: hidden; }
-::selection { background: rgba(240, 189, 92, .3); }
+::selection { background: var(--gold-soft); }
 a { color: var(--blue); text-decoration: none; }
 button { font: inherit; cursor: pointer; color: inherit; }
 input, select, textarea {
@@ -40,8 +43,8 @@ option { background: #1f1813; color: var(--text); }
 .bg-veil {
   position: fixed; inset: 0; z-index: -1; pointer-events: none;
   background:
-    radial-gradient(1200px 800px at 82% -6%, rgba(240, 180, 110, .16), transparent 55%),
-    radial-gradient(900px 700px at 10% 110%, rgba(120, 150, 190, .1), transparent 55%),
+    radial-gradient(1200px 800px at 82% -6%, var(--gold-soft), transparent 55%),
+    radial-gradient(900px 700px at 10% 110%, var(--blue-soft), transparent 55%),
     linear-gradient(180deg, rgba(20, 15, 11, .42), rgba(13, 10, 8, .62));
 }
 
@@ -53,9 +56,9 @@ option { background: #1f1813; color: var(--text); }
 .btn {
   background: linear-gradient(180deg, var(--gold), var(--gold-deep)); color: #2c1d08; border: none;
   border-radius: 11px; padding: 10px 18px; font-weight: 600; letter-spacing: .01em;
-  box-shadow: 0 6px 18px rgba(224, 161, 60, .3); transition: transform .18s var(--ease), filter .18s, box-shadow .18s;
+  box-shadow: 0 6px 18px var(--gold-shadow1); transition: transform .18s var(--ease), filter .18s, box-shadow .18s;
 }
-.btn:hover { filter: brightness(1.06); transform: translateY(-1.5px); box-shadow: 0 9px 24px rgba(224, 161, 60, .42); }
+.btn:hover { filter: brightness(1.06); transform: translateY(-1.5px); box-shadow: 0 9px 24px var(--gold-shadow2); }
 .btn:active { transform: translateY(0) scale(.99); }
 .btn.ghost { background: rgba(255, 255, 255, .06); color: var(--text-dim); box-shadow: none; border: 1px solid var(--stroke); }
 .btn.ghost:hover { color: var(--text); border-color: var(--gold); background: rgba(255, 255, 255, .11); transform: translateY(-1.5px); }

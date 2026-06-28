@@ -118,22 +118,51 @@ function applyThemeColorFromBg(bgValue) {
 
 function extractAndSetColors(ctx) {
   const data = ctx.getImageData(0, 0, 64, 64).data;
-  let r = 0, g = 0, b = 0, count = 0;
+  let sumR = 0, sumG = 0, sumB = 0, totalWeight = 0;
+  
   for (let i = 0; i < data.length; i += 16) {
-    r += data[i]; g += data[i+1]; b += data[i+2]; count++;
+    let r = data[i], g = data[i+1], b = data[i+2];
+    let [h, s, l] = rgbToHsl(r, g, b);
+    let weight = s * (1 - Math.abs(2 * l - 1));
+    weight = Math.max(weight, 0.02);
+    sumR += r * weight; sumG += g * weight; sumB += b * weight;
+    totalWeight += weight;
   }
-  if (count === 0) return;
-  r /= count; g /= count; b /= count;
+  
+  let r = 0, g = 0, b = 0;
+  if (totalWeight > 0) {
+    r = sumR / totalWeight; g = sumG / totalWeight; b = sumB / totalWeight;
+  }
+  
   let [h, s, l] = rgbToHsl(r, g, b);
   if (s < 0.25) s = 0.5; 
   if (l < 0.4) l = 0.6; 
   if (l > 0.7) l = 0.55; 
+  
   const c1 = hslToHex(h, s, l);
   const c2 = hslToHex(h, s, Math.max(l - 0.18, 0.25));
-  const c3 = `hsla(${Math.round(h*360)}, ${Math.round(s*100)}%, ${Math.round(l*100)}%, 0.15)`;
+  
+  const toRgbString = (hex) => {
+    let r = parseInt(hex.slice(1,3), 16);
+    let g = parseInt(hex.slice(3,5), 16);
+    let b = parseInt(hex.slice(5,7), 16);
+    return `${r}, ${g}, ${b}`;
+  };
+  
+  const rgb1 = toRgbString(c1);
+  const rgb2 = toRgbString(c2);
+  
   document.documentElement.style.setProperty("--gold", c1);
   document.documentElement.style.setProperty("--gold-deep", c2);
-  document.documentElement.style.setProperty("--gold-soft", c3);
+  document.documentElement.style.setProperty("--gold-soft", `rgba(${rgb1}, 0.15)`);
+  document.documentElement.style.setProperty("--gold-shadow1", `rgba(${rgb1}, 0.3)`);
+  document.documentElement.style.setProperty("--gold-shadow2", `rgba(${rgb1}, 0.42)`);
+  
+  // Create a complementary blueish color for the second veil based on the dominant hue
+  let blueH = (h + 0.5) % 1;
+  const cBlue = hslToHex(blueH, s, l);
+  const rgbBlue = toRgbString(cBlue);
+  document.documentElement.style.setProperty("--blue-soft", `rgba(${rgbBlue}, 0.1)`);
 }
 
 function rgbToHsl(r, g, b) {
