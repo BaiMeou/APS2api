@@ -6,13 +6,13 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/gosuri/uilive"
 )
 
+// ReqState 记录单个活跃请求的状态。
 type ReqState struct {
 	ID         string
 	Model      string
@@ -24,9 +24,8 @@ type ReqState struct {
 }
 
 const (
-	boxWidth      = 86 // 面板总宽度（不含两端边框）
-	boxInnerWidth = 84 // 面板内部可容纳的纯文本视觉列宽
-	maxLogs       = 10 // 日志窗口固定显示的行数
+	minTermWidth = 60  // 最小终端宽度
+	maxLogs      = 10  // 日志窗口固定显示的行数
 )
 
 var (
@@ -39,13 +38,9 @@ var (
 	//nolint:gochecknoglobals // Internal CLI state
 	osStdout = os.Stdout
 
-	// 环形日志缓冲区，存放最近 maxLogs 条日志
+	// 环形日志缓冲区，存放原始文本（渲染时动态换行）
 	//nolint:gochecknoglobals // Internal CLI state
 	logBuffer []string
-
-	// uilive 托管的 live 写入器
-	//nolint:gochecknoglobals // Internal CLI state
-	liveWriter *uilive.Writer
 
 	// 软件版本与平台常驻信息
 	//nolint:gochecknoglobals // Internal CLI state
@@ -59,9 +54,20 @@ var (
 	spinners = []rune(`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`)
 	//nolint:gochecknoglobals // Internal CLI state
 	spinnerIdx int
+
+	// 动态终端尺寸
+	//nolint:gochecknoglobals // Internal CLI state
+	terminalWidth int = 80
+
+	// 记录上一帧渲染的实际行数，用于精准擦除
+	//nolint:gochecknoglobals // Internal CLI state
+	lastHeight int
+
+	//nolint:gochecknoglobals // Internal CLI state
+	needsRedraw bool
 )
 
-// SetAppInfo 供 main.go 初始化时传入版本及编译属性
+// SetAppInfo 供 main.go 初始化时传入版本及编译属性。
 func SetAppInfo(ver, commit, bTime, goos, goarch string) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -69,30 +75,62 @@ func SetAppInfo(ver, commit, bTime, goos, goarch string) {
 	buildInfo = fmt.Sprintf("Build: %s / %s", commit, bTime)
 	platformInfo = fmt.Sprintf("Platform: %s/%s", goos, goarch)
 
-	// 存储格式化后的头部信息
-	logBuffer = append(logBuffer, truncateAndPad(fmt.Sprintf("[vproxy] 启动成功: Version=%s, Commit=%s, Built=%s", ver, commit, bTime), boxInnerWidth))
-	logBuffer = append(logBuffer, truncateAndPad(fmt.Sprintf("[vproxy] 运行平台: %s/%s", goos, goarch), boxInnerWidth))
+	logBuffer = append(logBuffer,
+		fmt.Sprintf("[vproxy] 启动成功: Version=%s, Commit=%s, Built=%s", ver, commit, bTime))
+	logBuffer = append(logBuffer,
+		fmt.Sprintf("[vproxy] 运行平台: %s/%s", goos, goarch))
 }
 
-// runeWidth 估算单个字符在终端中所占的视觉单元宽度（1 或 2）
+// getTerminalWidth 检测终端当前宽度，至少返回 minTermWidth。
+func getTerminalWidth() int {
+	if cols := os.Getenv("COLUMNS"); cols != "" {
+		if w, err := strconv.Atoi(cols); err == nil && w > 0 {
+			if w < minTermWidth {
+				return minTermWidth
+			}
+			return w
+		}
+	}
+	if w := getTerminalWidthOS(); w > 0 {
+		if w < minTermWidth {
+			return minTermWidth
+		}
+		return w
+	}
+	return minTermWidth
+}
+
+// boxWidth 返回外层边框的总目标宽度。
+func boxWidth() int { return terminalWidth }
+
+// boxInnerWidth 返回边框内部可填充文本的净宽度。
+func boxInnerWidth() int {
+	w := terminalWidth - 4
+	if w < minTermWidth-4 {
+		w = minTermWidth - 4
+	}
+	return w
+}
+
+// ─── 字符宽度计算 ───
+
 func runeWidth(r rune) int {
-	if r >= 0x1100 && ((r >= 0x1100 && r <= 0x115F) || // Hangul Jamo
-		(r >= 0x2E80 && r <= 0xA4CF && r != 0x303F) || // CJK 汉字区
-		(r >= 0xAC00 && r <= 0xD7A3) || // Hangul 拼音
-		(r >= 0xF900 && r <= 0xFAFF) || // CJK 兼容
-		(r >= 0xFE10 && r <= 0xFE19) || // 竖排
-		(r >= 0xFE30 && r <= 0xFE6F) || // CJK 兼容表单
-		(r >= 0xFF00 && r <= 0xFF60) || // 全角字符
-		(r >= 0xFFE0 && r <= 0xFFE6) || // 全角符号
-		(r >= 0x1F000 && r <= 0x1F9FF) || // 现代 Emoji
-		(r >= 0x20000 && r <= 0x2FA1F) || // 扩展 CJK
-		(r >= 0x2600 && r <= 0x27BF)) { // 经典杂项符号（如 ⚡, 💬）
+	if r >= 0x1100 && ((r >= 0x1100 && r <= 0x115F) ||
+		(r >= 0x2E80 && r <= 0xA4CF && r != 0x303F) ||
+		(r >= 0xAC00 && r <= 0xD7A3) ||
+		(r >= 0xF900 && r <= 0xFAFF) ||
+		(r >= 0xFE10 && r <= 0xFE19) ||
+		(r >= 0xFE30 && r <= 0xFE6F) ||
+		(r >= 0xFF00 && r <= 0xFF60) ||
+		(r >= 0xFFE0 && r <= 0xFFE6) ||
+		(r >= 0x1F000 && r <= 0x1F9FF) ||
+		(r >= 0x20000 && r <= 0x2FA1F) ||
+		(r >= 0x2600 && r <= 0x27BF)) {
 		return 2
 	}
 	return 1
 }
 
-// stringWidth 计算整条字符串在终端中的实际视觉占用宽度
 func stringWidth(s string) int {
 	w := 0
 	for _, r := range s {
@@ -101,46 +139,105 @@ func stringWidth(s string) int {
 	return w
 }
 
-// truncateAndPad 精准控制字符串在终端中占用的视觉列数（超出截断，不足补齐）
-func truncateAndPad(s string, maxCol int) string {
+func padOrTrunc(s string, maxCol int) string {
 	w := stringWidth(s)
 	if w <= maxCol {
 		return s + strings.Repeat(" ", maxCol-w)
 	}
-
+	if maxCol <= 2 {
+		return ".."
+	}
 	var sb strings.Builder
-	curCol := 0
+	cur := 0
 	for _, r := range s {
 		rw := runeWidth(r)
-		if curCol+rw > maxCol-2 {
+		if cur+rw > maxCol-2 {
 			break
 		}
 		sb.WriteRune(r)
-		curCol += rw
+		cur += rw
 	}
 	sb.WriteString("..")
-	curCol += 2
-
-	if curCol < maxCol {
-		sb.WriteString(strings.Repeat(" ", maxCol-curCol))
+	cur += 2
+	if cur < maxCol {
+		sb.WriteString(strings.Repeat(" ", maxCol-cur))
 	}
 	return sb.String()
 }
 
-// logInterceptor 拦截器：劫持标准 log 输出
+func wordWrap(text string, maxCol int) []string {
+	if maxCol <= 0 {
+		return []string{text}
+	}
+	if stringWidth(text) <= maxCol {
+		return []string{text + strings.Repeat(" ", maxCol-stringWidth(text))}
+	}
+
+	var lines []string
+	var cur strings.Builder
+	curW := 0
+	runes := []rune(text)
+	i := 0
+	for i < len(runes) {
+		r := runes[i]
+		rw := runeWidth(r)
+
+		if r == ' ' && curW > 0 {
+			nextW := 0
+			j := i + 1
+			for j < len(runes) && runes[j] != ' ' {
+				nextW += runeWidth(runes[j])
+				j++
+			}
+			if curW+1+nextW > maxCol {
+				lines = append(lines, cur.String()+strings.Repeat(" ", maxCol-curW))
+				cur.Reset()
+				curW = 0
+				i++
+				continue
+			}
+		}
+
+		if curW+rw > maxCol {
+			lines = append(lines, cur.String()+strings.Repeat(" ", maxCol-curW))
+			cur.Reset()
+			curW = 0
+		}
+
+		cur.WriteRune(r)
+		curW += rw
+		i++
+	}
+
+	if cur.Len() > 0 {
+		lines = append(lines, cur.String()+strings.Repeat(" ", maxCol-curW))
+	}
+	if len(lines) == 0 {
+		lines = []string{strings.Repeat(" ", maxCol)}
+	}
+	return lines
+}
+
+func dashBar(w int) string {
+	if w <= 0 {
+		return ""
+	}
+	return strings.Repeat("─", w)
+}
+
+// ─── 日志拦截 ───
+
 type logInterceptor struct{}
 
 func (logInterceptor) Write(p []byte) (int, error) {
 	if enabled {
 		addLogLine(string(p))
 	} else {
-		// 非 TTY (Docker/Systemd) 自动回退，向标准错误直接输出，防止吞日志
 		_, _ = os.Stderr.Write(p)
 	}
 	return len(p), nil
 }
 
-// addLogLine 将新日志 line 写入环形队列
 func addLogLine(text string) {
 	lines := strings.Split(text, "\n")
 	mu.Lock()
@@ -149,10 +246,9 @@ func addLogLine(text string) {
 		if line == "" {
 			continue
 		}
-		lineVal := truncateAndPad(line, boxInnerWidth)
-		logBuffer = append(logBuffer, lineVal)
+		logBuffer = append(logBuffer, line)
 	}
-	for len(logBuffer) > maxLogs {
+	for len(logBuffer) > maxLogs*3 {
 		logBuffer = logBuffer[1:]
 	}
 	mu.Unlock()
@@ -164,23 +260,38 @@ func addLogLine(text string) {
 	}
 }
 
-// InitTracker 初始化 uilive 状态面板与日志拦截器
+// ─── 公共 API ───
+
 func InitTracker() {
 	fileInfo, err := osStdout.Stat()
 	if err == nil && (fileInfo.Mode()&os.ModeCharDevice) != 0 {
 		enabled = true
-
-		liveWriter = uilive.New()
-		liveWriter.Start()
+		terminalWidth = getTerminalWidth()
+		needsRedraw = true
 
 		log.SetOutput(logInterceptor{})
 
+		onResizeOS(func() {
+			mu.Lock()
+			newW := getTerminalWidth()
+			if newW != terminalWidth {
+				terminalWidth = newW
+				needsRedraw = true
+			}
+			mu.Unlock()
+		})
+
 		go func() {
 			ticker := time.NewTicker(120 * time.Millisecond)
+			defer ticker.Stop()
 			for range ticker.C {
 				mu.Lock()
 				spinnerIdx = (spinnerIdx + 1) % len(spinners)
-				if len(activeReqs) > 0 {
+				if envW := getTerminalWidth(); envW != terminalWidth {
+					terminalWidth = envW
+					needsRedraw = true
+				}
+				if needsRedraw || len(activeReqs) > 0 {
 					drawTUI()
 				}
 				mu.Unlock()
@@ -196,7 +307,7 @@ func StartReq(id string) {
 		ID:        id,
 		Model:     "连接中...",
 		State:     "🔗 连接中",
-		Color:     "\033[90m", // 灰色
+		Color:     "\033[90m",
 		StartTime: time.Now(),
 	}
 	if enabled {
@@ -241,46 +352,70 @@ func FinishReq(id string) {
 	}
 }
 
-// drawTUI 构建并向 uilive.Writer 刷入面板内容
+// ─── 渲染核心 ───
+
 func drawTUI() {
+	needsRedraw = false
+
+	bw := boxWidth()
+	biw := boxInnerWidth()
+
 	var sb strings.Builder
-	bottomBorder := "╰" + strings.Repeat("─", boxWidth) + "╯\n"
 
-	// 1. ─── 绘制常驻版权与安全防诈声明（已统一采用单线圆角风格，修复视觉错位） ───
-	headerPrefix := "╭── 📢 Vertex AI Proxy "
-	headerPrefixWidth := stringWidth(headerPrefix)
-	headerDashes := boxWidth + 1 - headerPrefixWidth
-	sb.WriteString("\n\033[33m" + headerPrefix + strings.Repeat("─", headerDashes) + "╮\033[0m\n")
-
-	line1 := fmt.Sprintf("Version: %s | %s", appVersion, platformInfo)
-	sb.WriteString(fmt.Sprintf("\033[33m│\033[0m %s \033[33m│\033[0m\n", truncateAndPad(line1, boxInnerWidth)))
-
-	line2 := buildInfo
-	sb.WriteString(fmt.Sprintf("\033[33m│\033[0m %s \033[33m│\033[0m\n", truncateAndPad(line2, boxInnerWidth)))
-
-	line3 := "⚠️  警告：本软件完全免费！如果你是付费购买的，你被骗了，请退款。"
-	sb.WriteString(fmt.Sprintf("\033[33m│\033[0m \033[31m%s\033[0m \033[33m│\033[0m\n", truncateAndPad(line3, boxInnerWidth)))
-
-	sb.WriteString("\033[33m" + bottomBorder + "\033[0m")
-
-	// 2. ─── 绘制日志沙盒窗口 (Recent Logs Window) ───
-	logPrefix := "╭── 📝 最近系统日志 "
-	logPrefixWidth := stringWidth(logPrefix)
-	logDashes := boxWidth + 1 - logPrefixWidth
-	sb.WriteString("\033[36m" + logPrefix + strings.Repeat("─", logDashes) + "╮\033[0m\n")
-
-	for i := 0; i < maxLogs; i++ {
-		var line string
-		if i < len(logBuffer) {
-			line = logBuffer[i]
-		} else {
-			line = strings.Repeat(" ", boxInnerWidth)
-		}
-		sb.WriteString(fmt.Sprintf("\033[36m│\033[0m %s \033[36m│\033[0m\n", line))
+	// 底边生成函数：确保总长度严格等于 bw
+	bottomBorder := func() string {
+		return "╰" + dashBar(bw-2) + "╯\n"
 	}
-	sb.WriteString("\033[36m" + bottomBorder + "\033[0m")
 
-	// 3. ─── 绘制请求追踪面板 (Active Requests) ───
+	// ── 1. 版权/版本面板 (黄色框) ──
+	{
+		prefix := "╭── 📢 Vertex AI Proxy "
+		pw := stringWidth(prefix)
+		d := bw - pw - 1 // 减去最后的 "╮"
+		if d < 0 {
+			d = 0
+		}
+		sb.WriteString(fmt.Sprintf("\033[33m%s%s╮\033[0m\n", prefix, dashBar(d)))
+
+		line1 := fmt.Sprintf("Version: %s | %s", appVersion, platformInfo)
+		sb.WriteString(fmt.Sprintf("\033[33m│\033[0m %s \033[33m│\033[0m\n", padOrTrunc(line1, biw)))
+		sb.WriteString(fmt.Sprintf("\033[33m│\033[0m %s \033[33m│\033[0m\n", padOrTrunc(buildInfo, biw)))
+
+		warn := "⚠️  本软件完全免费！付费即被骗，请退款。"
+		sb.WriteString(fmt.Sprintf("\033[33m│\033[0m \033[31m%s\033[0m \033[33m│\033[0m\n", padOrTrunc(warn, biw)))
+
+		sb.WriteString("\033[33m" + bottomBorder() + "\033[0m")
+	}
+
+	// ── 2. 最近系统日志 (蓝色框) ──
+	{
+		prefix := "╭── 📝 最近系统日志 "
+		pw := stringWidth(prefix)
+		d := bw - pw - 1
+		if d < 0 {
+			d = 0
+		}
+		sb.WriteString(fmt.Sprintf("\033[36m%s%s╮\033[0m\n", prefix, dashBar(d)))
+
+		var visualLines []string
+		for i := len(logBuffer) - 1; i >= 0 && len(visualLines) < maxLogs*5; i-- {
+			wrapped := wordWrap(logBuffer[i], biw)
+			visualLines = append(wrapped, visualLines...)
+		}
+		if len(visualLines) > maxLogs {
+			visualLines = visualLines[len(visualLines)-maxLogs:]
+		}
+		for i := 0; i < maxLogs; i++ {
+			if i < len(visualLines) {
+				sb.WriteString(fmt.Sprintf("\033[36m│\033[0m %s \033[36m│\033[0m\n", visualLines[i]))
+			} else {
+				sb.WriteString(fmt.Sprintf("\033[36m│\033[0m %s \033[36m│\033[0m\n", strings.Repeat(" ", biw)))
+			}
+		}
+		sb.WriteString("\033[36m" + bottomBorder() + "\033[0m")
+	}
+
+	// ── 3. 请求追踪器 (青色框) ──
 	if len(activeReqs) > 0 {
 		var reqs []*ReqState
 		for _, r := range activeReqs {
@@ -290,18 +425,51 @@ func drawTUI() {
 			return reqs[i].StartTime.Before(reqs[j].StartTime)
 		})
 
-		reqPrefix := "╭── 🚀 请求追踪器 "
-		reqPrefixWidth := stringWidth(reqPrefix)
-		reqDashes := boxWidth + 1 - reqPrefixWidth
-		sb.WriteString("\033[36m" + reqPrefix + strings.Repeat("─", reqDashes) + "╮\033[0m\n")
-		sb.WriteString("\033[36m│\033[0m ID       \033[36m│\033[0m Model              \033[36m│\033[0m State        \033[36m│\033[0m Time  \033[36m│\033[0m Details                   \033[36m│\033[0m\n")
-		sb.WriteString("\033[36m├──────────┼────────────────────┼──────────────┼───────┼───────────────────────────┤\033[0m\n")
+		prefix := "╭── 🚀 请求追踪器 "
+		pw := stringWidth(prefix)
+		d := bw - pw - 1
+		if d < 0 {
+			d = 0
+		}
+		sb.WriteString(fmt.Sprintf("\033[36m%s%s╮\033[0m\n", prefix, dashBar(d)))
+
+		// 字符间距计算：表头包含 6 个边框字符和 10 个内边距空格，总计 16 像素固定开销
+		const separatorOverhead = 16
+		totalColsWidth := bw - separatorOverhead
+
+		idW := 8
+		timeW := 6
+		remaining := totalColsWidth - idW - timeW
+		if remaining < 20 {
+			remaining = 20
+		}
+		modelW := remaining * 25 / 100
+		if modelW < 8 {
+			modelW = 8
+		}
+		stateW := remaining * 20 / 100
+		if stateW < 6 {
+			stateW = 6
+		}
+		detailW := remaining - modelW - stateW
+		if detailW < 6 {
+			detailW = 6
+		}
+
+		// 表头 (每列左右两侧必须带 1 个空格边距)
+		sb.WriteString(fmt.Sprintf("\033[36m│\033[0m %-*s \033[36m│\033[0m %-*s \033[36m│\033[0m %-*s \033[36m│\033[0m %-*s \033[36m│\033[0m %-*s \033[36m│\033[0m\n",
+			idW, "ID", modelW, "Model", stateW, "State", timeW, "Time", detailW, "Details"))
+
+		// 分隔线：宽度加上两边的内边距空格(各+2)从而保持对齐
+		sep := fmt.Sprintf("\033[36m├%s┼%s┼%s┼%s┼%s┤\033[0m\n",
+			dashBar(idW+2), dashBar(modelW+2), dashBar(stateW+2), dashBar(timeW+2), dashBar(detailW+2))
+		sb.WriteString(sep)
 
 		for _, r := range reqs {
 			elapsed := time.Since(r.StartTime).Seconds()
-			id := r.ID
-			if len(id) > 6 {
-				id = id[:6]
+			idVal := r.ID
+			if len(idVal) > idW-2 {
+				idVal = idVal[:idW-2]
 			}
 
 			detailStr := r.Detail
@@ -312,19 +480,31 @@ func drawTUI() {
 				}
 			}
 
-			idVal := truncateAndPad(id, 6)
-			modelVal := truncateAndPad(r.Model, 18)
-			stateVal := truncateAndPad(r.State, 12)
-			detailVal := truncateAndPad(detailStr, 25)
+			idCol := padOrTrunc(idVal, idW-2)
+			modelCol := padOrTrunc(r.Model, modelW)
+			stateCol := padOrTrunc(r.State, stateW)
+			timeCol := fmt.Sprintf("%4.1fs", elapsed)
+			timeCol = padOrTrunc(timeCol, timeW)
+			detailCol := padOrTrunc(detailStr, detailW)
 
-			line := fmt.Sprintf("\033[36m│\033[0m \033[36m%c\033[0m %s \033[36m│\033[0m %s \033[36m│\033[0m %s%s\033[0m \033[36m│\033[0m %4.1fs \033[36m│\033[0m \033[90m%s\033[0m \033[36m│\033[0m\n",
-				spinners[spinnerIdx], idVal, modelVal, r.Color, stateVal, elapsed, detailVal)
-
-			sb.WriteString(line)
+			sb.WriteString(fmt.Sprintf(
+				"\033[36m│\033[0m \033[36m%c\033[0m %s \033[36m│\033[0m %s \033[36m│\033[0m %s%s\033[0m \033[36m│\033[0m %s \033[36m│\033[0m \033[90m%s\033[0m \033[36m│\033[0m\n",
+				spinners[spinnerIdx], idCol, modelCol, r.Color, stateCol, timeCol, detailCol,
+			))
 		}
-		sb.WriteString("\033[36m" + bottomBorder + "\033[0m")
+		sb.WriteString("\033[36m" + bottomBorder() + "\033[0m")
 	}
 
-	_, _ = fmt.Fprint(liveWriter, sb.String())
-	_ = liveWriter.Flush()
+	tuiContent := sb.String()
+	newHeight := strings.Count(tuiContent, "\n")
+
+	// ─── 使用原生底层 ANSI 擦除上一帧并重绘 ───
+	if lastHeight > 0 {
+		// \033[%dF 向上移动 N 行至行首
+		// \033[J 清除当前光标到屏幕末尾的所有字符（完美根治重影）
+		_, _ = fmt.Fprintf(osStdout, "\033[%dF\033[J", lastHeight)
+	}
+	_, _ = fmt.Fprint(osStdout, tuiContent)
+
+	lastHeight = newHeight
 }
