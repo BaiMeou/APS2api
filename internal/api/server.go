@@ -595,6 +595,12 @@ func (s *Server) withAPIKey(next http.Handler) http.Handler {
 			}})
 			return
 		}
+		if key == "sk-your-key-here" {
+			s.writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]any{
+				"code": 401, "message": "示例密钥禁止调用，请新建密钥。", "status": "UNAUTHENTICATED",
+			}})
+			return
+		}
 		if !s.keys.ValidateKey(key) {
 			s.writeJSON(w, http.StatusUnauthorized, map[string]any{"error": map[string]any{
 				"code": 401, "message": "API 密钥无效 (invalid API key)", "status": "UNAUTHENTICATED",

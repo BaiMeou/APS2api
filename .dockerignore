@@ -16,6 +16,9 @@ config/config.json
 config/api_keys.txt
 config/nodes.json
 config/node_health.json
+config/data.db
+config/data.db-shm
+config/data.db-wal
 
 # 排除本地运行产生日志
 logs/

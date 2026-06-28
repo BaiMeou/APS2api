@@ -16,14 +16,17 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
 
 	"github.com/bsfdsagfadg/vertex/internal/api"
 	"github.com/bsfdsagfadg/vertex/internal/config"
+	"github.com/bsfdsagfadg/vertex/internal/db"
 	"github.com/bsfdsagfadg/vertex/internal/metrics"
 	"github.com/bsfdsagfadg/vertex/internal/nodes"
 	"github.com/bsfdsagfadg/vertex/internal/spool"
@@ -51,7 +54,13 @@ const (
 // rulesHash 是当前内嵌 rules.txt 内容的 SHA256（前 16 位十六进制）。
 // rules.txt 一旦变动，hash 就变 → 用户必须重新同意（裸机交互或 Docker 重写文件）。
 func rulesHash() string {
-	sum := sha256.Sum256([]byte(rulesText))
+	cleanText := strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, rulesText)
+	sum := sha256.Sum256([]byte(cleanText))
 	return hex.EncodeToString(sum[:])[:16]
 }
 
@@ -154,6 +163,11 @@ func main() {
 	}
 
 	cfg := config.Load()
+	if err := db.InitDB(filepath.Join(config.ConfigDir(), "data.db")); err != nil {
+		log.Fatalf("[vproxy] failed to init database: %v", err)
+	}
+	defer db.CloseDB()
+
 	metrics.Default.SetStart(time.Now().Unix())
 	spool.SetMaxSpillBytes(int64(cfg.MaxSpillMB) << 20)
 

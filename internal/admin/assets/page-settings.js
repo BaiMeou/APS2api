@@ -2,7 +2,7 @@ const SETTINGS_FIELDS = [
   // 🚀 Group: pool (并发与 Token 池管理)
   { k: 'parallel_pool_enabled', label: '并发请求池', type: 'bool', group: 'pool', desc: '同时请求多个健康节点，首包到达即采纳，降低延迟' },
   { k: 'sticky_pool_enabled', label: '粘性节点池', type: 'bool', group: 'pool', desc: '竞速成功后缓存可靠节点，优先复用减少配额浪费。需启用并发请求池' },
-  { k: 'parallel_pool_size', label: '并发数', type: 'number', group: 'pool', desc: '并发抢跑的节点数 (默认 4)' },
+  { k: 'parallel_pool_size', label: '并发数', type: 'number', max: 20, min: 1, group: 'pool', desc: '并发抢跑的节点数 (默认 15，最大 20)' },
   { k: 'parallel_pool_delay_dynamic', label: '动态对冲延迟', type: 'bool', group: 'pool', desc: '根据节点平均响应时间动态调整并发启动间隔，平衡延迟与流量消耗' },
   { k: 'parallel_pool_delay_ms', label: '固定对冲延迟时间 (毫秒)', type: 'number', group: 'pool', desc: '当禁用动态延迟时，以此固定间隔对冲触发后续备份通道 (默认 500ms)' },
 
@@ -20,26 +20,6 @@ const SETTINGS_FIELDS = [
   { k: 'drop_max_tokens', label: '移除 maxOutputTokens', type: 'bool', group: 'security', desc: '移除输出 token 上限，让模型自由输出' },
 ];
 
-const TELEMETRY_INFO = `
-<div class="card glass" style="margin-bottom:14px;padding:18px;border-left:3px solid #3b82f6">
-  <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap">
-    <div style="flex:1;min-width:240px">
-      <div style="font-size:1rem;font-weight:600;margin-bottom:6px">📡 匿名遥测</div>
-      <div class="desc" style="line-height:1.6">
-        本软件会向作者发送匿名心跳，<b>仅含运行环境信息</b>（版本、平台、CPU、内存、时区等），
-        用于了解版本分布和活跃情况。
-        <b>不收集</b>任何 IP、API 密钥、对话内容、文件路径等敏感数据。
-        服务端被动接收，不会向你的程序下发任何指令。
-        <a href="https://stat.baimeow.icu" target="_blank" style="color:#60a5fa">查看公开统计 →</a>
-      </div>
-    </div>
-    <label class="toggle" style="flex-shrink:0">
-      <input type="checkbox" id="set_telemetry_enabled">
-      <span class="track"></span>
-    </label>
-  </div>
-</div>`;
-
 let curSettings = {};
 async function loadSettings() {
   const d = await API.settings.get(); curSettings = d.settings || d;
@@ -49,7 +29,7 @@ async function loadSettings() {
     if (f.type === 'bool') return `<div class="field bool"><div class="min-w-0"><label for="set_${f.k}">${f.label}</label>${f.desc?`<div class="desc mt-4px">${f.desc}</div>`:''}</div><label class="toggle"><input type="checkbox" id="set_${f.k}" ${v?'checked':''}><span class="track"></span></label></div>`;
     let input;
     if (f.type === 'select') input = `<select id="set_${f.k}">${f.opts.map(o => `<option ${o===v?'selected':''}>${o}</option>`).join('')}</select>`;
-    else input = `<input type="${f.type}" id="set_${f.k}" value="${v ?? ''}">`;
+    else input = `<input type="${f.type}" id="set_${f.k}" value="${v ?? ''}" ${f.max !== undefined ? `max="${f.max}"` : ''} ${f.min !== undefined ? `min="${f.min}"` : ''}>`;
     return `<div class="field"><label for="set_${f.k}">${f.label}</label>${input}${f.desc?`<div class="desc">${f.desc}</div>`:''}</div>`;
   };
 
@@ -79,12 +59,8 @@ async function loadSettings() {
   }
 
   $('#settingsForm').innerHTML =
-    TELEMETRY_INFO +
     sectionsHtml +
     '<button class="btn mt-14px" onclick="saveSettings()">保存设置</button>';
-  
-  const telEnabled = curSettings.telemetry_enabled !== false;
-  $('#set_telemetry_enabled').checked = telEnabled;
 
   const stickyEl = $('#set_sticky_pool_enabled');
   const parallelEl = $('#set_parallel_pool_enabled');
@@ -118,7 +94,9 @@ async function saveSettings() {
     else if (f.type === 'number') out[f.k] = parseInt(el.value || '0', 10); 
     else out[f.k] = el.value; 
   }
-  const telEl = $('#set_telemetry_enabled');
-  if (telEl) out['telemetry_enabled'] = telEl.checked;
+  // Keep sending whatever telemetry_enabled is in curSettings to prevent config loss/errors
+  if (curSettings.telemetry_enabled !== undefined) {
+    out['telemetry_enabled'] = curSettings.telemetry_enabled;
+  }
   await API.settings.put(out); toast('设置已保存');
 }
