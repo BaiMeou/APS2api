@@ -321,6 +321,9 @@ function extractAndSetColors(ctx) {
       document.documentElement.style.setProperty('--text-custom', '#f6f1e9');
       document.documentElement.style.setProperty('--text-dim-custom', 'rgba(246, 241, 233, 0.7)');
     }
+  } else if (currentAppearanceSettings.font_color) {
+    document.documentElement.style.setProperty('--text-custom', currentAppearanceSettings.font_color);
+    document.documentElement.style.setProperty('--text-dim-custom', currentAppearanceSettings.font_color + 'b3');
   }
 
   document.documentElement.style.setProperty("--gold-shadow1", `rgba(${rgb1}, 0.3)`);

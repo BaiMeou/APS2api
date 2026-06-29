@@ -304,6 +304,12 @@ func InitTracker(fileLogger io.Writer) {
 				mu.Unlock()
 			}
 		}()
+	} else {
+		// Non-TTY environment (e.g. Docker without -it), TUI is disabled.
+		// We still need to write logs to both os.Stderr and the fileLogger.
+		if fileLogger != nil {
+			log.SetOutput(io.MultiWriter(os.Stderr, fileLogger))
+		}
 	}
 }
 
