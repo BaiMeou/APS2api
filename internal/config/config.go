@@ -57,6 +57,10 @@ type AppConfig struct { //nolint:govet
 
 	// 外观配置
 	BackgroundImage string `json:"background_image"`
+	FontSize        string `json:"font_size"`
+	FontColorType   string   `json:"font_color_type"`
+	FontColor       string   `json:"font_color"`
+	CustomBgPresets []string `json:"custom_bg_presets"`
 }
 
 func DefaultConfig() AppConfig {
@@ -78,6 +82,10 @@ func DefaultConfig() AppConfig {
 		ParallelPoolDelayMs:       2500,  // 固定对冲间隔设为 2500ms（2.5秒），单节点撞墙后触发接力
 		RecaptchaExpireSeconds:    60,
 		BackgroundImage:           "url('background.jpg')",
+		FontSize:                  "14px",
+		FontColorType:             "adaptive",
+		FontColor:                 "#f6f1e9",
+		CustomBgPresets:           []string{},
 	}
 }
 
