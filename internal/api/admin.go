@@ -247,6 +247,9 @@ func (s *Server) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 	case "/upload-bg":
 		s.adminUploadBg(w, r)
 		return
+	case "/delete-bg":
+		s.adminDeleteBg(w, r)
+		return
 	case "/list-bgs":
 		if r.Method != http.MethodGet {
 			s.adminMethodNotAllowed(w)
@@ -272,6 +275,12 @@ func (s *Server) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
 		s.adminGetStats(w, r)
 	case "/stats/reset":
 		s.adminResetStats(w, r)
+	case "/log":
+		if r.Method != http.MethodGet {
+			s.adminMethodNotAllowed(w)
+			return
+		}
+		s.adminGetLog(w, r)
 	case "/history":
 		s.adminGetHistory(w, r)
 	case "/keys":
@@ -359,8 +368,12 @@ func (s *Server) adminCheckAuth(w http.ResponseWriter, r *http.Request) {
 	authenticated := requireAdmin(r)
 	cfg := config.Load()
 	s.writeJSON(w, http.StatusOK, map[string]any{
-		"authenticated":    authenticated,
-		"background_image": cfg.BackgroundImage,
+		"authenticated":     authenticated,
+		"background_image":  cfg.BackgroundImage,
+		"font_size":         cfg.FontSize,
+		"font_color_type":   cfg.FontColorType,
+		"font_color":        cfg.FontColor,
+		"custom_bg_presets": cfg.CustomBgPresets,
 	})
 }
 
@@ -393,6 +406,10 @@ func (s *Server) adminGetSettings(w http.ResponseWriter, _ *http.Request) {
 		"sticky_pool_enabled":         cfg.StickyPoolEnabled,
 		"parallel_pool_retry_enabled": cfg.ParallelPoolRetryEnabled,
 		"background_image":            cfg.BackgroundImage,
+		"font_size":                   cfg.FontSize,
+		"font_color_type":             cfg.FontColorType,
+		"font_color":                  cfg.FontColor,
+		"custom_bg_presets":           cfg.CustomBgPresets,
 	}})
 }
 
@@ -413,6 +430,10 @@ var adminAllowedSettings = map[string]bool{
 	"sticky_pool_enabled":         true,
 	"parallel_pool_retry_enabled": true,
 	"background_image":            true,
+	"font_size":                   true,
+	"font_color_type":             true,
+	"font_color":                  true,
+	"custom_bg_presets":           true,
 }
 
 // adminPutSettings 处理 PUT /api/admin/settings：合并 {settings:{...}} 写回 config.json 并清缓存。
@@ -728,6 +749,34 @@ func (s *Server) adminUploadBg(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true, "url": bgURL})
 }
 
+func (s *Server) adminDeleteBg(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete && r.Method != http.MethodPost {
+		s.adminMethodNotAllowed(w)
+		return
+	}
+	var body struct {
+		Filename string `json:"filename"`
+	}
+	if !s.decodeAdminBody(w, r, &body) {
+		return
+	}
+	if body.Filename == "" || strings.Contains(body.Filename, "/") || strings.Contains(body.Filename, "\\") {
+		s.writeJSON(w, http.StatusBadRequest, adminErr("文件名无效"))
+		return
+	}
+	if !strings.HasPrefix(body.Filename, "background") {
+		s.writeJSON(w, http.StatusForbidden, adminErr("无权删除该文件"))
+		return
+	}
+
+	assetsDir := filepath.Join(filepath.Dir(config.ConfigDir()), "assets")
+	targetPath := filepath.Join(assetsDir, body.Filename)
+	if err := os.Remove(targetPath); err != nil && !os.IsNotExist(err) {
+		s.writeJSON(w, http.StatusInternalServerError, adminErr("删除文件失败"))
+		return
+	}
+	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
 
 func (s *Server) adminListBgs(w http.ResponseWriter, r *http.Request) {
 	assetsDir := filepath.Join(filepath.Dir(config.ConfigDir()), "assets")
@@ -744,4 +793,32 @@ func (s *Server) adminListBgs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true, "files": bgs})
+}
+
+// adminGetLog 处理 GET /api/admin/log：读取最新的日志文件并返回。
+func (s *Server) adminGetLog(w http.ResponseWriter, r *http.Request) {
+	logPath := filepath.Join(filepath.Dir(config.ConfigDir()), "logs", "logs_latest.log")
+
+	// Check if file exists, if not, try to fall back to current directory logs
+	if _, err := os.Stat(logPath); os.IsNotExist(err) {
+		logPath = "logs/logs_latest.log"
+	}
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			s.writeJSON(w, http.StatusOK, map[string]any{"ok": true, "content": ""})
+			return
+		}
+		s.writeJSON(w, http.StatusInternalServerError, adminErr("无法读取日志文件 (read error)"))
+		return
+	}
+
+	// 限制返回大小，避免日志过大撑爆内存或前端
+	const maxLogSize = 200 * 1024
+	if len(data) > maxLogSize {
+		data = data[len(data)-maxLogSize:]
+	}
+
+	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true, "content": string(data)})
 }
