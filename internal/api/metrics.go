@@ -10,10 +10,7 @@ import (
 	"github.com/bsfdsagfadg/vertex/internal/spool"
 )
 
-// metricsBody 返回服务的实时状态，供 /metrics 与管理后台 stats 做存活探测。
-func (s *Server) metricsBody() map[string]any {
-	snap := s.metrics.Snapshot()
-
+func metricsBody() map[string]any {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
@@ -25,16 +22,6 @@ func (s *Server) metricsBody() map[string]any {
 			"num_gc":     m.NumGC,
 			"goroutines": runtime.NumGoroutine(),
 			"spilled_mb": bToMb(uint64(spool.SpilledBytes())),
-		},
-		"requests": map[string]any{
-			"total":          snap.Total,
-			"success":        snap.Success,
-			"fail":           snap.Fail,
-			"active":         snap.Active,
-			"success_rate":   snap.SuccessRate,
-			"upstream_429":   snap.Upstream429,
-			"upstream_empty": snap.UpstreamEmpty,
-			"upstream_auth":  snap.UpstreamAuth,
 		},
 	}
 }

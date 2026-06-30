@@ -8,8 +8,6 @@ import (
 	"context"
 	"encoding/base64"
 	"strings"
-
-	"github.com/bsfdsagfadg/vertex/internal/config"
 )
 
 // ImageData 是一张抽出的图片（base64 + mime）。
@@ -26,7 +24,7 @@ type AudioData struct {
 
 // CompleteChatImage 走标准非流式请求，再从响应抽取图片数据。
 func (c *VertexAIClient) CompleteChatImage(ctx context.Context, model string, geminiPayload map[string]any) ([]ImageData, error) {
-	result, err := RunParallel(ctx, config.Load(), func(ctx context.Context, proxyURI string) (map[string]any, error) {
+	result, err := RunParallel(ctx, c.cfg, func(ctx context.Context, proxyURI string) (map[string]any, error) {
 		return c.completeInner(ctx, model, geminiPayload, proxyURI)
 	})
 	if err != nil {
@@ -37,7 +35,7 @@ func (c *VertexAIClient) CompleteChatImage(ctx context.Context, model string, ge
 
 // CompleteChatAudio 走标准非流式请求，再从响应抽取（拼接）音频数据。
 func (c *VertexAIClient) CompleteChatAudio(ctx context.Context, model string, geminiPayload map[string]any) (AudioData, error) {
-	result, err := RunParallel(ctx, config.Load(), func(ctx context.Context, proxyURI string) (map[string]any, error) {
+	result, err := RunParallel(ctx, c.cfg, func(ctx context.Context, proxyURI string) (map[string]any, error) {
 		return c.completeInner(ctx, model, geminiPayload, proxyURI)
 	})
 	if err != nil {

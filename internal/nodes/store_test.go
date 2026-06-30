@@ -84,7 +84,7 @@ func TestNodesLifecycle(t *testing.T) {
 	}
 
 	// Test SelectForParallel (uri1 is disabled, should only return uri2 if available)
-	selected := SelectForParallel(2)
+	selected := SelectForParallel(2, 80, false, false)
 	if len(selected) != 1 || selected[0].RawURI != "uri2" {
 		t.Errorf("Expected only uri2 to be selected, got %v", selected)
 	}
@@ -187,6 +187,47 @@ func TestUpdateNodeTestResult(t *testing.T) {
 	}
 }
 
+func TestMergeNodesPrunesHealthMap(t *testing.T) {
+	resetState()
+	defer resetState()
+
+	n1 := Node{RawURI: "uri1", Name: "node1"} //nolint:exhaustruct
+	n2 := Node{RawURI: "uri2", Name: "node2"} //nolint:exhaustruct
+
+	MergeNodes([]Node{n1, n2})
+
+	RecordTest("uri1", true, 10, "")
+	RecordTest("uri2", false, 0, "timeout")
+	health := LoadHealth()
+	if len(health) != 2 {
+		t.Fatalf("Expected 2 health entries, got %d", len(health))
+	}
+
+	DeleteNode("uri2")
+
+	mu.Lock()
+	healthMap["orphan-uri"] = &NodeHealth{SuccessCount: 99} //nolint:exhaustruct
+	mu.Unlock()
+
+	MergeNodes([]Node{n1})
+	health = LoadHealth()
+	if len(health) != 1 {
+		t.Fatalf("Expected 1 health entry after MergeNodes prunes orphan, got %d", len(health))
+	}
+	if health["orphan-uri"] != nil {
+		t.Errorf("Expected orphan-uri health entry to be pruned")
+	}
+	if health["uri1"] == nil {
+		t.Errorf("Expected uri1 health entry to survive")
+	}
+
+	RecordTest("uri1", false, 0, "timeout")
+	health = LoadHealth()
+	if health["uri1"] == nil || health["uri1"].FailCount != 1 {
+		t.Errorf("Expected RecordTest to still work after pruning, got %v", health["uri1"])
+	}
+}
+
 func TestEnableNode(t *testing.T) {
 	resetState()
 	defer resetState()
@@ -250,7 +291,7 @@ func TestSelectForParallelCooldownFallback(t *testing.T) {
 	RecordTest("uri2", false, 0, "timeout")
 
 	// Request 3 nodes, should get n3 + fallback from cooldown
-	selected := SelectForParallel(3)
+	selected := SelectForParallel(3, 80, false, false)
 	if len(selected) != 3 {
 		t.Errorf("Expected 3 selected (1 normal + 2 cooldown), got %d", len(selected))
 	}

@@ -154,3 +154,9 @@ func WriteModels(models []string, aliasMap map[string]string) error {
 	InvalidateModelsCache()
 	return nil
 }
+
+func (c AppConfig) BaseModels() []string                     { return BaseModels() }
+func (c AppConfig) AliasMap() map[string]string               { return AliasMap() }
+func (c AppConfig) ModelsWithFakeVariants() []string          { return ModelsWithFakeVariants() }
+func (c AppConfig) FakePrefixes() []string                    { return FakePrefixes() }
+func (c AppConfig) ResolveModelName(model string) string      { return ResolveModelName(model) }

@@ -29,7 +29,6 @@ import (
 	"github.com/bsfdsagfadg/vertex/internal/config"
 	"github.com/bsfdsagfadg/vertex/internal/db"
 	"github.com/bsfdsagfadg/vertex/internal/logger"
-	"github.com/bsfdsagfadg/vertex/internal/metrics"
 	"github.com/bsfdsagfadg/vertex/internal/nodes"
 	"github.com/bsfdsagfadg/vertex/internal/spool"
 	"github.com/bsfdsagfadg/vertex/internal/telemetry"
@@ -173,7 +172,6 @@ func main() {
 	}
 	defer db.CloseDB()
 
-	metrics.Default.SetStart(time.Now().Unix())
 	spool.SetMaxSpillBytes(int64(cfg.MaxSpillMB) << 20)
 
 	nodes.DeleteNodeCallback = transport.RemoveProxy
@@ -185,7 +183,7 @@ func main() {
 	api.EnsureAdminPassword()
 	api.StartAdminSessionCleanup(time.Hour)
 
-	vc := vertex.NewVertexAIClient()
+	vc := vertex.NewVertexAIClient(cfg)
 
 	telemetryEnabled := true
 	if cfg.TelemetryEnabled != nil {

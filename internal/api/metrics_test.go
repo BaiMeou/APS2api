@@ -9,17 +9,16 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/bsfdsagfadg/vertex/internal/metrics"
 	"github.com/bsfdsagfadg/vertex/internal/vertex"
 )
 
-// TestWithMetrics 验证 withMetrics 中间件的与指标无关行为：
+// TestWithMetrics 验证 withMetrics 中间件行为：
 // 设 X-Request-Id、注入 context、跳过 /health。
 func TestWithMetrics(t *testing.T) {
-	s := &Server{metrics: metrics.New(10)} //nolint:exhaustruct
+	mw := &middleware{} //nolint:exhaustruct
 
 	var seenReqID string
-	ok := s.withMetrics(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ok := mw.withMetrics(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seenReqID = vertex.RequestIDFromContext(r.Context())
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -34,15 +33,10 @@ func TestWithMetrics(t *testing.T) {
 
 	// /health 应被跳过，不设 request-id。
 	rec2 := httptest.NewRecorder()
-	s.withMetrics(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mw.withMetrics(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})).ServeHTTP(rec2, httptest.NewRequest("GET", "/health", nil))
 	if rec2.Header().Get("X-Request-Id") != "" {
 		t.Fatal("/health 不应设 X-Request-Id")
-	}
-
-	// Snapshot 返回零值。
-	if s.metrics.Snapshot().Total != 0 {
-		t.Fatalf("采集器 total 应为 0，got %d", s.metrics.Snapshot().Total)
 	}
 }

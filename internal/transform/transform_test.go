@@ -5,6 +5,8 @@
 package transform
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/bsfdsagfadg/vertex/internal/config"
@@ -204,5 +206,545 @@ func TestMergeContentBlocks(t *testing.T) {
 	}
 	if merged[0]["text"] != "Hello World" {
 		t.Errorf("merged text=%q", merged[0]["text"])
+	}
+}
+
+// TestConvertChatRequest_Full 测试 ConvertChatRequest 的完整转换：OpenAI 请求 → Gemini payload。
+func TestConvertChatRequest_Full(t *testing.T) {
+	cfg := config.DefaultConfig()
+	body := map[string]any{
+		"model":    "gemini-2.5-flash",
+		"messages": []any{map[string]any{"role": "user", "content": "Hello"}},
+		"stream":   false,
+	}
+
+	model, geminiPayload, err := ConvertChatRequest(body, cfg)
+	if err != nil {
+		t.Fatalf("ConvertChatRequest failed: %v", err)
+	}
+	if model != "gemini-2.5-flash" {
+		t.Errorf("model=%q, want gemini-2.5-flash", model)
+	}
+	if geminiPayload == nil {
+		t.Fatal("geminiPayload is nil")
+	}
+
+	contents, ok := geminiPayload["contents"].([]any)
+	if !ok || len(contents) == 0 {
+		t.Fatal("missing contents")
+	}
+	firstContent := contents[0].(map[string]any)
+	if firstContent["role"] != "user" {
+		t.Errorf("role=%q, want user", firstContent["role"])
+	}
+	parts, ok := firstContent["parts"].([]any)
+	if !ok || len(parts) == 0 {
+		t.Fatal("missing parts")
+	}
+	firstPart := parts[0].(map[string]any)
+	if firstPart["text"] != "Hello" {
+		t.Errorf("text=%q, want Hello", firstPart["text"])
+	}
+
+	if gc, ok := geminiPayload["generationConfig"].(map[string]any); ok {
+		if _, exists := gc["temperature"]; !exists {
+			t.Error("generationConfig should have temperature")
+		}
+	}
+}
+
+// TestConvertChatRequest_WithTools 测试包含工具的请求转换。
+func TestConvertChatRequest_WithTools(t *testing.T) {
+	cfg := config.DefaultConfig()
+	body := map[string]any{
+		"model":    "gemini-2.5-flash",
+		"messages": []any{map[string]any{"role": "user", "content": "What's the weather?"}},
+		"tools": []any{map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "get_weather",
+				"description": "Get weather",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"location": map[string]any{"type": "string"},
+					},
+				},
+			},
+		}},
+	}
+
+	model, geminiPayload, err := ConvertChatRequest(body, cfg)
+	if err != nil {
+		t.Fatalf("ConvertChatRequest failed: %v", err)
+	}
+	if model != "gemini-2.5-flash" {
+		t.Errorf("model=%q", model)
+	}
+
+	if _, ok := geminiPayload["tools"]; !ok {
+		if _, ok := geminiPayload["toolConfig"]; !ok {
+			t.Log("tools may be transformed to a different structure, check implement detail")
+		}
+	}
+}
+
+// TestConvertChatRequest_SystemInstruction 测试系统指令。
+func TestConvertChatRequest_SystemInstruction(t *testing.T) {
+	cfg := config.DefaultConfig()
+	body := map[string]any{
+		"model":    "gemini-2.5-flash",
+		"messages": []any{map[string]any{"role": "system", "content": "Be helpful."}},
+	}
+
+	_, geminiPayload, err := ConvertChatRequest(body, cfg)
+	if err != nil {
+		t.Fatalf("ConvertChatRequest failed: %v", err)
+	}
+
+	si, ok := geminiPayload["systemInstruction"].(map[string]any)
+	if !ok {
+		t.Fatal("missing systemInstruction")
+	}
+	parts, ok := si["parts"].([]any)
+	if !ok || len(parts) == 0 {
+		t.Fatal("systemInstruction missing parts")
+	}
+	firstPart := parts[0].(map[string]any)
+	if firstPart["text"] != "Be helpful." {
+		t.Errorf("text=%q, want Be helpful.", firstPart["text"])
+	}
+}
+
+// TestIntegrationGeminiJSONToOAIJSON 测试 Gemini 非流式响应 → OAI 格式。
+func TestIntegrationGeminiJSONToOAIJSON(t *testing.T) {
+	geminiResp := map[string]any{
+		"candidates": []any{map[string]any{
+			"content":      map[string]any{"parts": []any{map[string]any{"text": "Hi there!"}}, "role": "model"},
+			"finishReason": "STOP",
+		}},
+		"usageMetadata": map[string]any{
+			"promptTokenCount":     float64(10),
+			"candidatesTokenCount": float64(20),
+			"totalTokenCount":      float64(30),
+		},
+	}
+
+	oai := GeminiJSONToOAIJSON(geminiResp, "gemini-2.5-flash")
+	if oai == nil {
+		t.Fatal("GeminiJSONToOAIJSON returned nil")
+	}
+	if oai["object"] != "chat.completion" {
+		t.Errorf("object=%q", oai["object"])
+	}
+	choices, ok := oai["choices"].([]any)
+	if !ok || len(choices) == 0 {
+		t.Fatal("no choices")
+	}
+	choice := choices[0].(map[string]any)
+	if choice["finish_reason"] != "stop" {
+		t.Errorf("finish_reason=%v", choice["finish_reason"])
+	}
+	msg, ok := choice["message"].(map[string]any)
+	if !ok {
+		t.Fatal("no message")
+	}
+	if msg["content"] != "Hi there!" {
+		t.Errorf("content=%q", msg["content"])
+	}
+
+	usage, ok := oai["usage"].(map[string]any)
+	if !ok {
+		t.Fatal("no usage")
+	}
+	if usage["prompt_tokens"] != int(10) {
+		t.Errorf("prompt_tokens=%v (%T)", usage["prompt_tokens"], usage["prompt_tokens"])
+	}
+	if usage["completion_tokens"] != int(20) {
+		t.Errorf("completion_tokens=%v (%T)", usage["completion_tokens"], usage["completion_tokens"])
+	}
+}
+
+// TestIntegrationGeminiJSONToOAIJSON_SafetyBlock 测试 Gemini 安全拦截 → content_filter。
+func TestIntegrationGeminiJSONToOAIJSON_SafetyBlock(t *testing.T) {
+	geminiResp := map[string]any{
+		"candidates": []any{map[string]any{
+			"content":      map[string]any{"parts": []any{}, "role": "model"},
+			"finishReason": "SAFETY",
+		}},
+		"promptFeedback": map[string]any{"blockReason": "SAFETY"},
+	}
+
+	oai := GeminiJSONToOAIJSON(geminiResp, "gemini-2.5-flash")
+	choices, ok := oai["choices"].([]any)
+	if !ok || len(choices) == 0 {
+		t.Fatal("no choices")
+	}
+	choice := choices[0].(map[string]any)
+	if choice["finish_reason"] != "content_filter" {
+		t.Errorf("finish_reason=%v, want content_filter", choice["finish_reason"])
+	}
+}
+
+// TestIntegrationConvertRealtimeChunk 测试流式增量转换。
+func TestIntegrationConvertRealtimeChunk(t *testing.T) {
+	t.Run("first_chunk_has_role_delta", func(t *testing.T) {
+		chunk := map[string]any{"candidates": []any{
+			map[string]any{
+				"content":      map[string]any{"parts": []any{map[string]any{"text": "Hi"}}, "role": "model"},
+				"finishReason": "FINISH_REASON_UNSPECIFIED",
+			},
+		}}
+		events := ConvertRealtimeChunk(chunk, "gemini-2.5-flash", "req-1", true)
+		if len(events) < 1 {
+			t.Fatal("no events")
+		}
+		if !strings.Contains(events[0], `"role":"assistant"`) {
+			t.Errorf("first event should contain role delta: %s", events[0])
+		}
+	})
+
+	t.Run("finish_stop", func(t *testing.T) {
+		chunk := map[string]any{
+			"candidates": []any{map[string]any{
+				"content":      map[string]any{"parts": []any{map[string]any{"text": "done"}}, "role": "model"},
+				"finishReason": "STOP",
+			}},
+			"usageMetadata": map[string]any{
+				"promptTokenCount": float64(5), "candidatesTokenCount": float64(10), "totalTokenCount": float64(15),
+			},
+		}
+		events := ConvertRealtimeChunk(chunk, "m", "r", false)
+		var hasFinish bool
+		for _, e := range events {
+			if strings.Contains(e, `"finish_reason":"stop"`) {
+				hasFinish = true
+				break
+			}
+		}
+		if !hasFinish {
+			t.Errorf("should have finish_reason=stop event, got %v", events)
+		}
+	})
+
+	t.Run("unspecified_no_finish", func(t *testing.T) {
+		chunk := map[string]any{"candidates": []any{
+			map[string]any{
+				"content":      map[string]any{"parts": []any{map[string]any{"text": "x"}}, "role": "model"},
+				"finishReason": "FINISH_REASON_UNSPECIFIED",
+			},
+		}}
+		events := ConvertRealtimeChunk(chunk, "m", "r", false)
+		for _, e := range events {
+			if strings.Contains(e, `"finish_reason":"`) && !strings.Contains(e, `"finish_reason":null`) {
+				t.Errorf("UNSPECIFIED should not produce finish_reason: %s", e)
+			}
+		}
+	})
+
+	t.Run("function_call", func(t *testing.T) {
+		chunk := map[string]any{"candidates": []any{map[string]any{
+			"content": map[string]any{"parts": []any{
+				map[string]any{"functionCall": map[string]any{"name": "get_weather", "args": map[string]any{"city": "SF"}}},
+			}, "role": "model"},
+			"finishReason": "STOP",
+		}}}
+		events := ConvertRealtimeChunk(chunk, "m", "r", false)
+		var hasToolCall bool
+		for _, e := range events {
+			if strings.Contains(e, `"tool_calls"`) {
+				hasToolCall = true
+				break
+			}
+		}
+		if !hasToolCall {
+			t.Errorf("should have tool_calls event, got %v", events)
+		}
+	})
+}
+
+// TestBuildVertexVariables 测试 BuildVertexVariables 的 produced structure。
+func TestBuildVertexVariables(t *testing.T) {
+	cfg := config.DefaultConfig()
+	geminiPayload := map[string]any{
+		"contents": []any{map[string]any{
+			"role":  "user",
+			"parts": []any{map[string]any{"text": "Hello"}},
+		}},
+	}
+
+	vars := BuildVertexVariables("gemini-2.5-flash", geminiPayload, cfg)
+	if vars == nil {
+		t.Fatal("BuildVertexVariables returned nil")
+	}
+	if vars["model"] != "gemini-2.5-flash" {
+		t.Errorf("model=%q", vars["model"])
+	}
+	if _, ok := vars["contents"]; !ok {
+		t.Error("vars missing contents")
+	}
+}
+
+// TestMarshalRoundTrip 验证 ConvertChatRequest + BuildVertexVariables 的 JSON 可序列化。
+func TestMarshalRoundTrip(t *testing.T) {
+	cfg := config.DefaultConfig()
+	body := map[string]any{
+		"model":    "gemini-2.5-flash",
+		"messages": []any{map[string]any{"role": "user", "content": "Hello"}},
+	}
+	model, geminiPayload, err := ConvertChatRequest(body, cfg)
+	if err != nil {
+		t.Fatalf("ConvertChatRequest: %v", err)
+	}
+	payload := BuildVertexVariables(model, geminiPayload, cfg)
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if len(data) == 0 {
+		t.Fatal("empty marshal result")
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if decoded["model"] != "gemini-2.5-flash" {
+		t.Errorf("model mismatch after round-trip")
+	}
+}
+
+// TestToNativeSchema_NumericConstraintsAsStrings 验证数值约束字段被转为字符串。
+func TestToNativeSchema_NumericConstraintsAsStrings(t *testing.T) {
+	schema := map[string]any{
+		"type":     "object",
+		"minItems": 1, "maxItems": float64(10),
+		"properties": map[string]any{
+			"name": map[string]any{
+				"type":      "string",
+				"minLength": 2, "maxLength": float64(50),
+			},
+		},
+	}
+	native := toNativeSchema(schema).(map[string]any)
+
+	for _, field := range []string{"minItems", "maxItems"} {
+		v, ok := native[field]
+		if !ok {
+			t.Fatalf("字段 %s 被删除", field)
+		}
+		if _, ok := v.(string); !ok {
+			t.Errorf("%s 应为字符串，实际是 %T(%v)", field, v, v)
+		}
+	}
+	props, _ := native["properties"].([]any)
+	if len(props) > 0 {
+		prop := props[0].(map[string]any)
+		val := prop["value"].(map[string]any)
+		for _, field := range []string{"minLength", "maxLength"} {
+			v, ok := val[field]
+			if !ok {
+				t.Fatalf("嵌套字段 %s 被删除", field)
+			}
+			if _, ok := v.(string); !ok {
+				t.Errorf("嵌套 %s 应为字符串，实际是 %T(%v)", field, v, v)
+			}
+		}
+	}
+}
+
+// TestToNativeSchema_DefaultNullablePreserved 验证 Gemini 支持的 default/nullable/examples 不被误删。
+func TestToNativeSchema_DefaultNullablePreserved(t *testing.T) {
+	schema := map[string]any{
+		"type":     "object",
+		"default":  "hello",
+		"nullable": true,
+		"examples": []any{"ex1", "ex2"},
+		"properties": map[string]any{
+			"x": map[string]any{"type": "string", "default": "world"},
+		},
+	}
+	native := toNativeSchema(schema).(map[string]any)
+	for _, field := range []string{"default", "nullable", "examples"} {
+		if _, ok := native[field]; !ok {
+			t.Errorf("字段 %s 被错误剔除（Gemini 原生支持）", field)
+		}
+	}
+	props, _ := native["properties"].([]any)
+	if len(props) > 0 {
+		val := props[0].(map[string]any)["value"].(map[string]any)
+		if _, ok := val["default"]; !ok {
+			t.Errorf("嵌套 property 的 default 被错误剔除")
+		}
+	}
+}
+
+// TestToNativeSchema_UnknownTypeFallsBackToSTRING 验证非标准 type 兜底 STRING。
+func TestToNativeSchema_UnknownTypeFallsBackToSTRING(t *testing.T) {
+	native := toNativeSchema(map[string]any{"type": "any", "properties": map[string]any{}}).(map[string]any)
+	if native["type"] != "STRING" {
+		t.Errorf("未知类型 'any' 应兜底为 STRING，实际: %v", native["type"])
+	}
+}
+
+// TestMergeContiguousRoles 验证相邻同 role content 被合并。
+func TestMergeContiguousRoles(t *testing.T) {
+	contents := []any{
+		map[string]any{"role": "model", "parts": []any{map[string]any{"text": "hi"}}},
+		map[string]any{"role": "user", "parts": []any{map[string]any{"text": "q1"}}},
+		map[string]any{"role": "user", "parts": []any{map[string]any{"text": "q2"}}},
+		map[string]any{"role": "model", "parts": []any{map[string]any{"text": "bye"}}},
+	}
+	merged := mergeContiguousRoles(contents).([]any)
+	if len(merged) != 3 {
+		t.Fatalf("应合并为 3 个 content，实际 %d", len(merged))
+	}
+	user := merged[1].(map[string]any)
+	if parts := user["parts"].([]any); len(parts) != 2 {
+		t.Errorf("user content 应有 2 个 parts，实际 %d", len(parts))
+	}
+}
+
+// TestMergeContiguousRoles_FunctionResponse 合并多轮工具结果（连续 function 角色）。
+func TestMergeContiguousRoles_FunctionResponse(t *testing.T) {
+	contents := []any{
+		map[string]any{"role": "model", "parts": []any{
+			map[string]any{"functionCall": map[string]any{"name": "get_weather", "args": map[string]any{"city": "NY"}}},
+			map[string]any{"functionCall": map[string]any{"name": "get_time", "args": map[string]any{"tz": "EST"}}},
+		}},
+		map[string]any{"role": "function", "parts": []any{
+			map[string]any{"functionResponse": map[string]any{"name": "get_weather", "response": map[string]any{"temp": 20}}},
+		}},
+		map[string]any{"role": "function", "parts": []any{
+			map[string]any{"functionResponse": map[string]any{"name": "get_time", "response": map[string]any{"time": "10:00"}}},
+		}},
+		map[string]any{"role": "model", "parts": []any{map[string]any{"text": "done"}}},
+	}
+	merged := mergeContiguousRoles(contents).([]any)
+	if len(merged) != 3 {
+		t.Fatalf("应合并为 3 个 content，实际 %d", len(merged))
+	}
+	funcContent := merged[1].(map[string]any)
+	if parts := funcContent["parts"].([]any); len(parts) != 2 {
+		t.Errorf("function content 应合并两个 functionResponse 为 2 个 parts，实际 %d", len(parts))
+	}
+}
+
+// TestConvertToolsFormat_NumericConstraints 端到端验证工具参数数值约束转字符串。
+func TestConvertToolsFormat_NumericConstraints(t *testing.T) {
+	geminiPayload := map[string]any{
+		"tools": []any{map[string]any{
+			"functionDeclarations": []any{map[string]any{
+				"name": "list_items",
+				"parameters": map[string]any{
+					"type":       "object",
+					"properties": map[string]any{},
+					"minItems":   1,
+					"maxItems":   float64(100),
+				},
+			}},
+		}},
+	}
+	vars := BuildVertexVariables("gemini-3-flash", geminiPayload, config.AppConfig{}) //nolint:exhaustruct
+	dump, _ := json.Marshal(vars["tools"])
+	if !strings.Contains(string(dump), `"minItems":"1"`) {
+		t.Errorf("minItems 应转为字符串 \"1\": %s", dump)
+	}
+}
+
+// TestNormalizePartMultimodal 验证 normalizePart 对 OpenAI 风格多模态 part 的归一（Fix 7）：
+// image_url(data:/http)/input_image、media/file/file_data、inline_data → 对应 Gemini part。
+func TestNormalizePartMultimodal(t *testing.T) {
+	got := normalizePart(map[string]any{
+		"type":      "image_url",
+		"image_url": map[string]any{"url": "data:image/png;base64,QQ=="},
+	})
+	id, _ := got["inlineData"].(map[string]any)
+	if id == nil || id["mimeType"] != "image/png" || id["data"] != "QQ==" {
+		t.Fatalf("image_url data: 应转 inlineData，got %v", got)
+	}
+
+	got = normalizePart(map[string]any{
+		"type":      "image_url",
+		"image_url": map[string]any{"url": "https://x.com/a.mp4"},
+	})
+	fd, _ := got["fileData"].(map[string]any)
+	if fd == nil || fd["fileUri"] != "https://x.com/a.mp4" || fd["mimeType"] != "video/mp4" {
+		t.Fatalf("image_url http 应转 fileData(video/mp4)，got %v", got)
+	}
+
+	got = normalizePart(map[string]any{
+		"type": "file", "file_uri": "gs://b/x.pdf", "mime_type": "application/pdf",
+	})
+	fd, _ = got["fileData"].(map[string]any)
+	if fd == nil || fd["fileUri"] != "gs://b/x.pdf" || fd["mimeType"] != "application/pdf" {
+		t.Fatalf("file 应转 fileData，got %v", got)
+	}
+
+	got = normalizePart(map[string]any{
+		"type": "inline_data", "inline_data": map[string]any{"mime_type": "audio/wav", "data": "ZGF0YQ=="},
+	})
+	id, _ = got["inlineData"].(map[string]any)
+	if id == nil || id["mimeType"] != "audio/wav" || id["data"] != "ZGF0YQ==" {
+		t.Fatalf("inline_data 应转 inlineData，got %v", got)
+	}
+
+	got = normalizePart(map[string]any{"type": "text", "text": "hi"})
+	if got["text"] != "hi" {
+		t.Fatalf("text part，got %v", got)
+	}
+
+	got = normalizePart(map[string]any{"type": "weird", "some_key": "v"})
+	if got["someKey"] != "v" {
+		t.Fatalf("未知 part 应 camelCase 透传，got %v", got)
+	}
+}
+
+// TestGuessMIMEFromURI 验证多类型 mime 猜测覆盖图/视频/音频/pdf/txt。
+func TestGuessMIMEFromURI(t *testing.T) {
+	cases := map[string]string{
+		"a.jpg": "image/jpeg", "a.png": "image/png", "a.webp": "image/webp", "a.gif": "image/gif",
+		"a.mp4": "video/mp4", "a.mov": "video/quicktime", "a.webm": "video/webm",
+		"a.mp3": "audio/mpeg", "a.wav": "audio/wav", "a.ogg": "audio/ogg",
+		"a.pdf": "application/pdf", "a.txt": "text/plain", "a.xyz": "image/png",
+		"http://x/a.MP4?t=1": "video/mp4",
+	}
+	for in, want := range cases {
+		if got := guessMIMEFromURI(in); got != want {
+			t.Errorf("guessMIMEFromURI(%q)=%q，want %q", in, got, want)
+		}
+	}
+}
+
+// splitAssistantContent：assistant 文本里的 markdown data-URI 图片必须重解析为 inlineData，
+// 否则巨型 base64 markdown 作为文本进 model 角色，多轮改图被上游拒。
+func TestSplitAssistantContent_ImageMarkdown(t *testing.T) {
+	s := "这是图片：\n\n![image](data:image/png;base64,iVBORw0KGgoAAAANS) 完成"
+	parts := splitAssistantContent(s)
+	var hasInline, hasText bool
+	for _, p := range parts {
+		m := p.(map[string]any)
+		if id, ok := m["inlineData"].(map[string]any); ok {
+			if id["mimeType"] == "image/png" {
+				hasInline = true
+			}
+		}
+		if txt, ok := m["text"].(string); ok && txt != "" {
+			hasText = true
+		}
+	}
+	if !hasInline {
+		t.Errorf("markdown 图片应重解析为 inlineData，got %v", parts)
+	}
+	if !hasText {
+		t.Errorf("图片前后的文本应保留为 text part")
+	}
+}
+
+func TestSplitAssistantContent_PlainText(t *testing.T) {
+	parts := splitAssistantContent("纯文本回复")
+	if len(parts) != 1 || parts[0].(map[string]any)["text"] != "纯文本回复" {
+		t.Errorf("纯文本应原样为单个 text part，got %v", parts)
 	}
 }

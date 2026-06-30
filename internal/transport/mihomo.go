@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bsfdsagfadg/vertex/internal/config"
 	"github.com/bsfdsagfadg/vertex/internal/nodes"
 	"github.com/metacubex/mihomo/adapter"
 	"github.com/metacubex/mihomo/constant"
@@ -34,13 +33,13 @@ var (
 	proxyMutex sync.RWMutex
 )
 
-func getOrStartProxyDialer(uri string, reqID string) (func(ctx context.Context, network, addr string) (net.Conn, error), error) {
+func getOrStartProxyDialer(uri string, reqID string, debugMode bool) (func(ctx context.Context, network, addr string) (net.Conn, error), error) {
 	proxyMutex.Lock()
 	if info, ok := proxyMap[uri]; ok && !info.closed {
 		info.lastUsedAt = time.Now()
 		p := info.proxy
 		proxyMutex.Unlock()
-		return makeDialer(p), nil
+		return makeDialer(p, debugMode), nil
 	}
 	proxyMutex.Unlock()
 
@@ -66,10 +65,10 @@ func getOrStartProxyDialer(uri string, reqID string) (func(ctx context.Context, 
 	proxyMap[uri] = &proxyInfo{proxy: proxy, lastUsedAt: time.Now()} //nolint:exhaustruct
 	proxyMutex.Unlock()
 
-	return makeDialer(proxy), nil
+	return makeDialer(proxy, debugMode), nil
 }
 
-func makeDialer(p constant.Proxy) func(ctx context.Context, network, addr string) (net.Conn, error) {
+func makeDialer(p constant.Proxy, debugMode bool) func(ctx context.Context, network, addr string) (net.Conn, error) {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(addr)
 		if err != nil {
@@ -93,7 +92,7 @@ func makeDialer(p constant.Proxy) func(ctx context.Context, network, addr string
 				return nil, fmt.Errorf("error: %w", err)
 
 			}
-			if config.Load().DebugMode {
+			if debugMode {
 				log.Printf("[Transport] Mihomo 拨号失败 [%s:%d]: %v", host, portInt, err)
 			}
 			return nil, fmt.Errorf("error: %w", err)

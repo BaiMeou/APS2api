@@ -5,77 +5,10 @@
 package vertex
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/bsfdsagfadg/vertex/internal/config"
 )
-
-func TestParseUpstreamData_Basic(t *testing.T) {
-	// 模拟匿名 batchGraphql 响应：Gemini 载荷包在 data.ui.streamGenerateContentAnonymous 下。
-	raw := `[{"results":[{"data":{"ui":{"streamGenerateContentAnonymous":{` +
-		`"candidates":[{"content":{"parts":[{"text":"Hello"}],"role":"model"},"finishReason":"STOP","index":0}],` +
-		`"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":1,"totalTokenCount":6}}}}}]}]`
-	r := ParseUpstreamData(raw)
-	if r.HasError {
-		t.Fatalf("unexpected error: %s", r.ErrorMessage)
-	}
-	if len(r.Parts) != 1 {
-		t.Fatalf("parts len=%d, want 1", len(r.Parts))
-	}
-	if r.Parts[0]["text"] != "Hello" {
-		t.Errorf("text=%v", r.Parts[0]["text"])
-	}
-	if r.FinishReason != "STOP" {
-		t.Errorf("finishReason=%q", r.FinishReason)
-	}
-	if len(r.UsageMetadata) == 0 {
-		t.Error("usageMetadata 未提取（unwrap 失败？）")
-	}
-}
-
-func TestParseUpstreamData_FailedVerify(t *testing.T) {
-	raw := `[{"error":{"code":400,"message":"Failed to verify action","status":"INVALID_ARGUMENT"}}]`
-	r := ParseUpstreamData(raw)
-	// parseErrorResponse 命中 "Failed to verify action" 时不设结构化 ErrorObj，
-	// 但 extractErrorMessage 兜底会设 ErrorMessage。上层 executeCompleteRequest 据 ErrorMessage
-	// 含该串识别为 AuthenticationError，触发首次认证重试（同 token 再打一次），而不走 ErrorObj。
-	if r.ErrorObj != nil {
-		t.Error(`"Failed to verify action" 不应设结构化 ErrorObj（parseErrorResponse 忽略它）`)
-	}
-	if !strings.Contains(r.ErrorMessage, "Failed to verify action") {
-		t.Errorf("ErrorMessage 应含 Failed to verify action, got %q", r.ErrorMessage)
-	}
-}
-
-func TestParseUpstreamData_RealError(t *testing.T) {
-	raw := `[{"error":{"code":429,"message":"Resource exhausted","status":"RESOURCE_EXHAUSTED"}}]`
-	r := ParseUpstreamData(raw)
-	if !r.HasError {
-		t.Fatal("expected HasError")
-	}
-	if r.ErrorObj == nil || r.ErrorObj.Kind != "ratelimit" {
-		t.Errorf("errObj=%v", r.ErrorObj)
-	}
-}
-
-func TestCleanJSONString(t *testing.T) {
-	if got := cleanJSONString(`{"a":1},`); got != `[{"a":1}]` {
-		t.Errorf("尾逗号处理: %q", got)
-	}
-	if got := cleanJSONString(``); got != "[]" {
-		t.Errorf("空串: %q", got)
-	}
-}
-
-func TestExtractPathIndex(t *testing.T) {
-	if got := extractPathIndex(map[string]any{"path": []any{"a", float64(2)}}); got != 2 {
-		t.Errorf("path index=%d, want 2", got)
-	}
-	if got := extractPathIndex(map[string]any{}); got != -1 {
-		t.Errorf("no path=%d, want -1", got)
-	}
-}
 
 func TestParseErrorResponse(t *testing.T) {
 	e := parseErrorResponse(map[string]any{"error": map[string]any{

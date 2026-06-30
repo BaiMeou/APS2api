@@ -5,6 +5,7 @@
 package vertex
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,10 +17,10 @@ import (
 	"time"
 
 	"github.com/bsfdsagfadg/vertex/internal/config"
-	"github.com/bsfdsagfadg/vertex/internal/metrics"
 	"github.com/bsfdsagfadg/vertex/internal/nodes"
 	"github.com/bsfdsagfadg/vertex/internal/recaptcha"
 	"github.com/bsfdsagfadg/vertex/internal/spool"
+	"github.com/bsfdsagfadg/vertex/internal/transform"
 	"github.com/bsfdsagfadg/vertex/internal/transport"
 )
 
@@ -53,13 +54,15 @@ func RequestIDFromContext(ctx context.Context) string {
 type VertexAIClient struct {
 	net  *transport.NetworkClient
 	pool *recaptcha.TokenPool
+	cfg  config.ConfigProvider
 }
 
-func NewVertexAIClient() *VertexAIClient {
-	net := transport.NewNetworkClient()
+func NewVertexAIClient(cfg config.ConfigProvider) *VertexAIClient {
+	net := transport.NewNetworkClient(cfg.GetDebugMode())
 	return &VertexAIClient{
 		net:  net,
-		pool: recaptcha.NewTokenPoolSize(net, config.Load().TokenPoolSize),
+		pool: recaptcha.NewTokenPoolSize(net, cfg.GetTokenPoolSize(), cfg.GetProxyURL(), cfg.GetDebugMode()),
+		cfg:  cfg,
 	}
 }
 
@@ -68,7 +71,7 @@ func (c *VertexAIClient) StopTokenPool()                   { c.pool.Stop() }
 func (c *VertexAIClient) TokenPoolStats() (size, fill int) { return c.pool.Stats() }
 
 func (c *VertexAIClient) CompleteChat(ctx context.Context, model string, geminiPayload map[string]any) (map[string]any, error) {
-	return RunParallel(ctx, config.Load(), func(ctx context.Context, proxyURI string) (map[string]any, error) {
+	return RunParallel(ctx, c.cfg, func(ctx context.Context, proxyURI string) (map[string]any, error) {
 		return c.completeInner(ctx, model, geminiPayload, proxyURI)
 	})
 }
@@ -147,9 +150,9 @@ func (c *VertexAIClient) completeChatNSerial(ctx context.Context, model string, 
 }
 
 func (c *VertexAIClient) completeInner(ctx context.Context, model string, geminiPayload map[string]any, proxyURI string) (map[string]any, error) {
-	cfg := config.Load()
-	maxRetries := cfg.MaxRetries
-	if cfg.ParallelPoolEnabled && !cfg.ParallelPoolRetryEnabled && ctx.Value(stickyModeKey{}) == nil {
+	cfg := c.cfg
+	maxRetries := cfg.GetMaxRetries()
+	if cfg.GetParallelPoolEnabled() {
 		maxRetries = 0
 	}
 	recaptchaToken := ""
@@ -182,12 +185,12 @@ func (c *VertexAIClient) completeInner(ctx context.Context, model string, gemini
 			continue
 		}
 
-		result, reqErr := c.executeCompleteRequest(ctx, sess, model, geminiPayload, recaptchaToken, isFirstAuth)
+		result, reqErr := c.executeCompleteRequest(ctx, sess, model, geminiPayload, recaptchaToken)
 		if reqErr == nil {
 			if _, hasSafety := geminiPayload["safetySettings"]; candidateFinish(result) == "SAFETY" && !hasSafety {
 				retryPayload := shallowCopy(geminiPayload)
 				retryPayload["safetySettings"] = defaultSafetySettings
-				result, reqErr = c.executeCompleteRequest(ctx, sess, model, retryPayload, recaptchaToken, false)
+				result, reqErr = c.executeCompleteRequest(ctx, sess, model, retryPayload, recaptchaToken)
 			}
 		}
 		if reqErr == nil {
@@ -206,7 +209,6 @@ func (c *VertexAIClient) completeInner(ctx context.Context, model string, gemini
 				}
 				continue
 			}
-			metrics.Default.IncUpstreamAuth()
 			recaptchaToken = ""
 			isFirstAuth = true
 			if attempt < maxRetries {
@@ -219,7 +221,6 @@ func (c *VertexAIClient) completeInner(ctx context.Context, model string, gemini
 			return nil, ve
 
 		case ve != nil && ve.Kind == "ratelimit":
-			metrics.Default.IncUpstream429()
 			if attempt >= maxRetries {
 				log.Printf("[Vertex] [CompleteChat] (Attempt %d/%d) 节点 %s 触发 429 失败, 请求ID=%s, 代理=%s", attempt, maxRetries, model, reqID, nodes.GetNodeName(sess.ProxyURI))
 				return nil, ve
@@ -243,9 +244,6 @@ func (c *VertexAIClient) completeInner(ctx context.Context, model string, gemini
 			continue
 
 		case ve != nil:
-			if ve.Kind == "empty" {
-				metrics.Default.IncUpstreamEmpty()
-			}
 			// 【关键改动】：如果是网络连接断开等内部错误，直接熔断不重试
 			if ve.Kind == "internal" || !ve.IsRetryable() || attempt >= maxRetries {
 				log.Printf("[Vertex] [CompleteChat] (Attempt %d/%d) 节点 %s 触发异常错误失败: [%s] %s, 请求ID=%s, 代理=%s", attempt, maxRetries, model, ve.Kind, ve.Message, reqID, nodes.GetNodeName(sess.ProxyURI))
@@ -266,10 +264,10 @@ func (c *VertexAIClient) completeInner(ctx context.Context, model string, gemini
 	return nil, NewInternalError("All retries exhausted")
 }
 
-func (c *VertexAIClient) executeCompleteRequest(ctx context.Context, sess *transport.Session, model string, geminiPayload map[string]any, recaptchaToken string, _ bool) (map[string]any, error) {
+func (c *VertexAIClient) executeCompleteRequest(ctx context.Context, sess *transport.Session, model string, geminiPayload map[string]any, recaptchaToken string) (map[string]any, error) {
 	reqID := RequestIDFromContext(ctx)
 	log.Printf("[Vertex] [executeCompleteRequest] 准备发送请求: 模型=%s, 请求ID=%s, 代理=%s", model, reqID, nodes.GetNodeName(sess.ProxyURI))
-	cfg := config.Load()
+	cfg := c.cfg
 	newBody := buildRequestPayload(model, geminiPayload, recaptchaToken, cfg)
 	buf, err := spool.EncodeJSON(newBody)
 	if err != nil {
@@ -285,7 +283,7 @@ func (c *VertexAIClient) executeCompleteRequest(ctx context.Context, sess *trans
 		"https://console.cloud.google.com", "https://console.cloud.google.com/", "cross-site",
 	)
 
-	status, raw, err := sess.DoAndRead(ctx, "POST", batchGraphqlURL, header, reader)
+	sr, err := sess.DoStream(ctx, "POST", batchGraphqlURL, header, reader)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return nil, fmt.Errorf("error: %w", err)
@@ -293,20 +291,23 @@ func (c *VertexAIClient) executeCompleteRequest(ctx context.Context, sess *trans
 		}
 		return nil, NewInternalError("upstream request: " + err.Error())
 	}
+	defer sr.Close()
 
-	if status != 200 {
-		errText := string(raw)
-		if cfg.DebugMode {
+	if sr.StatusCode != 200 {
+		var errBuf bytes.Buffer
+		_, _ = errBuf.ReadFrom(sr.Body)
+		errText := errBuf.String()
+		if cfg.GetDebugMode() {
 			debugReq, _ := json.Marshal(newBody)
-			log.Printf("[DEBUG] [CompleteChat] HTTP 报错! 状态码: %d", status)
+			log.Printf("[DEBUG] [CompleteChat] HTTP 报错! 状态码: %d", sr.StatusCode)
 			log.Printf("[DEBUG] [CompleteChat] 完整请求体: %s", string(debugReq))
 			log.Printf("[DEBUG] [CompleteChat] 上游回复: %s", errText)
-		} else if status == 400 {
+		} else if sr.StatusCode == 400 {
 			debugBody, _ := json.Marshal(newBody["variables"])
 			log.Printf("[Vertex] 收到 400 Bad Request, Variables Payload: %s", string(debugBody))
 		}
 
-		if status == 401 || status == 403 ||
+		if sr.StatusCode == 401 || sr.StatusCode == 403 ||
 			strings.Contains(errText, "Failed to verify action") ||
 			strings.Contains(errText, "The caller does not have permission") {
 			return nil, NewAuthenticationError("Authentication/Recaptcha failed: " + errText)
@@ -315,51 +316,45 @@ func (c *VertexAIClient) executeCompleteRequest(ctx context.Context, sess *trans
 			parsed.UpstreamResponse = errText
 			return nil, parsed
 		}
-		return nil, raiseForStatus(status, "", "Upstream Error: "+errText, nil, errText)
+		return nil, raiseForStatus(sr.StatusCode, "", "Upstream Error: "+errText, nil, errText)
 	}
 
-	if len(raw) == 0 {
+	var chunks []map[string]any
+	scanErr := scanStream(sr.Body, func(obj map[string]any) (bool, error) {
+		return processStreamingObject(obj, func(chunk map[string]any) bool {
+			chunks = append(chunks, chunk)
+			return true
+		})
+	})
+	if scanErr != nil {
+		if cfg.GetDebugMode() && !errors.Is(scanErr, context.Canceled) {
+			debugReq, _ := json.Marshal(newBody)
+			log.Printf("[DEBUG] [CompleteChat] 扫描流数据报错! error: %v", scanErr)
+			log.Printf("[DEBUG] [CompleteChat] 完整请求体: %s", string(debugReq))
+		}
+		return nil, scanErr
+	}
+
+	if len(chunks) == 0 {
 		return nil, NewEmptyResponseError("Upstream returned no data")
 	}
 
-	result := ParseUpstreamData(string(raw))
-
-	if result.HasError && len(result.Parts) == 0 {
-		errMsg := result.ErrorMessage
-
-		if cfg.DebugMode {
-			debugReq, _ := json.Marshal(newBody)
-			log.Printf("[DEBUG] [CompleteChat] 业务层报错! errorMessage: %s", errMsg)
-			log.Printf("[DEBUG] [CompleteChat] 完整请求体: %s", string(debugReq))
-			log.Printf("[DEBUG] [CompleteChat] 上游回复: %s", string(raw))
-		}
-
-		isAuth := strings.Contains(errMsg, "Failed to verify action") ||
-			strings.Contains(errMsg, "The caller does not have permission")
-		if isAuth {
-			return nil, NewAuthenticationError("Authentication/Recaptcha failed: " + errMsg)
-		}
-		if result.ErrorObj != nil {
-			return nil, result.ErrorObj
-		}
-		lower := strings.ToLower(errMsg)
-		isRate := strings.Contains(lower, "resource has been exhausted") || strings.Contains(lower, "quota")
-		switch {
-		case strings.Contains(lower, "not found"):
-			return nil, NewNotFoundError(errMsg)
-		case isRate:
-			return nil, NewRateLimitError(errMsg, 0)
-		default:
-			return nil, NewInvalidArgumentError(errMsg)
-		}
+	if cfg.GetDebugMode() {
+		log.Printf("[DEBUG] [CompleteChat] 收集到 %d 个 chunk", len(chunks))
 	}
 
+	result := collectChunksToParseResult(chunks)
 	return c.buildCompleteResponse(result)
 }
 
 func (c *VertexAIClient) buildCompleteResponse(r *ParseResult) (map[string]any, error) {
-	if len(r.Parts) == 0 && !r.HasError && len(r.PromptFeedback) == 0 {
-		return nil, NewEmptyResponseError("Upstream returned empty response (no content)")
+	if len(r.Parts) == 0 {
+		if r.HasError {
+			return nil, NewInternalError("upstream parse error: " + r.ErrorMessage)
+		}
+		if len(r.PromptFeedback) == 0 {
+			return nil, NewEmptyResponseError("Upstream returned empty response (no content)")
+		}
 	}
 
 	allParts := r.Parts
@@ -393,6 +388,84 @@ func (c *VertexAIClient) buildCompleteResponse(r *ParseResult) (map[string]any, 
 	}
 	setIfPresent(resp, "modelStatus", r.ModelStatus)
 	return resp, nil
+}
+
+// collectChunksToParseResult 把流式收集到的 chunk 列表合并为 ParseResult。
+//
+// chunks 是 extractChunk 的输出：每条含 candidates[0].content.parts（已清洗）、
+// finishReason、usageMetadata、promptFeedback 等元数据。
+// parts 经 MergeContentBlocks 合并相邻 text 后写入 result。
+func collectChunksToParseResult(chunks []map[string]any) *ParseResult {
+	s := &ParseResult{
+		PromptFeedback: map[string]any{},
+		UsageMetadata:  map[string]any{},
+	}
+	var allParts []map[string]any
+
+	for _, chunk := range chunks {
+		if cands, ok := chunk["candidates"].([]any); ok && len(cands) > 0 {
+			if c, ok := cands[0].(map[string]any); ok {
+				if fr := c["finishReason"]; isTruthyAny(fr) {
+					s.FinishReason = toStr(fr)
+				}
+				if fm, ok := c["finishMessage"]; ok {
+					s.FinishMessage = fm
+				}
+				if v := c["safetyRatings"]; isTruthyAny(v) {
+					s.SafetyRatings = v
+				}
+				if v := c["citationMetadata"]; isTruthyAny(v) {
+					s.CitationMetadata = v
+				}
+				if v := c["groundingMetadata"]; isTruthyAny(v) {
+					s.GroundingMetadata = v
+				}
+				if v, ok := c["tokenCount"]; ok {
+					s.TokenCount = v
+				}
+				if v, ok := c["avgLogprobs"]; ok {
+					s.AvgLogprobs = v
+				}
+				if v, ok := c["logprobsResult"]; ok {
+					s.LogprobsResult = v
+				}
+				if v := c["index"]; v != nil {
+					s.CandidateIndex = toInt(v, 0)
+				}
+
+				if content, ok := c["content"].(map[string]any); ok {
+					if parts, ok := content["parts"].([]any); ok {
+						for _, pRaw := range parts {
+							if p, ok := pRaw.(map[string]any); ok {
+								allParts = append(allParts, p)
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if pf, ok := chunk["promptFeedback"].(map[string]any); ok && len(pf) > 0 && len(s.PromptFeedback) == 0 {
+			s.PromptFeedback = pf
+		}
+		if um, ok := chunk["usageMetadata"]; ok {
+			if m := toMap(um); len(m) > 0 {
+				s.UsageMetadata = m
+			}
+		}
+		if v, ok := chunk["createTime"]; ok {
+			s.CreateTime = v
+		}
+		if v, ok := chunk["modelVersion"]; ok {
+			s.ModelVersion = v
+		}
+		if v, ok := chunk["responseId"]; ok {
+			s.ResponseID = v
+		}
+	}
+
+	s.Parts = transform.MergeContentBlocks(allParts)
+	return s
 }
 
 func candidateFinish(result map[string]any) string {

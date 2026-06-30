@@ -9,6 +9,7 @@ import "testing"
 // ---- stripFakePrefix：剥离 "假流式-" / "fake-" 前缀 ----
 
 func TestStripFakePrefix(t *testing.T) {
+	fakePrefixes := []string{"假流式-", "fake-"}
 	cases := []struct {
 		name      string
 		in        string
@@ -26,7 +27,7 @@ func TestStripFakePrefix(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			gotModel, gotFake := stripFakePrefix(c.in)
+			gotModel, gotFake := stripFakePrefix(c.in, fakePrefixes)
 			if gotModel != c.wantModel || gotFake != c.wantFake {
 				t.Errorf("stripFakePrefix(%q)=(%q,%v)，期望 (%q,%v)",
 					c.in, gotModel, gotFake, c.wantModel, c.wantFake)
