@@ -406,6 +406,7 @@ func StreamParallel(ctx context.Context, cfg config.AppConfig, op func(ctx conte
 
 	candIdx := 1
 	var winner *res
+	var lastErr error
 
 loop:
 	for {
@@ -426,6 +427,7 @@ loop:
 				}
 				break loop
 			} else if ctx.Err() == nil && r.err != context.Canceled && !errors.Is(r.err, context.Canceled) {
+				lastErr = r.err
 				if cfg.DebugMode {
 					log.Printf("[Racing] 节点 %s 失败: %s", name, r.err.Error())
 				}
@@ -484,6 +486,19 @@ loop:
 			log.Printf("[Racing] 客户端断开，停止并行竞争")
 			return
 		}
+	}
+
+	if winner == nil {
+		if lastErr != nil {
+			if ve := asVertexError(lastErr); ve != nil {
+				yield(StreamChunk{Err: ve})
+			} else {
+				yield(StreamChunk{Err: NewInternalError("All nodes failed: " + lastErr.Error())})
+			}
+		} else {
+			yield(StreamChunk{Err: NewInternalError("All nodes failed")})
+		}
+		return
 	}
 
 	if winner != nil {
