@@ -342,8 +342,18 @@ func (s *Server) adminUseNode(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-func (s *Server) adminSortNodesByLatency(w http.ResponseWriter, _ *http.Request) {
-	nodes.SortNodesByLatency()
+func (s *Server) adminSortNodesByLatency(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Desc bool `json:"desc"`
+	}
+	// 忽略错误，如果是空 body 默认为 false
+	_ = s.decodeAdminBody(w, r, &body)
+
+	if body.Desc {
+		nodes.SortNodesByLatencyDesc()
+	} else {
+		nodes.SortNodesByLatency()
+	}
 	s.writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

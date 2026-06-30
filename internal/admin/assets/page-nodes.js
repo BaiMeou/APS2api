@@ -266,7 +266,30 @@ async function testAllNodes() {
 
 async function dedupNodes() { await API.nodes.dedup(); loadNodes(); toast('去重完成'); }
 async function deleteDisabledNodes() { await API.nodes.deleteDisabled(); loadNodes(); toast('清理完成'); }
-async function sortNodesByLatency() { await API.nodes.sort(); await loadNodes(); toast('已按延迟重排节点'); }
+async function sortNodesByLatency() { await API.nodes.sort(false); await loadNodes(); toast('已按延迟重排节点'); }
+async function sortNodesByLatencyDesc() { await API.nodes.sort(true); await loadNodes(); toast('已按延迟降序重排节点'); }
+
+async function exportNodes() {
+  try {
+    const d = await API.nodes.list();
+    const nodes = d.nodes || [];
+    if (nodes.length === 0) {
+      toast('没有可导出的节点');
+      return;
+    }
+    const text = nodes.map(n => n.raw_uri).join('\n');
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'nodes.txt';
+    a.click();
+    URL.revokeObjectURL(url);
+    toast('已导出 ' + nodes.length + ' 个节点');
+  } catch (e) {
+    toast('导出失败: ' + e.message);
+  }
+}
 
 async function testSingleNode(uri) {
   toast('正在测试节点...');
