@@ -440,21 +440,55 @@ function rgbToHexStr(r, g, b) {
   }).join('').toUpperCase();
 }
 
-function switchPaletteMode(mode) {
-  ['RGB', 'HSL', 'HEX'].forEach(m => {
-    const tab = $('#tab-' + m);
-    const panel = $('#palette-' + m);
-    if (tab && panel) {
-      if (m === mode) {
-        tab.classList.add('active');
-        panel.classList.remove('hidden');
-      } else {
-        tab.classList.remove('active');
-        panel.classList.add('hidden');
-      }
+function rgbToHsv(r, g, b) {
+  r /= 255; g /= 255; b /= 255;
+  const max = Math.max(r, g, b), min = Math.min(r, g, b);
+  const v = max;
+  const d = max - min;
+  const s = max === 0 ? 0 : d / max;
+  let h = 0;
+  if (max !== min) {
+    switch (max) {
+      case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+      case g: h = (b - r) / d + 2; break;
+      case b: h = (r - g) / d + 4; break;
     }
-  });
+    h /= 6;
+  }
+  return [h, s, v];
 }
+
+function hsvToRgb(h, s, v) {
+  let r, g, b;
+  const i = Math.floor(h * 6);
+  const f = h * 6 - i;
+  const p = v * (1 - s);
+  const q = v * (1 - f * s);
+  const t = v * (1 - (1 - f) * s);
+  switch (i % 6) {
+    case 0: r = v, g = t, b = p; break;
+    case 1: r = q, g = v, b = p; break;
+    case 2: r = p, g = v, b = t; break;
+    case 3: r = p, g = q, b = v; break;
+    case 4: r = t, g = p, b = v; break;
+    case 5: r = v, g = p, b = q; break;
+  }
+  return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)];
+}
+
+let currentHSV = [0, 1, 1]; // h, s, v [0-1]
+
+window.resetColorTarget = function() {
+  if (activeColorTarget === 'bg') {
+    currentPaletteHex = '#002fa7';
+  } else if (activeColorTarget === 'font') {
+    currentPaletteHex = '#FFFFFF';
+  } else {
+    currentPaletteHex = '#ffffff';
+  }
+  syncPaletteUI(currentPaletteHex);
+  applyPaletteToTarget(currentPaletteHex);
+};
 
 function setActiveColorTarget(target, index = -1, hexColor = null, event = null) {
   if (activeColorTarget === 'bg' && target !== 'bg' && currentPaletteHex) {
@@ -479,25 +513,36 @@ function setActiveColorTarget(target, index = -1, hexColor = null, event = null)
   if (palette && event) {
     palette.classList.add('show');
     if (event.target) {
+      const paletteRect = palette.getBoundingClientRect();
       const rect = event.target.getBoundingClientRect();
-      // Position it below the clicked target
-      palette.style.top = (rect.bottom + window.scrollY + 8) + 'px';
-      let left = rect.left + window.scrollX;
-      // Prevent it from going off the right edge
-      if (left + 320 > window.innerWidth) {
-         left = window.innerWidth - 340;
+      
+      let left = rect.right + 24; 
+      let top = rect.top + (rect.height / 2) - (paletteRect.height / 2);
+      
+      // Horizontal constraints
+      if (left + paletteRect.width > window.innerWidth - 16) {
+        left = rect.left - paletteRect.width - 24; // flip to left
       }
+      if (left < 16) left = 16;
+      if (left + paletteRect.width > window.innerWidth - 16) {
+        left = window.innerWidth - paletteRect.width - 16;
+      }
+      
+      // Vertical constraints
+      if (top + paletteRect.height > window.innerHeight - 16) {
+        top = window.innerHeight - paletteRect.height - 16;
+      }
+      if (top < 16) top = 16;
+
+      palette.style.top = top + 'px';
       palette.style.left = left + 'px';
       palette.style.bottom = 'auto';
       palette.style.right = 'auto';
     }
   }
 
-  
-  // Highlight active targets
   if (target === 'font') {
     $('#fontColorBox').classList.add('active');
-    // Clear gradient actives
     document.querySelectorAll('.gradient-stop-box').forEach(el => el.classList.remove('active'));
   } else if (target === 'gradient') {
     $('#fontColorBox').classList.remove('active');
@@ -518,11 +563,11 @@ function applyPaletteToTarget(hex) {
     setFontColor(hex);
   } else if (activeColorTarget === 'gradient') {
     gradientColors[activeColorIndex] = hex;
-    renderGradientStops(false); // Don't steal focus
+    renderGradientStops(false);
   } else if (activeColorTarget === 'bg') {
     const bgBox = $('#bgColorBox');
     if (bgBox) bgBox.style.backgroundColor = hex;
-    applyBg(hex); // Only apply visually during drag, do not sync yet
+    applyBg(hex);
   }
 }
 
@@ -531,77 +576,71 @@ function syncPaletteUI(hex) {
   $('#hex-input').value = hex.toUpperCase();
   
   const [r, g, b] = hexToRgb(hex);
-  $('#rgb-r').value = r; $('#rgb-r-num').value = r;
-  $('#rgb-g').value = g; $('#rgb-g-num').value = g;
-  $('#rgb-b').value = b; $('#rgb-b-num').value = b;
+  $('#rgb-r').value = r; $('#rgb-g').value = g; $('#rgb-b').value = b;
   
-  const [h, s, l] = rgbToHsl(r, g, b);
+  const [h, s, v] = rgbToHsv(r, g, b);
+  currentHSV = [h, s, v];
+  
   const hDeg = Math.round(h * 360);
   const sPct = Math.round(s * 100);
-  const lPct = Math.round(l * 100);
+  const vPct = Math.round(v * 100);
   
-  $('#hsl-h').value = hDeg; $('#hsl-h-num').value = hDeg;
-  $('#hsl-s').value = sPct; $('#hsl-s-num').value = sPct;
-  $('#hsl-l').value = lPct; $('#hsl-l-num').value = lPct;
+  $('#hsb-h').value = hDeg; $('#hsb-s').value = sPct; $('#hsb-b').value = vPct;
   
-  updateHSLTracks(hDeg, sPct, lPct);
+  updatePickersUI();
 }
 
-function updateHSLTracks(h, s, l) {
-  const satTrack = $('#hsl-s');
-  const litTrack = $('#hsl-l');
-  if (satTrack) {
-    const c0 = hslToHex(h/360, 0, l/100);
-    const c100 = hslToHex(h/360, 1, l/100);
-    satTrack.style.background = `linear-gradient(to right, ${c0}, ${c100})`;
+function updatePickersUI() {
+  const [h, s, v] = currentHSV;
+  const [baseR, baseG, baseB] = hsvToRgb(h, 1, 1);
+  $('#svPanel').style.backgroundColor = rgbToHexStr(baseR, baseG, baseB);
+  
+  const svCursor = $('#svCursor');
+  if (svCursor) {
+    svCursor.style.left = (s * 100) + '%';
+    svCursor.style.top = ((1 - v) * 100) + '%';
   }
-  if (litTrack) {
-    const c50 = hslToHex(h/360, s/100, 0.5);
-    const ch = hslToHex(h/360, s/100, l/100); // the hue color at 50% lit
-    litTrack.style.background = `linear-gradient(to right, #000, ${c50}, #fff)`;
+  
+  const hueCursor = $('#hueCursor');
+  if (hueCursor) {
+    hueCursor.style.left = (h * 100) + '%';
   }
 }
 
-function updateFromRGB() {
+window.updateFromRGB = function() {
   let r = parseInt($('#rgb-r').value) || 0;
   let g = parseInt($('#rgb-g').value) || 0;
   let b = parseInt($('#rgb-b').value) || 0;
-  $('#rgb-r-num').value = r; $('#rgb-g-num').value = g; $('#rgb-b-num').value = b;
-  
+  if(r<0) r=0; if(r>255) r=255;
+  if(g<0) g=0; if(g>255) g=255;
+  if(b<0) b=0; if(b>255) b=255;
   const hex = rgbToHexStr(r, g, b);
   syncPaletteUI(hex);
   applyPaletteToTarget(hex);
-}
+};
 
-function updateFromHSL() {
-  let h = parseInt($('#hsl-h').value) || 0;
-  let s = parseInt($('#hsl-s').value) || 0;
-  let l = parseInt($('#hsl-l').value) || 0;
-  $('#hsl-h-num').value = h; $('#hsl-s-num').value = s; $('#hsl-l-num').value = l;
-  
-  const [r, g, b] = hslToRgb(h/360, s/100, l/100);
+window.updateFromHSB = function() {
+  let h = parseInt($('#hsb-h').value) || 0;
+  let s = parseInt($('#hsb-s').value) || 0;
+  let v = parseInt($('#hsb-b').value) || 0;
+  if(h<0) h=0; if(h>360) h=360;
+  if(s<0) s=0; if(s>100) s=100;
+  if(v<0) v=0; if(v>100) v=100;
+  const [r, g, b] = hsvToRgb(h/360, s/100, v/100);
   const hex = rgbToHexStr(r, g, b);
   syncPaletteUI(hex);
   applyPaletteToTarget(hex);
-}
+};
 
-function updateFromHEX() {
+window.updateFromHEX = function() {
   let hex = $('#hex-input').value.trim();
   if (/^#[0-9A-Fa-f]{6}$/.test(hex)) {
     syncPaletteUI(hex);
     applyPaletteToTarget(hex);
   }
-}
+};
 
-function updateFromNative(hex) {
-  const hexInput = document.getElementById('hex-input');
-  if (hexInput) {
-    hexInput.value = hex;
-    updateFromHEX();
-  }
-}
-
-async function activateEyeDropper() {
+window.activateEyeDropper = async function() {
   if (!window.EyeDropper) {
     toast('您的浏览器不支持吸管工具', true);
     return;
@@ -612,8 +651,101 @@ async function activateEyeDropper() {
     syncPaletteUI(result.sRGBHex);
     applyPaletteToTarget(result.sRGBHex);
   } catch (e) {
-    // User canceled
   }
+};
+
+// Panel Interactions
+const svPanel = $('#svPanel');
+const hueSlider = $('#hueSlider');
+const palette = $('#colorPaletteContainer');
+
+const getClientXY = (e) => {
+  if (e.touches && e.touches.length > 0) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+  if (e.changedTouches && e.changedTouches.length > 0) return { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
+  return { x: e.clientX, y: e.clientY };
+};
+
+if (svPanel) {
+  let isDraggingSV = false;
+  const updateSV = (e) => {
+    const rect = svPanel.getBoundingClientRect();
+    const pos = getClientXY(e);
+    let x = Math.max(0, Math.min(1, (pos.x - rect.left) / rect.width));
+    let y = Math.max(0, Math.min(1, (pos.y - rect.top) / rect.height));
+    currentHSV[1] = x;
+    currentHSV[2] = 1 - y;
+    const [r, g, b] = hsvToRgb(currentHSV[0], currentHSV[1], currentHSV[2]);
+    const hex = rgbToHexStr(r, g, b);
+    syncPaletteUI(hex);
+    applyPaletteToTarget(hex);
+  };
+  const startSV = (e) => { isDraggingSV = true; updateSV(e); if(e.cancelable !== false) e.preventDefault(); };
+  const moveSV = (e) => { if (isDraggingSV) { updateSV(e); if(e.cancelable !== false) e.preventDefault(); } };
+  const endSV = () => { isDraggingSV = false; };
+  
+  svPanel.addEventListener('mousedown', startSV);
+  svPanel.addEventListener('touchstart', startSV, { passive: false });
+  document.addEventListener('mousemove', moveSV);
+  document.addEventListener('touchmove', moveSV, { passive: false });
+  document.addEventListener('mouseup', endSV);
+  document.addEventListener('touchend', endSV);
+}
+
+if (hueSlider) {
+  let isDraggingHue = false;
+  const updateHue = (e) => {
+    const rect = hueSlider.getBoundingClientRect();
+    const pos = getClientXY(e);
+    let x = Math.max(0, Math.min(1, (pos.x - rect.left) / rect.width));
+    currentHSV[0] = x;
+    const [r, g, b] = hsvToRgb(currentHSV[0], currentHSV[1], currentHSV[2]);
+    const hex = rgbToHexStr(r, g, b);
+    syncPaletteUI(hex);
+    applyPaletteToTarget(hex);
+  };
+  const startHue = (e) => { isDraggingHue = true; updateHue(e); if(e.cancelable !== false) e.preventDefault(); };
+  const moveHue = (e) => { if (isDraggingHue) { updateHue(e); if(e.cancelable !== false) e.preventDefault(); } };
+  const endHue = () => { isDraggingHue = false; };
+  
+  hueSlider.addEventListener('mousedown', startHue);
+  hueSlider.addEventListener('touchstart', startHue, { passive: false });
+  document.addEventListener('mousemove', moveHue);
+  document.addEventListener('touchmove', moveHue, { passive: false });
+  document.addEventListener('mouseup', endHue);
+  document.addEventListener('touchend', endHue);
+}
+
+if (palette) {
+  let isDraggingContainer = false, dragOffsetX = 0, dragOffsetY = 0;
+  const startDrag = (e) => {
+    if (e.target.closest('button, input, .sv-panel, .hue-slider, .palette-preview, .input-row')) {
+      if (!e.target.closest('.drag-icon')) return;
+    }
+    isDraggingContainer = true;
+    const pos = getClientXY(e);
+    dragOffsetX = pos.x - palette.offsetLeft;
+    dragOffsetY = pos.y - palette.offsetTop;
+    if(e.cancelable !== false) e.preventDefault();
+  };
+  const doDrag = (e) => {
+    if (!isDraggingContainer) return;
+    const pos = getClientXY(e);
+    palette.style.left = (pos.x - dragOffsetX) + 'px';
+    palette.style.top = (pos.y - dragOffsetY) + 'px';
+    palette.style.bottom = 'auto';
+    palette.style.right = 'auto';
+    if(e.cancelable !== false) e.preventDefault();
+  };
+  const stopDrag = () => {
+    isDraggingContainer = false;
+  };
+  
+  palette.addEventListener('mousedown', startDrag);
+  palette.addEventListener('touchstart', startDrag, { passive: false });
+  document.addEventListener('mousemove', doDrag);
+  document.addEventListener('touchmove', doDrag, { passive: false });
+  document.addEventListener('mouseup', stopDrag);
+  document.addEventListener('touchend', stopDrag);
 }
 
 function renderGradientStops(stealFocus = true) {
@@ -680,13 +812,11 @@ async function saveCustomPreset(type) {
   }
 }
 
-
 document.addEventListener('click', (e) => {
   const palette = document.querySelector('.color-palette-container');
   if (!palette) return;
   if (!palette.classList.contains('show')) return;
   
-  // if click is inside palette or on a color target, do nothing
   if (palette.contains(e.target) || e.target.closest('.color-preview-box') || e.target.closest('.gradient-stop-box')) {
     return;
   }
@@ -694,36 +824,53 @@ document.addEventListener('click', (e) => {
   palette.classList.remove('show');
   
   if (activeColorTarget === 'bg' && currentPaletteHex) {
-    setBgAndSync(currentPaletteHex); // Sync bg color when palette is closed
+    setBgAndSync(currentPaletteHex);
   }
   
-  // clear active highlights
   document.querySelectorAll('.color-preview-box, .gradient-stop-box').forEach(el => el.classList.remove('active'));
   activeColorTarget = null;
 });
 
-// Make palette draggable
+// Make palette draggable on any non-interactive part
 document.addEventListener('DOMContentLoaded', () => {
-  const headerDrag = document.getElementById('paletteHeaderDrag');
-  let isDragging = false, dragOffsetX = 0, dragOffsetY = 0;
-  if (headerDrag) {
-    headerDrag.addEventListener('mousedown', (e) => {
-      isDragging = true;
-      const palette = document.querySelector('.color-palette-container');
-      if (!palette) return;
-      dragOffsetX = e.clientX - palette.offsetLeft;
-      dragOffsetY = e.clientY - palette.offsetTop;
-    });
-    document.addEventListener('mousemove', (e) => {
-      if (!isDragging) return;
-      const palette = document.querySelector('.color-palette-container');
-      if (!palette) return;
-      palette.style.left = (e.clientX - dragOffsetX) + 'px';
-      palette.style.top = (e.clientY - dragOffsetY) + 'px';
+  const palette = document.getElementById('colorPaletteContainer');
+  let isDraggingContainer = false, dragOffsetX = 0, dragOffsetY = 0;
+  if (palette) {
+    const startDrag = (e) => {
+      // Ignore interactive elements unless it's the drag icon
+      if (e.target.closest('button, input, .sv-panel, .hue-slider, .palette-preview, .input-row')) {
+        if (!e.target.closest('.drag-icon')) return;
+      }
+      isDraggingContainer = true;
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      dragOffsetX = clientX - palette.offsetLeft;
+      dragOffsetY = clientY - palette.offsetTop;
+      if (!e.touches) e.preventDefault(); // prevent text selection
+    };
+
+    const doDrag = (e) => {
+      if (!isDraggingContainer) return;
+      const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+      const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+      palette.style.left = (clientX - dragOffsetX) + 'px';
+      palette.style.top = (clientY - dragOffsetY) + 'px';
       palette.style.bottom = 'auto';
       palette.style.right = 'auto';
-    });
-    document.addEventListener('mouseup', () => isDragging = false);
+    };
+
+    const stopDrag = () => {
+      isDraggingContainer = false;
+    };
+
+    palette.addEventListener('mousedown', startDrag);
+    palette.addEventListener('touchstart', startDrag, { passive: false });
+    
+    document.addEventListener('mousemove', doDrag);
+    document.addEventListener('touchmove', doDrag, { passive: false });
+    
+    document.addEventListener('mouseup', stopDrag);
+    document.addEventListener('touchend', stopDrag);
   }
 });
 
