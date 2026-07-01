@@ -1,7 +1,6 @@
 //go:build windows
 // +build windows
 
-// Copyright (c) 2026 BaiMeow. All rights reserved.
 package cli
 
 import (

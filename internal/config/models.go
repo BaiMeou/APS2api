@@ -1,6 +1,3 @@
-// Copyright (c) 2026 BaiMeow. All rights reserved.
-// Use of this source code is governed by the PolyForm Noncommercial License 1.0.0
-// that can be found in the LICENSE file.
 
 // 本文件实现模型清单与别名映射的加载。
 //

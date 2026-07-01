@@ -1,6 +1,3 @@
-// Copyright (c) 2026 BaiMeow. All rights reserved.
-// Use of this source code is governed by the PolyForm Noncommercial License 1.0.0
-// that can be found in the LICENSE file.
 
 // Package spool 提供"先写后读"的字节缓冲，用于承载请求/媒体体的序列化输出。
 //
