@@ -1,7 +1,3 @@
-// Copyright (c) 2026 BaiMeow. All rights reserved.
-// Use of this source code is governed by the PolyForm Noncommercial License 1.0.0
-// that can be found in the LICENSE file.
-
 package main
 
 import (
@@ -84,8 +80,7 @@ func inDocker() bool {
 func printLegacyBanner() {
 	fmt.Println("╔══════════════════════════════════════════════════════════════╗")
 	fmt.Printf("║  Vertex AI Proxy  %-42s ║\n", version)
-	fmt.Println("║  Copyright (c) 2026 BaiMeow. All rights reserved.          ║")
-	fmt.Println("║  PolyForm Noncommercial License 1.0.0                      ║")
+	fmt.Println("║  PolyForm Noncommercial License 1.0.0   Deconstructed_Cube   ║")
 	fmt.Printf("║  Build: %s / %s                                  ║\n", buildCommit, buildTime)
 	fmt.Printf("║  Platform: %s/%s                                       ║\n", runtime.GOOS, runtime.GOARCH)
 	fmt.Println("╚══════════════════════════════════════════════════════════════╝")

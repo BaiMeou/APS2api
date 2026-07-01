@@ -9,6 +9,14 @@ const LOADERS = { overview: loadOverview, settings: loadSettings, keys: loadKeys
 const PAGE_CACHE = {};
 let curPage = null;
 function go(page, instant) {
+  if (curPage === 'settings' && page !== 'settings' && window.hasUnsavedSettings) {
+    showConfirm('您对设置进行了修改且未保存，离开将丢失这些更改。确认离开吗？', () => {
+      window.hasUnsavedSettings = false;
+      go(page, instant);
+    });
+    return;
+  }
+
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('active', b.dataset.page === page));
   const next = $('#page-' + page), cur = curPage && $('#page-' + curPage);
   if (curPage === 'nodes' && _testTimer) { clearInterval(_testTimer); _testTimer = null; }

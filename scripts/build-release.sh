@@ -8,7 +8,7 @@
 #   vertex-proxy-linux-amd64.zip     (Linux x86_64)
 #   vertex-proxy-linux-386.zip       (Linux 32 位 / 老机器)
 #   vertex-proxy-linux-arm64.zip     (Linux ARM 64 位 / 树莓派 3/4/5 64 位系统)
-#   vertex-proxy-linux-arm.zip       (Linux ARM 32 位 / 树莓派 0/1/2/3 32 位系统)
+#   vertex-proxy-linux-arm32.zip       (Linux ARM 32 位 / 树莓派 0/1/2/3 32 位系统)
 #   vertex-proxy-android-arm64.zip   (Android / Termux / 鸿蒙 4.x 老版本)
 #   vertex-proxy-darwin-amd64.zip    (Mac Intel)
 #   vertex-proxy-darwin-arm64.zip    (Mac Apple Silicon)
@@ -94,7 +94,7 @@ build windows 386   vertex-proxy.exe vertex-proxy-windows-386   scripts/启动.b
 build linux   amd64 vertex-proxy     vertex-proxy-linux-amd64   scripts/start.sh scripts/vertex-proxy.service scripts/setup.sh
 build linux   386   vertex-proxy     vertex-proxy-linux-386     scripts/start.sh scripts/vertex-proxy.service scripts/setup.sh
 build linux   arm64 vertex-proxy     vertex-proxy-linux-arm64   scripts/start.sh scripts/vertex-proxy.service scripts/setup.sh
-build linux   arm   vertex-proxy     vertex-proxy-linux-arm     scripts/start.sh scripts/vertex-proxy.service scripts/setup.sh
+build linux   arm32 vertex-proxy     vertex-proxy-linux-arm32   scripts/start.sh scripts/vertex-proxy.service scripts/setup.sh
 
 # Android（启用 CGO 编译，指定 NDK 编译器，API 28 以兼容 Android 9+）
 if [ -n "${ANDROID_NDK_HOME:-}" ]; then

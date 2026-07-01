@@ -5,7 +5,6 @@ title Vertex AI Proxy — 交互式部署向导
 echo.
 echo ╔══════════════════════════════════════════════════╗
 echo ║   Vertex AI Proxy — 交互式部署向导              ║
-echo ║   Copyright (c) 2026 BaiMeow                    ║
 echo ╚══════════════════════════════════════════════════╝
 echo.
 

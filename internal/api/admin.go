@@ -1,6 +1,3 @@
-// Copyright (c) 2026 BaiMeow. All rights reserved.
-// Use of this source code is governed by the PolyForm Noncommercial License 1.0.0
-// that can be found in the LICENSE file.
 
 // 本文件实现管理后台。
 //
@@ -410,6 +407,7 @@ func (s *Server) adminGetSettings(w http.ResponseWriter, _ *http.Request) {
 		"font_color_type":             cfg.FontColorType,
 		"font_color":                  cfg.FontColor,
 		"custom_bg_presets":           cfg.CustomBgPresets,
+		"debug_mode":                  cfg.DebugMode,
 	}})
 }
 
@@ -434,6 +432,7 @@ var adminAllowedSettings = map[string]bool{
 	"font_color_type":             true,
 	"font_color":                  true,
 	"custom_bg_presets":           true,
+	"debug_mode":                  true,
 }
 
 // adminPutSettings 处理 PUT /api/admin/settings：合并 {settings:{...}} 写回 config.json 并清缓存。

@@ -1,6 +1,3 @@
-// Copyright (c) 2026 BaiMeow. All rights reserved.
-// Use of this source code is governed by the PolyForm Noncommercial License 1.0.0
-// that can be found in the LICENSE file.
 
 // Package vertex 实现与 Google 匿名 batchGraphql 端点交互的核心请求循环。
 package vertex

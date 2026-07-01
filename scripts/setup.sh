@@ -45,7 +45,6 @@ print_banner() {
   echo ""
   echo -e "${CYAN}╔══════════════════════════════════════════════════╗${NC}"
   echo -e "${CYAN}║   Vertex AI Proxy — 交互式部署向导              ║${NC}"
-  echo -e "${CYAN}║   Copyright (c) 2026 BaiMeow                    ║${NC}"
   echo -e "${CYAN}╚══════════════════════════════════════════════════╝${NC}"
   echo ""
 }
