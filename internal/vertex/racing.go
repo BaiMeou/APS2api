@@ -50,5 +50,6 @@ func StreamParallel(ctx context.Context, cfg config.ConfigProvider,
 		if !yield(chunk) {
 			return
 		}
+
 	}
 }

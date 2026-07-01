@@ -1,6 +1,3 @@
-// Copyright (c) 2026 BaiMeow. All rights reserved.
-// Use of this source code is governed by the PolyForm Noncommercial License 1.0.0
-// that can be found in the LICENSE file.
 
 // Package recaptcha 实现 Google reCAPTCHA Enterprise 匿名 token 的现抓现用。
 //

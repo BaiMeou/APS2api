@@ -1,4 +1,3 @@
-// Copyright (c) 2026 BaiMeow. All rights reserved.
 package cli
 
 import (
@@ -25,8 +24,8 @@ type ReqState struct {
 }
 
 const (
-	minTermWidth = 60  // 最小终端宽度
-	maxLogs      = 10  // 日志窗口固定显示的行数
+	minTermWidth = 60 // 最小终端宽度
+	maxLogs      = 10 // 日志窗口固定显示的行数
 )
 
 var (

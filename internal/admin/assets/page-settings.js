@@ -67,6 +67,20 @@ async function loadSettings() {
     sectionsHtml +
     '<button class="btn mt-14px" onclick="saveSettings()">保存设置</button>';
 
+  $('#settingsForm').addEventListener('input', () => window.hasUnsavedSettings = true);
+  $('#settingsForm').addEventListener('change', () => window.hasUnsavedSettings = true);
+  window.hasUnsavedSettings = false;
+
+  if (!window._hasSettingsUnloadListener) {
+    window.addEventListener('beforeunload', (e) => {
+      if (window.hasUnsavedSettings) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    });
+    window._hasSettingsUnloadListener = true;
+  }
+
   const stickyEl = $('#set_sticky_pool_enabled');
   const parallelEl = $('#set_parallel_pool_enabled');
   if (stickyEl && parallelEl) {
@@ -109,4 +123,5 @@ async function saveSettings() {
     out['sticky_pool_enabled'] = false;
   }
   await API.settings.put(out); toast('设置已保存');
+  window.hasUnsavedSettings = false;
 }

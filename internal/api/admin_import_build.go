@@ -1,6 +1,3 @@
-// Copyright (c) 2026 BaiMeow. All rights reserved.
-// Use of this source code is governed by the PolyForm Noncommercial License 1.0.0
-// that can be found in the LICENSE file.
 
 package api
 
@@ -14,6 +11,7 @@ import (
 	"github.com/bsfdsagfadg/vertex/internal/nodes"
 	"gopkg.in/yaml.v3"
 )
+
 
 func applyCommonImportedProxyFields(proxy map[string]any, obj map[string]any) {
 	if sni := strings.TrimSpace(valueToString(obj["Sni"])); sni != "" {
