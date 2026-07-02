@@ -161,13 +161,13 @@ func main() {
 	cli.InitTracker(dailyLogger)
 	cli.SetAppInfo(version, buildCommit, buildTime, runtime.GOOS, runtime.GOARCH)
 
-	cfg := config.Load()
+	cfg := config.GetProvider()
 	if err := db.InitDB(filepath.Join(config.ConfigDir(), "data.db")); err != nil {
 		log.Fatalf("[vproxy] failed to init database: %v", err)
 	}
 	defer db.CloseDB()
 
-	spool.SetMaxSpillBytes(int64(cfg.MaxSpillMB) << 20)
+	spool.SetMaxSpillBytes(int64(cfg.MaxSpillMB()) << 20)
 
 	nodes.DeleteNodeCallback = transport.RemoveProxy
 	transport.StartProxyGC(5*time.Minute, 30*time.Minute)
@@ -181,15 +181,15 @@ func main() {
 	vc := vertex.NewVertexAIClient(cfg)
 
 	telemetryEnabled := true
-	if cfg.TelemetryEnabled != nil {
-		telemetryEnabled = *cfg.TelemetryEnabled
+	if cfg.TelemetryEnabled() != nil {
+		telemetryEnabled = *cfg.TelemetryEnabled()
 	}
 	telemetry.Start(version, runtime.GOOS+"/"+runtime.GOARCH, telemetryEnabled)
 
 	srv := api.NewServer(vc, keys, cfg)
 	//nolint:exhaustruct
 	httpServer := &http.Server{
-		Addr:              "0.0.0.0:" + strconv.Itoa(cfg.PortAPI),
+		Addr:              "0.0.0.0:" + strconv.Itoa(cfg.PortAPI()),
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 15 * time.Second,
 		IdleTimeout:       120 * time.Second,
@@ -222,7 +222,7 @@ func main() {
 	}()
 
 	log.Printf("[vproxy] 监听 %s（API 密钥 %d 个，max_retries=%d，token_pool=%d）",
-		httpServer.Addr, keys.Count(), cfg.MaxRetries, cfg.TokenPoolSize)
+		httpServer.Addr, keys.Count(), cfg.MaxRetries(), cfg.TokenPoolSize())
 	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("[vproxy] server error: %v", err)
 	}
