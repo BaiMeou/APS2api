@@ -24,7 +24,7 @@ func (c *VertexAIClient) CountTokens(ctx context.Context, model string, contents
 	cfg := c.cfg
 
 	reqID := RequestIDFromContext(ctx)
-	sess, err := c.net.CreateSession(60, cfg.GetProxyURL(), reqID)
+	sess, err := c.net.CreateSession(60, cfg.ProxyURL(), reqID)
 	if err != nil {
 		return 0
 	}
@@ -63,7 +63,7 @@ func buildCountTokensPayload(model string, contents []any, recaptchaToken string
 	if contents == nil {
 		contents = []any{}
 	}
-	querySig := cfg.GetCountTokensQuerySignature()
+	querySig := cfg.CountTokensQuerySignature()
 	if querySig == "" {
 		querySig = "2/mENOSldfC+HZM+tGhVuJLrl8M6gEyK3HRjUKuA5AM58="
 	}

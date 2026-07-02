@@ -45,7 +45,7 @@ func TestRaiseForStatus(t *testing.T) {
 }
 
 func TestBuildRequestPayload(t *testing.T) {
-	cfg := config.DefaultConfig()
+	cfg := config.StaticProvider(config.DefaultConfig())
 	payload := map[string]any{"contents": []any{
 		map[string]any{"role": "user", "parts": []any{map[string]any{"text": "hi"}}},
 	}}

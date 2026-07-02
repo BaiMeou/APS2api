@@ -50,10 +50,10 @@ type VertexAIClient struct {
 }
 
 func NewVertexAIClient(cfg config.ConfigProvider) *VertexAIClient {
-	net := transport.NewNetworkClient(cfg.GetDebugMode())
+	net := transport.NewNetworkClient(cfg.DebugMode())
 	return &VertexAIClient{
 		net:  net,
-		pool: recaptcha.NewTokenPoolSize(net, cfg.GetTokenPoolSize(), cfg.GetProxyURL(), cfg.GetDebugMode()),
+		pool: recaptcha.NewTokenPoolSize(net, cfg.TokenPoolSize(), cfg.ProxyURL(), cfg.DebugMode()),
 		cfg:  cfg,
 	}
 }

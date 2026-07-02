@@ -2,6 +2,7 @@ package vertex
 
 import (
 	"context"
+	"errors"
 	"log"
 	"sort"
 
@@ -15,18 +16,18 @@ type candidateResult struct {
 }
 
 func (c *VertexAIClient) CompleteChat(ctx context.Context, model string, geminiPayload map[string]any) (map[string]any, error) {
-	cands := nodes.SelectForParallel(c.cfg.GetParallelPoolSize(), c.cfg.GetParallelNodeTopK(), c.cfg.GetDebugMode(), c.cfg.GetStickyPoolEnabled())
+	cands := nodes.SelectForParallel(c.cfg.ParallelPoolSize(), c.cfg.ParallelNodeTopK(), c.cfg.DebugMode(), c.cfg.StickyNodePriority())
 
-	if !c.cfg.GetParallelPoolEnabled() || len(cands) == 0 {
-		proxy := c.cfg.GetActiveNodeURI()
+	if !c.cfg.ParallelPoolEnabled() || len(cands) == 0 {
+		proxy := c.cfg.ActiveNodeURI()
 		if proxy == "" {
-			proxy = c.cfg.GetProxyURL()
+			proxy = c.cfg.ProxyURL()
 		}
 		log.Printf("[Vertex] [CompleteChat] 降级为单节点运行: %s", nodes.GetNodeName(proxy))
 		return c.runSingleCandidate(ctx, model, geminiPayload, proxy)
 	}
 
-	if c.cfg.GetDebugMode() {
+	if c.cfg.DebugMode() {
 		log.Printf("[Vertex] [CompleteChat] 启动所有候选, %d 个节点参与", len(cands))
 		for _, cand := range cands {
 			log.Printf("[Vertex] [CompleteChat] 参与节点: %s", cand.Name)
@@ -58,13 +59,26 @@ func (c *VertexAIClient) CompleteChat(ctx context.Context, model string, geminiP
 		case res := <-resCh:
 			remaining--
 			if res.err != nil {
-				nodes.RecordTest(res.proxyURI, false, 0, res.err.Error())
-				if c.cfg.GetDebugMode() {
-					log.Printf("[Vertex] [CompleteChat] 节点 %s 失败: %s", nodes.GetNodeName(res.proxyURI), res.err.Error())
+				if res.err != context.Canceled && !errors.Is(res.err, context.Canceled) {
+					ve := asVertexError(res.err)
+					if ve != nil && ve.Kind == "ratelimit" {
+						if c.cfg.DebugMode() {
+							log.Printf("[Vertex] [CompleteChat] 节点 %s 触发 429 API 限制，进入 30 秒短时歇息", nodes.GetNodeName(res.proxyURI))
+						}
+						nodes.RecordRateLimit(res.proxyURI, 30)
+						nodes.GetStickyPool().Evict(res.proxyURI)
+					} else {
+						if c.cfg.DebugMode() {
+							log.Printf("[Vertex] [CompleteChat] 节点 %s 失败: %s", nodes.GetNodeName(res.proxyURI), res.err.Error())
+						}
+						nodes.RecordTest(res.proxyURI, false, 0, res.err.Error())
+						nodes.GetStickyPool().Evict(res.proxyURI)
+					}
 				}
 				continue
 			}
 			nodes.RecordTest(res.proxyURI, true, 50, "")
+			nodes.GetStickyPool().Add(res.proxyURI)
 			if candidateFinish(res.resp) == "STOP" {
 				cancel()
 				return res.resp, nil

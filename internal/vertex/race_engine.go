@@ -66,18 +66,18 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 
 	stickyPool := nodes.GetStickyPool()
 
-	cands := nodes.SelectForParallel(cfg.GetParallelPoolSize(), cfg.GetParallelNodeTopK(), cfg.GetDebugMode(), cfg.GetStickyPoolEnabled())
+	cands := nodes.SelectForParallel(cfg.ParallelPoolSize(), cfg.ParallelNodeTopK(), cfg.DebugMode(), cfg.StickyNodePriority())
 
-	if !cfg.GetParallelPoolEnabled() || len(cands) == 0 {
-		proxy := cfg.GetActiveNodeURI()
+	if !cfg.ParallelPoolEnabled() || len(cands) == 0 {
+		proxy := cfg.ActiveNodeURI()
 		if proxy == "" {
-			proxy = cfg.GetProxyURL()
+			proxy = cfg.ProxyURL()
 		}
 		log.Printf("[Vertex] [RunParallel] 降级为单节点运行: %s", nodes.GetNodeName(proxy))
 		return run(ctx, proxy)
 	}
 
-	if cfg.GetDebugMode() {
+	if cfg.DebugMode() {
 		log.Printf("[Vertex] [RunParallel] 开启对冲延迟竞速, %d 个节点参与", len(cands))
 		for _, c := range cands {
 			log.Printf("[Vertex] [RunParallel] 参与节点: %s", c.Name)
@@ -120,8 +120,8 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 
 	launchNode(cands[0].RawURI)
 
-	delay := time.Duration(cfg.GetParallelPoolDelayMs()) * time.Millisecond
-	if cfg.GetParallelPoolDelayDynamic() {
+	delay := time.Duration(cfg.ParallelPoolDelayMs()) * time.Millisecond
+	if cfg.ParallelPoolDelayDynamic() {
 		delay = time.Duration(nodes.GetAverageLatency()) * time.Millisecond
 	}
 
@@ -139,7 +139,7 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 
 		case <-timer.C:
 			if nextIdx < len(cands) {
-				if cfg.GetDebugMode() {
+				if cfg.DebugMode() {
 					log.Printf("[Racing] 对冲延迟唤醒，启动备份节点: %s", cands[nextIdx].Name)
 				}
 				launchNode(cands[nextIdx].RawURI)
@@ -160,7 +160,7 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 
 				returnedOnWinPath = true
 
-				collectTimeout := time.Duration(min(30, 5+cfg.GetParallelPoolSize())) * time.Second
+				collectTimeout := time.Duration(min(30, 5+cfg.ParallelPoolSize())) * time.Second
 				go func() {
 					collectCtx, collectCancel := context.WithTimeout(context.Background(), collectTimeout)
 					defer collectCancel()
@@ -186,13 +186,13 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 			}
 
 			if res.err != context.Canceled && !errors.Is(res.err, context.Canceled) {
-				if cfg.GetDebugMode() {
+				if cfg.DebugMode() {
 					log.Printf("[Racing] 节点 %s 失败: %s", name, res.err.Error())
 				}
 
 				ve := asVertexError(res.err)
 				if ve != nil && ve.Kind == "ratelimit" {
-					if cfg.GetDebugMode() {
+					if cfg.DebugMode() {
 						log.Printf("[Racing] 节点 %s 触发 429 API 限制，进入 30 秒短时歇息", name)
 					}
 					nodes.RecordRateLimit(res.uri, 30)
@@ -203,7 +203,7 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 				}
 
 				if ve != nil && !ve.IsRetryable() {
-					if cfg.GetDebugMode() {
+					if cfg.DebugMode() {
 						log.Printf("[Racing] 节点 %s 触发不可重试的硬性错误，终止竞速", name)
 					}
 					cancel()
@@ -211,7 +211,7 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 				}
 
 				if nextIdx < len(cands) {
-					if cfg.GetDebugMode() {
+					if cfg.DebugMode() {
 						log.Printf("[Racing] 竞速失败触发极速对冲接力...")
 					}
 					launchNode(cands[nextIdx].RawURI)
@@ -219,7 +219,7 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 					safeResetTimer(timer, delay)
 				}
 			} else {
-				if cfg.GetDebugMode() {
+				if cfg.DebugMode() {
 					log.Printf("[Racing] 节点 %s 拨号取消", name)
 				}
 			}

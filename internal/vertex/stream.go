@@ -64,8 +64,8 @@ func (c *VertexAIClient) StreamChat(ctx context.Context, model string, geminiPay
 
 func (c *VertexAIClient) executeStreamingWithRetries(ctx context.Context, model string, geminiPayload map[string]any, proxyURI string, yield func(StreamChunk) bool) {
 	cfg := c.cfg
-	maxRetries := cfg.GetMaxRetries()
-	if cfg.GetParallelPoolEnabled() {
+	maxRetries := cfg.MaxRetries()
+	if cfg.ParallelPoolEnabled() && !cfg.ParallelPoolRetryEnabled() {
 		maxRetries = 0
 	}
 	contentYielded := false
@@ -237,7 +237,7 @@ func (c *VertexAIClient) executeStreamingAttempt(ctx context.Context, sess *tran
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(sr.Body)
 		errText := buf.String()
-		if cfg.GetDebugMode() {
+		if cfg.DebugMode() {
 			debugReq, _ := json.Marshal(newBody)
 			log.Printf("[DEBUG] [StreamChat] HTTP 报错! 状态码: %d", sr.StatusCode)
 			log.Printf("[DEBUG] [StreamChat] 完整请求体: %s", string(debugReq))
@@ -265,7 +265,7 @@ func (c *VertexAIClient) executeStreamingAttempt(ctx context.Context, sess *tran
 		return processStreamingObject(obj, emit)
 	})
 
-	if scanErr != nil && cfg.GetDebugMode() && !errors.Is(scanErr, context.Canceled) {
+	if scanErr != nil && cfg.DebugMode() && !errors.Is(scanErr, context.Canceled) {
 		debugReq, _ := json.Marshal(newBody)
 		log.Printf("[DEBUG] [StreamChat] 扫描流数据报错! error: %v", scanErr)
 		log.Printf("[DEBUG] [StreamChat] 完整请求体: %s", string(debugReq))
