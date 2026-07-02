@@ -1,7 +1,8 @@
 const SETTINGS_FIELDS = [
   // 🚀 Group: pool (并发与 Token 池管理)
   { k: 'parallel_pool_enabled', label: '并发请求池', type: 'bool', group: 'pool', desc: '同时请求多个健康节点，首包到达即采纳，降低延迟' },
-  { k: 'sticky_pool_enabled', label: '粘性节点优先轮询', type: 'bool', group: 'pool', desc: '启用后优先从粘性池中逐个尝试成功节点，失败即换下一个。粘性池本身始终在工作，此开关只影响优先级的分配。' },
+  { k: 'parallel_pool_retry_enabled', label: '并发池单点重试', type: 'bool', group: 'pool', desc: '开启后允许并发池内节点429后依然等待并重试（适用于少节点场景）' },
+  { k: 'sticky_node_priority', label: '粘性节点优先轮询', type: 'bool', group: 'pool', desc: '启用后优先从粘性池中逐个尝试成功节点，失败即换下一个。粘性池本身始终在工作，此开关只影响优先级的分配。' },
   { k: 'parallel_pool_size', label: '并发数', type: 'number', max: 20, min: 1, group: 'pool', desc: '并发抢跑的节点数 (默认 15，最大 20)' },
   { k: 'parallel_pool_delay_dynamic', label: '动态对冲延迟', type: 'bool', group: 'pool', desc: '根据节点平均响应时间动态调整并发启动间隔，平衡延迟与流量消耗' },
   { k: 'parallel_pool_delay_ms', label: '固定对冲延迟时间 (毫秒)', type: 'number', group: 'pool', desc: '当禁用动态延迟时，以此固定间隔对冲触发后续备份通道 (默认 500ms)' },
@@ -23,19 +24,19 @@ const SETTINGS_FIELDS = [
 let curSettings = {};
 async function loadSettings() {
   const d = await API.settings.get(); curSettings = d.settings || d;
-  
+
   const gpEl = $('#globalProxy');
   if (gpEl && curSettings.proxy_url !== undefined) {
     gpEl.value = curSettings.proxy_url;
   }
-  
+
   const fld = (f) => {
     const v = curSettings[f.k];
-    if (f.type === 'bool') return `<div class="field bool"><div class="min-w-0"><label for="set_${f.k}">${f.label}</label>${f.desc?`<div class="desc mt-4px">${f.desc}</div>`:''}</div><label class="toggle"><input type="checkbox" id="set_${f.k}" ${v?'checked':''}><span class="track"></span></label></div>`;
+    if (f.type === 'bool') return `<div class="field bool"><div class="min-w-0"><label for="set_${f.k}">${f.label}</label>${f.desc ? `<div class="desc mt-4px">${f.desc}</div>` : ''}</div><label class="toggle"><input type="checkbox" id="set_${f.k}" ${v ? 'checked' : ''}><span class="track"></span></label></div>`;
     let input;
-    if (f.type === 'select') input = `<select id="set_${f.k}">${f.opts.map(o => `<option ${o===v?'selected':''}>${o}</option>`).join('')}</select>`;
+    if (f.type === 'select') input = `<select id="set_${f.k}">${f.opts.map(o => `<option ${o === v ? 'selected' : ''}>${o}</option>`).join('')}</select>`;
     else input = `<input type="${f.type}" id="set_${f.k}" value="${v ?? ''}" ${f.max !== undefined ? `max="${f.max}" oninput="if(this.value!=='' && parseInt(this.value)>${f.max}) this.value='${f.max}'"` : ''} ${f.min !== undefined ? `min="${f.min}"` : ''}>`;
-    return `<div class="field"><label for="set_${f.k}">${f.label}</label>${input}${f.desc?`<div class="desc">${f.desc}</div>`:''}</div>`;
+    return `<div class="field"><label for="set_${f.k}">${f.label}</label>${input}${f.desc ? `<div class="desc">${f.desc}</div>` : ''}</div>`;
   };
 
   // 【核心修改：定义视觉功能分组】
@@ -81,12 +82,13 @@ async function loadSettings() {
     window._hasSettingsUnloadListener = true;
   }
 
-  const stickyEl = $('#set_sticky_pool_enabled');
+  const stickyEl = $('#set_sticky_node_priority');
+  const parallelRetryEl = $('#set_parallel_pool_retry_enabled');
   const parallelEl = $('#set_parallel_pool_enabled');
-  if (stickyEl && parallelEl) {
+  if (stickyEl && parallelEl && parallelRetryEl) {
     const updateStickyDisabled = () => {
       const disabled = !parallelEl.checked;
-      
+
       stickyEl.disabled = disabled;
       if (disabled) stickyEl.checked = false;
       const container = stickyEl.closest('.field');
@@ -98,30 +100,42 @@ async function loadSettings() {
           desc.textContent = disabled ? '需先启用并发请求池' : '启用后优先从粘性池中逐个尝试成功节点，失败即换下一个。粘性池本身始终在工作，此开关只影响优先级的分配。';
         }
       }
+
+      parallelRetryEl.disabled = disabled;
+      if (disabled) parallelRetryEl.checked = false;
+      const retryContainer = parallelRetryEl.closest('.field');
+      if (retryContainer) {
+        retryContainer.style.opacity = disabled ? '0.5' : '1';
+        retryContainer.style.pointerEvents = disabled ? 'none' : '';
+        const retryDesc = retryContainer.querySelector('.desc');
+        if (retryDesc) {
+          retryDesc.textContent = disabled ? '需先启用并发请求池' : '开启后允许并发池内节点429后依然等待并重试（适用于少节点场景）';
+        }
+      }
     };
     updateStickyDisabled();
     parallelEl.addEventListener('change', updateStickyDisabled);
   }
-
-  PAGE_CACHE['settings'] = $('#page-settings').innerHTML;
 }
 
 async function saveSettings() {
   const out = {};
-  for (const f of SETTINGS_FIELDS) { 
-    const el = $('#set_' + f.k); 
-    if (!el) continue; 
-    if (f.type === 'bool') out[f.k] = el.checked; 
-    else if (f.type === 'number') out[f.k] = parseInt(el.value || '0', 10); 
-    else out[f.k] = el.value; 
+  for (const f of SETTINGS_FIELDS) {
+    const el = $('#set_' + f.k);
+    if (!el) continue;
+    if (f.type === 'bool') out[f.k] = el.checked;
+    else if (f.type === 'number') out[f.k] = parseInt(el.value || '0', 10);
+    else out[f.k] = el.value;
   }
   // Keep sending whatever telemetry_enabled is in curSettings to prevent config loss/errors
   if (curSettings.telemetry_enabled !== undefined) {
     out['telemetry_enabled'] = curSettings.telemetry_enabled;
   }
   if (!out['parallel_pool_enabled']) {
-    out['sticky_pool_enabled'] = false;
+    out['sticky_node_priority'] = false;
+    out['parallel_pool_retry_enabled'] = false;
   }
   await API.settings.put(out); toast('设置已保存');
   window.hasUnsavedSettings = false;
+  await loadSettings();
 }
