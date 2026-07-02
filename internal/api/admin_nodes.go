@@ -275,8 +275,18 @@ func (adm *AdminHandler) adminUseNode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-func (adm *AdminHandler) adminSortNodesByLatency(w http.ResponseWriter, _ *http.Request) {
-	nodes.SortNodesByLatency()
+func (adm *AdminHandler) adminSortNodesByLatency(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Desc bool `json:"desc"`
+	}
+	if !adm.decodeAdminBody(w, r, &body) {
+		return
+	}
+	if body.Desc {
+		nodes.SortNodesByLatencyDesc()
+	} else {
+		nodes.SortNodesByLatency()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

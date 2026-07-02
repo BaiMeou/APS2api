@@ -1,4 +1,4 @@
-document.getElementById('nodesBody').addEventListener('click', function(e) {
+document.getElementById('nodesBody').addEventListener('click', function (e) {
   var btn = e.target.closest('[data-action]');
   if (!btn) return;
   var uri = btn.dataset.uri;
@@ -20,7 +20,7 @@ async function loadNodes() {
     if (gpEl && (sd.settings || sd).proxy_url !== undefined) {
       gpEl.value = (sd.settings || sd).proxy_url;
     }
-  } catch (e) {}
+  } catch (e) { }
 
   const d = await API.nodes.list();
   const nodes = d.nodes || [];
@@ -92,7 +92,7 @@ async function loadNodes() {
           var urlObj = new URL(n.raw_uri);
           serverInfo = urlObj.hostname + ':' + (urlObj.port || '443');
         }
-      } catch(e) {
+      } catch (e) {
         serverInfo = '\u914D\u7F6E\u683C\u5F0F\u590D\u6742';
       }
 
@@ -137,7 +137,7 @@ async function loadNodes() {
         pill.style.cssText = 'background:rgba(236,138,124,0.16);color:var(--red);margin-right:5px;';
         pill.textContent = '\u6D4B\u8BD5\u5931\u8D25';
         statusTd.appendChild(pill);
-        
+
         if (health.last_test_error) {
           var errSpan = document.createElement('div');
           errSpan.className = 'node-err-msg';
@@ -219,7 +219,7 @@ async function testAllNodes() {
   const nodes = d.nodes || [];
   if (!nodes.length) return toast('无可测试节点');
 
-  const enabled = nodes.filter(function(n) { return !n.disabled; });
+  const enabled = nodes.filter(function (n) { return !n.disabled; });
   const total = enabled.length;
   if (!total) return toast('没有已启用的节点可测试');
 
@@ -266,7 +266,7 @@ async function testAllNodes() {
 
 async function dedupNodes() { await API.nodes.dedup(); loadNodes(); toast('去重完成'); }
 async function deleteDisabledNodes() { await API.nodes.deleteDisabled(); loadNodes(); toast('清理完成'); }
-async function sortNodesByLatency() { await API.nodes.sort(false); await loadNodes(); toast('已按延迟重排节点'); }
+async function sortNodesByLatency() { await API.nodes.sort(false); await loadNodes(); toast('已按延迟顺序重排节点'); }
 async function sortNodesByLatencyDesc() { await API.nodes.sort(true); await loadNodes(); toast('已按延迟降序重排节点'); }
 
 async function exportNodes() {
@@ -313,7 +313,7 @@ async function enableNode(uri) {
 
 async function useNode(uri) { await API.useNode(uri); loadSettings(); loadNodes(); toast('已锁定使用该节点，并关闭并发池'); }
 async function unuseNode(uri) { await API.useNode(''); loadSettings(); loadNodes(); toast('已取消锁定，并恢复并发池'); }
-async function delNode(uri) { if(!confirm('删除该节点？')) return; await API.nodes.delete(uri); loadNodes(); toast('已删除'); }
+async function delNode(uri) { if (!confirm('删除该节点？')) return; await API.nodes.delete(uri); loadNodes(); toast('已删除'); }
 
 function getSelectedNodeURIs() {
   const cbs = document.querySelectorAll('.node-select-cb:checked');
@@ -341,7 +341,7 @@ async function batchEnableSelectedNodes() {
   if (!uris.length) return toast('请先勾选需要批量操作的节点');
   toast('批量启用中...');
   try { await API.nodes.batchEnable(uris); await loadNodes(); toast('已成功启用 ' + uris.length + ' 个节点'); }
-  catch(e) { toast('操作失败: ' + e.message); }
+  catch (e) { toast('操作失败: ' + e.message); }
 }
 
 async function batchDisableSelectedNodes() {
@@ -349,7 +349,7 @@ async function batchDisableSelectedNodes() {
   if (!uris.length) return toast('请先勾选需要批量操作的节点');
   toast('批量禁用中...');
   try { await API.nodes.batchDisable(uris); await loadNodes(); toast('已成功禁用 ' + uris.length + ' 个节点'); }
-  catch(e) { toast('操作失败: ' + e.message); }
+  catch (e) { toast('操作失败: ' + e.message); }
 }
 
 async function batchDeleteSelectedNodes() {
@@ -358,7 +358,7 @@ async function batchDeleteSelectedNodes() {
   if (!confirm('确定要批量删除这 ' + uris.length + ' 个节点吗？')) return;
   toast('批量删除中...');
   try { await API.nodes.batchDelete(uris); await loadNodes(); toast('已成功删除 ' + uris.length + ' 个节点'); }
-  catch(e) { toast('操作失败: ' + e.message); }
+  catch (e) { toast('操作失败: ' + e.message); }
 }
 
 function importFileNodes(replace) {
@@ -367,7 +367,7 @@ function importFileNodes(replace) {
   const file = fileInput.files[0];
   const reader = new FileReader();
   toast('正在读取配置文件并解析...');
-  reader.onload = async function(e) {
+  reader.onload = async function (e) {
     const text = e.target.result;
     try {
       const res = await API.nodes.import(text, replace);
@@ -387,7 +387,7 @@ function importJsonNodes(replace) {
   const file = fileInput.files[0];
   const reader = new FileReader();
   toast('正在读取配置文件并解析...');
-  reader.onload = async function(e) {
+  reader.onload = async function (e) {
     const text = e.target.result;
     try {
       const res = await API.nodes.importJson(text, replace);
