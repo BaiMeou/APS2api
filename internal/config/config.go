@@ -36,7 +36,8 @@ type AppConfig struct { //nolint:govet
 	// 并发池与节点锁定配置
 	ActiveNodeURI            string `json:"active_node_uri"`
 	ParallelPoolEnabled      bool   `json:"parallel_pool_enabled"`
-	StickyPoolEnabled        bool   `json:"sticky_pool_enabled"`
+	StickyNodePriority        bool   `json:"sticky_node_priority"`
+	ParallelPoolRetryEnabled bool   `json:"parallel_pool_retry_enabled"`
 	ParallelPoolSize         int    `json:"parallel_pool_size"`
 	ParallelPoolMaxRounds    int    `json:"parallel_pool_max_rounds"`
 	DebugPprof               bool   `json:"debug_pprof"`
@@ -70,7 +71,7 @@ func DefaultConfig() AppConfig {
 		TokenPoolSize:             30, // 配套 15 并发，池子扩容至 30 更加稳健
 		MaxSpillMB:                2048,
 		ParallelPoolEnabled:       true,
-		StickyPoolEnabled:         false,
+		StickyNodePriority:         false,
 		ParallelPoolSize:          15, // 默认为 15 并发
 		ParallelNodeTopK:          80,
 		ParallelPoolDelayDynamic:  false, // 建议默认关闭动态对冲，改为稳定的秒级接力
@@ -183,55 +184,6 @@ func InvalidateCache() {
 	cached = nil
 }
 
-func (c AppConfig) GetPortAPI() int                           { return c.PortAPI }
-func (c AppConfig) GetMaxRetries() int                        { return c.MaxRetries }
-func (c AppConfig) GetAdminPassword() string                  { return c.AdminPassword }
-func (c AppConfig) GetProxyURL() string                       { return c.ProxyURL }
-func (c AppConfig) GetDebugPprof() bool                       { return c.DebugPprof }
-func (c AppConfig) GetDebugMode() bool                        { return c.DebugMode }
-func (c AppConfig) GetAnti429Enabled() bool                   { return c.Anti429Enabled }
-func (c AppConfig) GetAnti429Target() string                  { return c.Anti429Target }
-func (c AppConfig) GetAntiTracking() bool                     { return c.AntiTracking }
-func (c AppConfig) GetDropMaxTokens() bool                    { return c.DropMaxTokens }
-func (c AppConfig) GetForceNoStream() bool                    { return c.ForceNoStream }
-func (c AppConfig) GetMaxN() int                              { return c.MaxN }
-func (c AppConfig) GetMaxRequestMB() int                      { return c.MaxRequestMB }
-func (c AppConfig) GetMaxSpillMB() int                        { return c.MaxSpillMB }
-func (c AppConfig) GetTokenPoolSize() int                     { return c.TokenPoolSize }
-func (c AppConfig) GetRecaptchaExpireSeconds() int            { return c.RecaptchaExpireSeconds }
-func (c AppConfig) GetVertexAPIKey() string                   { return c.VertexAPIKey }
-func (c AppConfig) GetCountTokensQuerySignature() string      { return c.CountTokensQuerySignature }
-func (c AppConfig) GetSafetySettings() map[string]string {
-	out := make(map[string]string, len(c.SafetySettings))
-	for k, v := range c.SafetySettings {
-		out[k] = v
-	}
-	return out
-}
-func (c AppConfig) GetParallelPoolEnabled() bool              { return c.ParallelPoolEnabled }
-func (c AppConfig) GetStickyPoolEnabled() bool                { return c.StickyPoolEnabled }
-func (c AppConfig) GetParallelPoolSize() int                  { return c.ParallelPoolSize }
-func (c AppConfig) GetParallelPoolMaxRounds() int              { return c.ParallelPoolMaxRounds }
-func (c AppConfig) GetParallelPoolDelayDynamic() bool          { return c.ParallelPoolDelayDynamic }
-func (c AppConfig) GetParallelPoolDelayMs() int                { return c.ParallelPoolDelayMs }
-func (c AppConfig) GetActiveNodeURI() string                  { return c.ActiveNodeURI }
-func (c AppConfig) GetParallelNodeTopK() int                  { return c.ParallelNodeTopK }
-func (c AppConfig) GetBackgroundImage() string                { return c.BackgroundImage }
-func (c AppConfig) GetFontSize() string                       { return c.FontSize }
-func (c AppConfig) GetFontColorType() string                  { return c.FontColorType }
-func (c AppConfig) GetFontColor() string                      { return c.FontColor }
-func (c AppConfig) GetCustomBgPresets() []string {
-	out := make([]string, len(c.CustomBgPresets))
-	copy(out, c.CustomBgPresets)
-	return out
-}
-func (c AppConfig) GetTelemetryEnabled() *bool {
-	if c.TelemetryEnabled == nil {
-		return nil
-	}
-	v := *c.TelemetryEnabled
-	return &v
-}
 func (c AppConfig) ConfigDir() string  { return ConfigDir() }
 func (c AppConfig) ConfigPath() string { return ConfigPath() }
 
