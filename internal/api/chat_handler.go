@@ -165,6 +165,7 @@ func (c *ChatHandler) streamChatCompletions(ctx context.Context, w http.Response
 	isFirst := true
 	hasFinish := false
 	gotContent := false
+	streamErrWritten := false
 	startTime := time.Now()
 
 	c.vc.StreamChat(ctx, model, geminiPayload, func(ch vertex.StreamChunk) bool {
@@ -174,6 +175,7 @@ func (c *ChatHandler) streamChatCompletions(ctx context.Context, w http.Response
 		}
 		if ch.Err != nil {
 			c.writeStreamError(write, ch.Err, requestID, model)
+			streamErrWritten = true
 			return false
 		}
 		events := c.respConv.StreamToSSE(ch.Data, model, requestID, isFirst)
@@ -202,14 +204,14 @@ func (c *ChatHandler) streamChatCompletions(ctx context.Context, w http.Response
 		return true
 	}
 
-	if !gotContent {
+	if !gotContent && !streamErrWritten {
 		ee := vertex.NewEmptyResponseError("Upstream returned empty response (no content)")
 		c.writeStreamError(write, ee, requestID, model)
 		return
 	}
 	if !hasFinish {
 		base := streamChunkBase(model, requestID)
-		base["choices"] = []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "stop"}}
+		base["choices"] = []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "length"}}
 		writeSilent(sseEvent(base))
 	}
 	writeSilent("data: [DONE]\n\n")

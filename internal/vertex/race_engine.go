@@ -16,7 +16,15 @@ import (
 
 type RaceOption func(*raceConfig)
 
-type raceConfig struct{}
+type raceConfig struct {
+	noCancelOnSuccess bool
+}
+
+func WithNoCancelOnSuccess() RaceOption {
+	return func(cfg *raceConfig) {
+		cfg.noCancelOnSuccess = true
+	}
+}
 
 func safeResetTimer(t *time.Timer, d time.Duration) {
 	if !t.Stop() {
@@ -51,6 +59,11 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 	run func(ctx context.Context, proxyURI string) (T, error),
 	opts ...RaceOption,
 ) (T, error) {
+	var rc raceConfig
+	for _, o := range opts {
+		o(&rc)
+	}
+
 	stickyPool := nodes.GetStickyPool()
 
 	cands := nodes.SelectForParallel(cfg.GetParallelPoolSize(), cfg.GetParallelNodeTopK(), cfg.GetDebugMode(), cfg.GetStickyPoolEnabled())
@@ -74,6 +87,12 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 	cli.UpdateReqState(RequestIDFromContext(ctx), "⚡ 并发竞速", "\033[33m", fmt.Sprintf("并行节点: %d", len(cands)))
 
 	ctxRace, cancel := context.WithCancel(ctx) //nolint:govet // cancel called on error paths; win path relies on parent ctx
+	var returnedOnWinPath bool
+	defer func() {
+		if !returnedOnWinPath || !rc.noCancelOnSuccess {
+			cancel()
+		}
+	}()
 
 	resCh := make(chan raceResult[T], min(len(cands)+20, 30))
 	var active int32
@@ -139,6 +158,8 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 				nodes.RecordTest(res.uri, true, 50, "")
 				stickyPool.Add(res.uri)
 
+				returnedOnWinPath = true
+
 				collectTimeout := time.Duration(min(30, 5+cfg.GetParallelPoolSize())) * time.Second
 				go func() {
 					collectCtx, collectCancel := context.WithTimeout(context.Background(), collectTimeout)
@@ -153,7 +174,9 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 								stickyPool.Evict(bgRes.uri)
 							}
 						case <-collectCtx.Done():
-							cancel()
+							if !rc.noCancelOnSuccess {
+								cancel()
+							}
 							return
 						}
 					}

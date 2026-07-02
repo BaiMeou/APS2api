@@ -16,8 +16,11 @@ func StreamParallel(ctx context.Context, cfg config.ConfigProvider,
 	op func(context.Context, string) <-chan StreamChunk,
 	yield func(StreamChunk) bool,
 ) {
+	streamCtx, streamCancel := context.WithCancel(ctx)
+	defer streamCancel()
+
 	wrappedOp := func(ctx context.Context, uri string) (<-chan StreamChunk, error) {
-		ch := op(ctx, uri)
+		ch := op(streamCtx, uri)
 		first, ok := <-ch
 		if !ok {
 			return nil, fmt.Errorf("stream: %s closed immediately", nodes.GetNodeName(uri))
@@ -30,13 +33,17 @@ func StreamParallel(ctx context.Context, cfg config.ConfigProvider,
 		go func() {
 			defer close(rest)
 			for chunk := range ch {
-				rest <- chunk
+				select {
+				case rest <- chunk:
+				case <-streamCtx.Done():
+					return
+				}
 			}
 		}()
 		return rest, nil
 	}
 
-	winnerCh, err := RunRace(ctx, cfg, wrappedOp)
+	winnerCh, err := RunRace(streamCtx, cfg, wrappedOp, WithNoCancelOnSuccess())
 	if err != nil {
 		vertexErr, ok := err.(*VertexError)
 		if ok {
@@ -50,6 +57,5 @@ func StreamParallel(ctx context.Context, cfg config.ConfigProvider,
 		if !yield(chunk) {
 			return
 		}
-
 	}
 }

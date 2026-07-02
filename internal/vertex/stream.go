@@ -298,14 +298,14 @@ func scanStream(body io.Reader, onObject func(map[string]any) (bool, error)) err
 	inString := false
 	escape := false
 
-	const maxBufferSize = 512 * 1024
+	const maxBufferSize = 4 * 1024 * 1024
 
 	for {
 		n, readErr := reader.Read(readBuf)
 		if n > 0 {
 			buffer = append(buffer, readBuf[:n]...)
 
-			if len(buffer) > maxBufferSize {
+			if len(buffer) > maxBufferSize && braceCount == 0 {
 				log.Printf("[DEBUG-scan] buffer exceeded %d bytes, resetting from scanPos=%d", maxBufferSize, scanPos)
 				buffer = buffer[scanPos:]
 				scanPos = 0
