@@ -13,8 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bsfdsagfadg/vertex/internal/config"
-	"github.com/bsfdsagfadg/vertex/internal/metrics"
 	"github.com/bsfdsagfadg/vertex/internal/nodes"
 	"github.com/bsfdsagfadg/vertex/internal/spool"
 	"github.com/bsfdsagfadg/vertex/internal/transport"
@@ -62,14 +60,13 @@ func (c *VertexAIClient) StreamChat(ctx context.Context, model string, geminiPay
 		}()
 		return ch
 	}
-	StreamParallel(ctx, config.Load(), op, yield)
+	StreamParallel(ctx, c.cfg, op, yield)
 }
 
 func (c *VertexAIClient) executeStreamingWithRetries(ctx context.Context, model string, geminiPayload map[string]any, proxyURI string, yield func(StreamChunk) bool) {
-	cfg := config.Load()
-	maxRetries := cfg.MaxRetries
-	if cfg.ParallelPoolEnabled && !cfg.ParallelPoolRetryEnabled && ctx.Value(stickyModeKey{}) == nil {
-		// 并发池模式下且非粘性节点路径，单节点无需在内部多次重试与等待，直接快速失败让并发池调度其他节点，实现零延迟无缝切换（力大砖飞）
+	cfg := c.cfg
+	maxRetries := cfg.GetMaxRetries()
+	if cfg.GetParallelPoolEnabled() {
 		maxRetries = 0
 	}
 	contentYielded := false
@@ -143,7 +140,6 @@ retryLoop:
 			recaptchaToken = ""
 			isFirstAuth = true
 			lastError = ve
-			metrics.Default.IncUpstreamAuth() // 真实认证失败（首帧 verify-fail 预热已在上面 continue，不计）
 			if contentYielded || attempt >= maxRetries {
 				break retryLoop
 			}
@@ -154,7 +150,6 @@ retryLoop:
 
 		case ve != nil && ve.Kind == "ratelimit":
 			lastError = ve
-			metrics.Default.IncUpstream429()
 			if contentYielded || attempt >= maxRetries {
 				log.Printf("[Vertex] [StreamChat] (Attempt %d/%d) 节点 %s 触发 429 失败, 请求ID=%s, 代理=%s", attempt, maxRetries, model, reqID, nodes.GetNodeName(proxyURI))
 				break retryLoop
@@ -182,9 +177,6 @@ retryLoop:
 
 		case ve != nil:
 			lastError = ve
-			if ve.Kind == "empty" {
-				metrics.Default.IncUpstreamEmpty()
-			}
 			// 【关键改动】：如果是网络不通等内部错误，直接熔断并停止重试。
 			if ve.Kind == "internal" || !ve.IsRetryable() || contentYielded || attempt >= maxRetries {
 				log.Printf("[Vertex] [StreamChat] (Attempt %d/%d) 节点 %s 触发异常错误失败: [%s] %s, 请求ID=%s, 代理=%s", attempt, maxRetries, model, ve.Kind, ve.Message, reqID, nodes.GetNodeName(proxyURI))
@@ -217,7 +209,7 @@ retryLoop:
 func (c *VertexAIClient) executeStreamingAttempt(ctx context.Context, sess *transport.Session, model string, geminiPayload map[string]any, recaptchaToken string, _ bool, emit func(map[string]any) bool) error {
 	reqID := RequestIDFromContext(ctx)
 	log.Printf("[Vertex] [executeStreamingAttempt] 准备发送流式请求: 模型=%s, 请求ID=%s, 代理=%s", model, reqID, nodes.GetNodeName(sess.ProxyURI))
-	cfg := config.Load()
+	cfg := c.cfg
 	newBody := buildRequestPayload(model, geminiPayload, recaptchaToken, cfg)
 	// 上游请求 payload 序列化到 spool 缓冲（大媒体自动落盘）。流式：请求体在 DoStream 发送期被读取，
 	// 缓冲存活到本函数返回（整个流消费完）后由 defer Close 删除临时文件。
@@ -246,7 +238,7 @@ func (c *VertexAIClient) executeStreamingAttempt(ctx context.Context, sess *tran
 		var buf bytes.Buffer
 		_, _ = buf.ReadFrom(sr.Body)
 		errText := buf.String()
-		if cfg.DebugMode {
+		if cfg.GetDebugMode() {
 			debugReq, _ := json.Marshal(newBody)
 			log.Printf("[DEBUG] [StreamChat] HTTP 报错! 状态码: %d", sr.StatusCode)
 			log.Printf("[DEBUG] [StreamChat] 完整请求体: %s", string(debugReq))
@@ -274,7 +266,7 @@ func (c *VertexAIClient) executeStreamingAttempt(ctx context.Context, sess *tran
 		return processStreamingObject(obj, emit)
 	})
 
-	if scanErr != nil && cfg.DebugMode && !errors.Is(scanErr, context.Canceled) {
+	if scanErr != nil && cfg.GetDebugMode() && !errors.Is(scanErr, context.Canceled) {
 		debugReq, _ := json.Marshal(newBody)
 		log.Printf("[DEBUG] [StreamChat] 扫描流数据报错! error: %v", scanErr)
 		log.Printf("[DEBUG] [StreamChat] 完整请求体: %s", string(debugReq))
@@ -306,14 +298,14 @@ func scanStream(body io.Reader, onObject func(map[string]any) (bool, error)) err
 	inString := false
 	escape := false
 
-	const maxBufferSize = 512 * 1024
+	const maxBufferSize = 4 * 1024 * 1024
 
 	for {
 		n, readErr := reader.Read(readBuf)
 		if n > 0 {
 			buffer = append(buffer, readBuf[:n]...)
 
-			if len(buffer) > maxBufferSize {
+			if len(buffer) > maxBufferSize && braceCount == 0 {
 				log.Printf("[DEBUG-scan] buffer exceeded %d bytes, resetting from scanPos=%d", maxBufferSize, scanPos)
 				buffer = buffer[scanPos:]
 				scanPos = 0

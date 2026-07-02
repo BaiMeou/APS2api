@@ -303,6 +303,8 @@ func InitTracker(fileLogger io.Writer) {
 				mu.Unlock()
 			}
 		}()
+
+		printBanner()
 	} else {
 		// Non-TTY environment (e.g. Docker without -it), TUI is disabled.
 		// We still need to write logs to both os.Stderr and the fileLogger.
@@ -364,6 +366,38 @@ func FinishReq(id string) {
 	}
 }
 
+// printBanner 在 TUI 启动时一次性打印顶部版权/版本面板（黄色框），
+// 不会在后续的 drawTUI 帧刷新中被擦除或重绘。
+func printBanner() {
+	bw := boxWidth()
+	biw := boxInnerWidth()
+
+	var sb strings.Builder
+
+	bottomBorder := func() string {
+		return "╰" + dashBar(bw-2) + "╯\n"
+	}
+
+	prefix := "╭── 📢 Vertex AI Proxy "
+	pw := stringWidth(prefix)
+	d := bw - pw - 1
+	if d < 0 {
+		d = 0
+	}
+	sb.WriteString(fmt.Sprintf("\033[33m%s%s╮\033[0m\n", prefix, dashBar(d)))
+
+	line1 := fmt.Sprintf("Version: %s | %s", appVersion, platformInfo)
+	sb.WriteString(fmt.Sprintf("\033[33m│\033[0m %s \033[33m│\033[0m\n", padOrTrunc(line1, biw)))
+	sb.WriteString(fmt.Sprintf("\033[33m│\033[0m %s \033[33m│\033[0m\n", padOrTrunc(buildInfo, biw)))
+
+	warn := "⚠️  本软件完全免费！付费即被骗，请退款。"
+	sb.WriteString(fmt.Sprintf("\033[33m│\033[0m \033[31m%s\033[0m \033[33m│\033[0m\n", padOrTrunc(warn, biw)))
+
+	sb.WriteString("\033[33m" + bottomBorder() + "\033[0m")
+
+	fmt.Fprint(osStdout, sb.String())
+}
+
 // ─── 渲染核心 ───
 
 func drawTUI() {
@@ -377,26 +411,6 @@ func drawTUI() {
 	// 底边生成函数：确保总长度严格等于 bw
 	bottomBorder := func() string {
 		return "╰" + dashBar(bw-2) + "╯\n"
-	}
-
-	// ── 1. 版权/版本面板 (黄色框) ──
-	{
-		prefix := "╭── 📢 Vertex AI Proxy "
-		pw := stringWidth(prefix)
-		d := bw - pw - 1 // 减去最后的 "╮"
-		if d < 0 {
-			d = 0
-		}
-		sb.WriteString(fmt.Sprintf("\033[33m%s%s╮\033[0m\n", prefix, dashBar(d)))
-
-		line1 := fmt.Sprintf("Version: %s | %s", appVersion, platformInfo)
-		sb.WriteString(fmt.Sprintf("\033[33m│\033[0m %s \033[33m│\033[0m\n", padOrTrunc(line1, biw)))
-		sb.WriteString(fmt.Sprintf("\033[33m│\033[0m %s \033[33m│\033[0m\n", padOrTrunc(buildInfo, biw)))
-
-		warn := "⚠️  本软件完全免费！付费即被骗，请退款。"
-		sb.WriteString(fmt.Sprintf("\033[33m│\033[0m \033[31m%s\033[0m \033[33m│\033[0m\n", padOrTrunc(warn, biw)))
-
-		sb.WriteString("\033[33m" + bottomBorder() + "\033[0m")
 	}
 
 	// ── 2. 最近系统日志 (蓝色框) ──

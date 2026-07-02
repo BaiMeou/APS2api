@@ -2,18 +2,25 @@
 package recaptcha
 
 import (
-	"github.com/bsfdsagfadg/vertex/internal/config"
 	"github.com/bsfdsagfadg/vertex/internal/transport"
 )
 
 type TokenPool struct {
-	fetch func(proxyURI string) (string, error)
+	fetch        func(proxyURI string) (string, error)
+	defaultProxy string
 }
 
-func NewTokenPoolSize(net *transport.NetworkClient, poolSize int) *TokenPool {
+func NewTokenPoolSize(net *transport.NetworkClient, poolSize int, defaultProxy string, debugMode bool) *TokenPool {
 	return &TokenPool{
-		fetch: func(proxyURI string) (string, error) { return FetchRecaptchaToken(net, proxyURI) },
+		fetch:        func(proxyURI string) (string, error) { return FetchRecaptchaToken(net, proxyURI, debugMode) },
+		defaultProxy: defaultProxy,
 	}
+}
+
+// NewTokenPoolCustom creates a token pool with a custom fetch function.
+// Used for testing; will be replaced by DI in phase 3/4.
+func NewTokenPoolCustom(fetch func(proxyURI string) (string, error)) *TokenPool {
+	return &TokenPool{fetch: fetch}
 }
 
 // Start 为生命周期钩子，当前实现为纯懒加载：token 仅在首次 GetToken 调用时按需获取。
@@ -30,7 +37,7 @@ func (p *TokenPool) Stats() (size, fill int) {
 }
 
 func (p *TokenPool) GetToken() (string, error) {
-	return p.fetch(config.Load().ProxyURL)
+	return p.fetch(p.defaultProxy)
 }
 
 func (p *TokenPool) GetTokenWithProxy(proxyURI string) (string, error) {

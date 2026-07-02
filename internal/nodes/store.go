@@ -15,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bsfdsagfadg/vertex/internal/config"
 	"github.com/bsfdsagfadg/vertex/internal/db"
 )
 
@@ -35,6 +34,10 @@ type NodeHealth struct { //nolint:govet
 	LastSuccessAt       int64   `json:"last_success_at"`
 	LastFailAt          int64   `json:"last_fail_at"`
 	CooldownUntil       int64   `json:"cooldown_until"`
+	Last429At           int64   `json:"last_429_at"`
+	RateLimitCount      int     `json:"rate_limit_count"`
+	RecentUseCount      int     `json:"recent_use_count"`
+	LastSelectedAt      int64   `json:"last_selected_at"`
 }
 
 var (
@@ -85,6 +88,8 @@ func ensureLoaded() {
 			}
 		}
 	}
+
+	pruneHealthUnsafe()
 }
 
 func LoadNodes() []Node {
@@ -149,6 +154,21 @@ func saveHealthUnsafe() {
 	_ = tx.Commit()
 }
 
+func pruneHealthUnsafe() {
+	for uri := range healthMap {
+		found := false
+		for _, n := range nodeList {
+			if n.RawURI == uri {
+				found = true
+				break
+			}
+		}
+		if !found {
+			delete(healthMap, uri)
+		}
+	}
+}
+
 func MergeNodes(newNodes []Node) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -163,6 +183,7 @@ func MergeNodes(newNodes []Node) {
 			existing[n.RawURI] = true
 		}
 	}
+	pruneHealthUnsafe()
 	saveNodesUnsafe()
 }
 
@@ -177,6 +198,7 @@ func DeleteNode(uri string) {
 	}
 	nodeList = kept
 	delete(healthMap, uri)
+	globalStickyPool.Evict(uri)
 	saveNodesUnsafe()
 	saveHealthUnsafe()
 	cb := DeleteNodeCallback
@@ -205,6 +227,7 @@ func DedupNodes() int {
 			removed++
 			removedURIs = append(removedURIs, n.RawURI)
 			delete(healthMap, n.RawURI)
+			globalStickyPool.Evict(n.RawURI)
 		}
 	}
 	nodeList = kept
@@ -234,6 +257,7 @@ func DeleteDisabled() int {
 			removed++
 			removedURIs = append(removedURIs, n.RawURI)
 			delete(healthMap, n.RawURI)
+			globalStickyPool.Evict(n.RawURI)
 		}
 	}
 	nodeList = kept
@@ -273,6 +297,7 @@ func BatchDeleteNodes(uris []string) {
 	for _, u := range uris {
 		targets[u] = true
 		delete(healthMap, u)
+		globalStickyPool.Evict(u)
 	}
 	var kept []Node
 	for _, n := range nodeList {
@@ -522,6 +547,8 @@ func RecordTest(uri string, ok bool, ms float64, errStr string) {
 		h.ConsecutiveFailures = 0
 		h.LastSuccessAt = time.Now().Unix()
 		h.CooldownUntil = 0
+		h.Last429At = 0
+		h.RateLimitCount = 0
 	} else {
 		h.FailCount++
 		h.ConsecutiveFailures++
@@ -538,7 +565,7 @@ func UpdateNodeTestResult(uri string, ok bool, ms float64, errStr string) {
 	RecordTest(uri, ok, ms, errStr)
 }
 
-// RecordRateLimit 业务流 429 专属软降温函数：只执行短冷却，保留原评分分数不破坏
+// RecordRateLimit 记录 429 冷却并递增计次，使重复 429 节点自然降权
 func RecordRateLimit(uri string, cooldownSec int) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -548,9 +575,12 @@ func RecordRateLimit(uri string, cooldownSec int) {
 		h = &NodeHealth{} //nolint:exhaustruct
 		healthMap[uri] = h
 	}
-	h.CooldownUntil = time.Now().Unix() + int64(cooldownSec)
+	now := time.Now().Unix()
+	h.CooldownUntil = now + int64(cooldownSec)
+	h.Last429At = now
+	h.RateLimitCount++
 	h.LastTestError = "429 Rate Limit"
-	h.LastFailAt = time.Now().Unix()
+	h.LastFailAt = now
 	saveNodesUnsafe()
 	saveHealthUnsafe()
 }
@@ -560,13 +590,12 @@ type scoredNode struct {
 	score float64
 }
 
-func SelectForParallel(k int) []Node {
+func SelectForParallel(k int, topK int, debugMode bool, stickyBonusEnabled bool) []Node {
 	mu.Lock()
 	defer mu.Unlock()
 	ensureLoaded()
 	now := time.Now().Unix()
 
-	// 历史衰减机制：对积压了过多历史分数的节点执行定期折半衰减，使评分更易受近期波动响应
 	decayed := false
 	for _, n := range nodeList {
 		if n.Disabled {
@@ -574,9 +603,10 @@ func SelectForParallel(k int) []Node {
 		}
 		h := healthMap[n.RawURI]
 		if h != nil {
-			if h.SuccessCount > 1000 || h.FailCount > 200 {
+			if h.SuccessCount > 1000 || h.FailCount > 200 || h.RecentUseCount > 500 {
 				h.SuccessCount /= 2
 				h.FailCount /= 2
+				h.RecentUseCount /= 2
 				decayed = true
 			}
 		}
@@ -610,11 +640,58 @@ func SelectForParallel(k int) []Node {
 			} else if now-lastSeen > 3600 {
 				score += 10
 			}
+			score -= math.Min(float64(h.RateLimitCount), 10) * 5
+			score -= float64(h.RecentUseCount) * 2
+			if h.LastSelectedAt > 0 {
+				elapsed := now - h.LastSelectedAt
+				if elapsed > 600 {
+					score += math.Min(float64(elapsed)/60, 15)
+				}
+			}
 		} else {
 			score += 20
 		}
+		if stickyBonusEnabled && globalStickyPool.IsSticky(n.RawURI) {
+			score += 15
+		}
 		scored = append(scored, scoredNode{n, math.Max(1.0, score)})
 	}
+
+	if len(scored) == 0 && len(cooldownNodes) > 0 {
+		sort.Slice(cooldownNodes, func(i, j int) bool {
+			hi := healthMap[cooldownNodes[i].node.RawURI]
+			hj := healthMap[cooldownNodes[j].node.RawURI]
+			li := int64(0)
+			lj := int64(0)
+			if hi != nil {
+				li = hi.Last429At
+			}
+			if hj != nil {
+				lj = hj.Last429At
+			}
+			if li != lj {
+				return li < lj
+			}
+			return cooldownNodes[i].score < cooldownNodes[j].score
+		})
+		needed := k
+		if needed > len(cooldownNodes) {
+			needed = len(cooldownNodes)
+		}
+		selected := make([]Node, needed)
+		for i := 0; i < needed; i++ {
+			selected[i] = cooldownNodes[i].node
+			if h := healthMap[selected[i].RawURI]; h != nil {
+				h.LastSelectedAt = now
+				h.RecentUseCount++
+			}
+		}
+		if debugMode {
+			log.Printf("[Nodes] 所有节点冷却中，按 Last429At 兜底选择 %d 个", len(selected))
+		}
+		return selected
+	}
+
 	sort.Slice(scored, func(i, j int) bool { return scored[i].score > scored[j].score })
 	if len(scored) < k && len(cooldownNodes) > 0 {
 		sort.Slice(cooldownNodes, func(i, j int) bool { return cooldownNodes[i].score < cooldownNodes[j].score })
@@ -624,7 +701,6 @@ func SelectForParallel(k int) []Node {
 		}
 		scored = append(scored, cooldownNodes[:needed]...)
 	}
-	topK := config.Load().ParallelNodeTopK
 	if topK <= 0 {
 		topK = 80
 	}
@@ -633,7 +709,7 @@ func SelectForParallel(k int) []Node {
 	}
 	weights := make([]float64, len(scored))
 	totalWeight := 0.0
-	const tau = 40.0 // Boltzmann temperature parameter
+	const tau = 40.0
 	for i, s := range scored {
 		w := math.Exp(s.score / tau)
 		if math.IsInf(w, 0) || math.IsNaN(w) {
@@ -659,7 +735,14 @@ func SelectForParallel(k int) []Node {
 		scored = append(scored[:idx], scored[idx+1:]...)
 	}
 
-	if config.Load().DebugMode {
+	for _, s := range selected {
+		if h := healthMap[s.RawURI]; h != nil {
+			h.LastSelectedAt = now
+			h.RecentUseCount++
+		}
+	}
+
+	if debugMode {
 		log.Printf("[Nodes] 选择并行节点 (需求: %d, 实际: %d)", k, len(selected))
 	}
 	return selected

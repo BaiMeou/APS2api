@@ -22,10 +22,10 @@ import (
 //
 // querySignature 从 config（count_tokens_query_signature）读，缺省值=内置硬编码值。
 func (c *VertexAIClient) CountTokens(ctx context.Context, model string, contents []any) int {
-	cfg := config.Load()
+	cfg := c.cfg
 
 	reqID := RequestIDFromContext(ctx)
-	sess, err := c.net.CreateSession(60, config.Load().ProxyURL, reqID)
+	sess, err := c.net.CreateSession(60, cfg.GetProxyURL(), reqID)
 	if err != nil {
 		return 0
 	}
@@ -37,7 +37,7 @@ func (c *VertexAIClient) CountTokens(ctx context.Context, model string, contents
 	}
 
 	// 去掉 models/ 前缀以匹配上游示例（去 models/ 前缀）。
-	target := config.ResolveModelName(model)
+	target := cfg.ResolveModelName(model)
 	target = strings.TrimPrefix(target, "models/")
 
 	payload := buildCountTokensPayload(target, contents, token, cfg)
@@ -60,11 +60,11 @@ func (c *VertexAIClient) CountTokens(ctx context.Context, model string, contents
 }
 
 // buildCountTokensPayload 构建 CountTokens 的 batchGraphql 请求体。
-func buildCountTokensPayload(model string, contents []any, recaptchaToken string, cfg config.AppConfig) map[string]any {
+func buildCountTokensPayload(model string, contents []any, recaptchaToken string, cfg config.ConfigProvider) map[string]any {
 	if contents == nil {
 		contents = []any{}
 	}
-	querySig := cfg.CountTokensQuerySignature
+	querySig := cfg.GetCountTokensQuerySignature()
 	if querySig == "" {
 		querySig = "2/mENOSldfC+HZM+tGhVuJLrl8M6gEyK3HRjUKuA5AM58="
 	}

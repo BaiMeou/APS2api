@@ -59,13 +59,13 @@ func is100Digits(s string) bool {
 // ---- injectAnti429：target=system ----
 
 func TestInjectAnti429System(t *testing.T) {
-	s := &Server{cfg: config.AppConfig{Anti429Enabled: true, Anti429Target: "system"}} //nolint:exhaustruct
+	h := &handler{cfg: config.AppConfig{Anti429Enabled: true, Anti429Target: "system"}}
 	payload := map[string]any{
 		"contents": []any{
 			map[string]any{"role": "user", "parts": []any{map[string]any{"text": "hi"}}},
 		},
 	}
-	s.injectAnti429(payload)
+	h.injectAnti429(payload)
 
 	si, ok := payload["systemInstruction"].(map[string]any)
 	if !ok {
@@ -84,9 +84,9 @@ func TestInjectAnti429System(t *testing.T) {
 
 // 默认 target 为空字符串时应回退 system。
 func TestInjectAnti429DefaultTargetSystem(t *testing.T) {
-	s := &Server{cfg: config.AppConfig{Anti429Enabled: true, Anti429Target: ""}} //nolint:exhaustruct
+	h := &handler{cfg: config.AppConfig{Anti429Enabled: true, Anti429Target: ""}} //nolint:exhaustruct
 	payload := map[string]any{}
-	s.injectAnti429(payload)
+	h.injectAnti429(payload)
 	si, ok := payload["systemInstruction"].(map[string]any)
 	if !ok {
 		t.Fatalf("默认 target 应注入 systemInstruction")
@@ -100,13 +100,13 @@ func TestInjectAnti429DefaultTargetSystem(t *testing.T) {
 
 // system 注入应保留已有 parts（前插）。
 func TestInjectAnti429SystemPrepends(t *testing.T) {
-	s := &Server{cfg: config.AppConfig{Anti429Enabled: true, Anti429Target: "system"}} //nolint:exhaustruct
+	h := &handler{cfg: config.AppConfig{Anti429Enabled: true, Anti429Target: "system"}} //nolint:exhaustruct
 	payload := map[string]any{
 		"systemInstruction": map[string]any{
 			"parts": []any{map[string]any{"text": "original-system"}},
 		},
 	}
-	s.injectAnti429(payload)
+	h.injectAnti429(payload)
 	si := payload["systemInstruction"].(map[string]any)
 	parts := si["parts"].([]any)
 	if len(parts) != 2 {
@@ -125,13 +125,13 @@ func TestInjectAnti429SystemPrepends(t *testing.T) {
 // ---- injectAnti429：target=user ----
 
 func TestInjectAnti429User(t *testing.T) {
-	s := &Server{cfg: config.AppConfig{Anti429Enabled: true, Anti429Target: "user"}}
+	h := &handler{cfg: config.AppConfig{Anti429Enabled: true, Anti429Target: "user"}}
 	payload := map[string]any{
 		"contents": []any{
 			map[string]any{"role": "user", "parts": []any{map[string]any{"text": "hi"}}},
 		},
 	}
-	s.injectAnti429(payload)
+	h.injectAnti429(payload)
 
 	contents := payload["contents"].([]any)
 	c0 := contents[0].(map[string]any)
@@ -155,13 +155,13 @@ func TestInjectAnti429User(t *testing.T) {
 
 // target=user 且无 user content → 新建一条 user content 置于首位。
 func TestInjectAnti429UserNoExisting(t *testing.T) {
-	s := &Server{cfg: config.AppConfig{Anti429Enabled: true, Anti429Target: "user"}}
+	h := &handler{cfg: config.AppConfig{Anti429Enabled: true, Anti429Target: "user"}}
 	payload := map[string]any{
 		"contents": []any{
 			map[string]any{"role": "model", "parts": []any{map[string]any{"text": "prev"}}},
 		},
 	}
-	s.injectAnti429(payload)
+	h.injectAnti429(payload)
 	contents := payload["contents"].([]any)
 	if len(contents) != 2 {
 		t.Fatalf("应新增一条 user content，实际 %d 条", len(contents))
@@ -177,9 +177,9 @@ func TestInjectAnti429UserNoExisting(t *testing.T) {
 
 // Anti429Enabled=false 时不注入。
 func TestInjectAnti429Disabled(t *testing.T) {
-	s := &Server{cfg: config.AppConfig{Anti429Enabled: false, Anti429Target: "system"}}
+	h := &handler{cfg: config.AppConfig{Anti429Enabled: false, Anti429Target: "system"}}
 	payload := map[string]any{"contents": []any{}}
-	s.injectAnti429(payload)
+	h.injectAnti429(payload)
 	if _, ok := payload["systemInstruction"]; ok {
 		t.Errorf("禁用时不应注入 systemInstruction")
 	}
@@ -187,11 +187,11 @@ func TestInjectAnti429Disabled(t *testing.T) {
 
 // DropMaxTokens=true 时移除 generationConfig.maxOutputTokens。
 func TestInjectAnti429DropMaxTokens(t *testing.T) {
-	s := &Server{cfg: config.AppConfig{DropMaxTokens: true, Anti429Enabled: false}}
+	h := &handler{cfg: config.AppConfig{DropMaxTokens: true, Anti429Enabled: false}}
 	payload := map[string]any{
 		"generationConfig": map[string]any{"maxOutputTokens": 100, "temperature": 0.5},
 	}
-	s.injectAnti429(payload)
+	h.injectAnti429(payload)
 	gc := payload["generationConfig"].(map[string]any)
 	if _, ok := gc["maxOutputTokens"]; ok {
 		t.Errorf("DropMaxTokens 应移除 maxOutputTokens")

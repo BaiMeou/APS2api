@@ -4,7 +4,6 @@ package vertex
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -13,10 +12,8 @@ import (
 	"time"
 
 	"github.com/bsfdsagfadg/vertex/internal/config"
-	"github.com/bsfdsagfadg/vertex/internal/metrics"
-	"github.com/bsfdsagfadg/vertex/internal/nodes"
 	"github.com/bsfdsagfadg/vertex/internal/recaptcha"
-	"github.com/bsfdsagfadg/vertex/internal/spool"
+	"github.com/bsfdsagfadg/vertex/internal/transform"
 	"github.com/bsfdsagfadg/vertex/internal/transport"
 )
 
@@ -50,25 +47,21 @@ func RequestIDFromContext(ctx context.Context) string {
 type VertexAIClient struct {
 	net  *transport.NetworkClient
 	pool *recaptcha.TokenPool
+	cfg  config.ConfigProvider
 }
 
-func NewVertexAIClient() *VertexAIClient {
-	net := transport.NewNetworkClient()
+func NewVertexAIClient(cfg config.ConfigProvider) *VertexAIClient {
+	net := transport.NewNetworkClient(cfg.GetDebugMode())
 	return &VertexAIClient{
 		net:  net,
-		pool: recaptcha.NewTokenPoolSize(net, config.Load().TokenPoolSize),
+		pool: recaptcha.NewTokenPoolSize(net, cfg.GetTokenPoolSize(), cfg.GetProxyURL(), cfg.GetDebugMode()),
+		cfg:  cfg,
 	}
 }
 
 func (c *VertexAIClient) StartTokenPool()                  { c.pool.Start() }
 func (c *VertexAIClient) StopTokenPool()                   { c.pool.Stop() }
 func (c *VertexAIClient) TokenPoolStats() (size, fill int) { return c.pool.Stats() }
-
-func (c *VertexAIClient) CompleteChat(ctx context.Context, model string, geminiPayload map[string]any) (map[string]any, error) {
-	return RunParallel(ctx, config.Load(), func(ctx context.Context, proxyURI string) (map[string]any, error) {
-		return c.completeInner(ctx, model, geminiPayload, proxyURI)
-	})
-}
 
 const largePayloadThreshold = 1 << 20 // 1MB
 
@@ -143,220 +136,14 @@ func (c *VertexAIClient) completeChatNSerial(ctx context.Context, model string, 
 	return ok, nil
 }
 
-func (c *VertexAIClient) completeInner(ctx context.Context, model string, geminiPayload map[string]any, proxyURI string) (map[string]any, error) {
-	cfg := config.Load()
-	maxRetries := cfg.MaxRetries
-	if cfg.ParallelPoolEnabled && !cfg.ParallelPoolRetryEnabled && ctx.Value(stickyModeKey{}) == nil {
-		maxRetries = 0
-	}
-	recaptchaToken := ""
-	isFirstAuth := true
-	attempt := 0
-
-	reqID := RequestIDFromContext(ctx)
-	sess, err := c.net.CreateSession(180, proxyURI, reqID)
-	if err != nil {
-		// 节点初始化失败，属于严重的内部网络错误，直接退出熔断
-		return nil, NewInternalError("create session: " + err.Error())
-	}
-	defer sess.Close()
-
-	for attempt <= maxRetries {
-		log.Printf("[Vertex] [CompleteChat] 开始尝试 (Attempt %d/%d), 模型=%s, 请求ID=%s, 代理=%s", attempt, maxRetries, model, reqID, nodes.GetNodeName(sess.ProxyURI))
-		if recaptchaToken == "" {
-			tok, _ := c.pool.GetTokenWithProxy(proxyURI)
-			recaptchaToken = tok
-			isFirstAuth = true
-		}
-		if recaptchaToken == "" {
-			if attempt == maxRetries {
-				return nil, NewAuthenticationError("Could not fetch recaptcha token.")
-			}
-			attempt++
-			if err := sleepCtx(ctx, time.Second); err != nil {
-				return nil, ctxCanceledError(err)
-			}
-			continue
-		}
-
-		result, reqErr := c.executeCompleteRequest(ctx, sess, model, geminiPayload, recaptchaToken, isFirstAuth)
-		if reqErr == nil {
-			if _, hasSafety := geminiPayload["safetySettings"]; candidateFinish(result) == "SAFETY" && !hasSafety {
-				retryPayload := shallowCopy(geminiPayload)
-				retryPayload["safetySettings"] = defaultSafetySettings
-				result, reqErr = c.executeCompleteRequest(ctx, sess, model, retryPayload, recaptchaToken, false)
-			}
-		}
-		if reqErr == nil {
-			return result, nil
-		}
-
-		ve := asVertexError(reqErr)
-		switch {
-		case ve != nil && ve.Kind == "auth":
-			isVerifyFail := strings.Contains(ve.Message, "Failed to verify action") ||
-				strings.Contains(ve.Message, "The caller does not have permission")
-			if isFirstAuth && isVerifyFail {
-				isFirstAuth = false
-				if err := sleepCtx(ctx, 500*time.Millisecond); err != nil {
-					return nil, ctxCanceledError(err)
-				}
-				continue
-			}
-			metrics.Default.IncUpstreamAuth()
-			recaptchaToken = ""
-			isFirstAuth = true
-			if attempt < maxRetries {
-				attempt++
-				if err := sleepCtx(ctx, time.Second); err != nil {
-					return nil, ctxCanceledError(err)
-				}
-				continue
-			}
-			return nil, ve
-
-		case ve != nil && ve.Kind == "ratelimit":
-			metrics.Default.IncUpstream429()
-			if attempt >= maxRetries {
-				log.Printf("[Vertex] [CompleteChat] (Attempt %d/%d) 节点 %s 触发 429 失败, 请求ID=%s, 代理=%s", attempt, maxRetries, model, reqID, nodes.GetNodeName(sess.ProxyURI))
-				return nil, ve
-			}
-			sess.Close()
-			newSess, e := c.net.CreateSession(180, proxyURI, reqID)
-			if e != nil {
-				return nil, NewInternalError("recreate session: " + e.Error())
-			}
-			sess = newSess
-			recaptchaToken = ""
-			wait := ve.RetryAfter
-			if wait <= 0 {
-				wait = min(10, 1+attempt)
-			}
-			log.Printf("[Vertex] [CompleteChat] (Attempt %d/%d) 节点 %s 触发 429 将重试 (延迟 %ds), 请求ID=%s, 代理=%s", attempt, maxRetries, model, wait, reqID, nodes.GetNodeName(sess.ProxyURI))
-			attempt++
-			if err := sleepCtx(ctx, time.Duration(wait)*time.Second); err != nil {
-				return nil, ctxCanceledError(err)
-			}
-			continue
-
-		case ve != nil:
-			if ve.Kind == "empty" {
-				metrics.Default.IncUpstreamEmpty()
-			}
-			// 【关键改动】：如果是网络连接断开等内部错误，直接熔断不重试
-			if ve.Kind == "internal" || !ve.IsRetryable() || attempt >= maxRetries {
-				log.Printf("[Vertex] [CompleteChat] (Attempt %d/%d) 节点 %s 触发异常错误失败: [%s] %s, 请求ID=%s, 代理=%s", attempt, maxRetries, model, ve.Kind, ve.Message, reqID, nodes.GetNodeName(sess.ProxyURI))
-				return nil, ve
-			}
-			log.Printf("[Vertex] [CompleteChat] (Attempt %d/%d) 节点 %s 触发异常错误将重试: [%s] %s, 请求ID=%s, 代理=%s", attempt, maxRetries, model, ve.Kind, ve.Message, reqID, nodes.GetNodeName(sess.ProxyURI))
-			attempt++
-			if err := sleepCtx(ctx, backoff(attempt)); err != nil {
-				return nil, ctxCanceledError(err)
-			}
-			continue
-
-		default:
-			// 【关键改动】：其他未预期异常，不进行重试，立刻退出
-			return nil, NewInternalError("Internal error: " + reqErr.Error())
-		}
-	}
-	return nil, NewInternalError("All retries exhausted")
-}
-
-func (c *VertexAIClient) executeCompleteRequest(ctx context.Context, sess *transport.Session, model string, geminiPayload map[string]any, recaptchaToken string, _ bool) (map[string]any, error) {
-	reqID := RequestIDFromContext(ctx)
-	log.Printf("[Vertex] [executeCompleteRequest] 准备发送请求: 模型=%s, 请求ID=%s, 代理=%s", model, reqID, nodes.GetNodeName(sess.ProxyURI))
-	cfg := config.Load()
-	newBody := buildRequestPayload(model, geminiPayload, recaptchaToken, cfg)
-	buf, err := spool.EncodeJSON(newBody)
-	if err != nil {
-		return nil, NewInternalError("marshal payload: " + err.Error())
-	}
-	defer func() { _ = buf.Close() }()
-	reader, err := buf.Reader()
-	if err != nil {
-		return nil, NewInternalError("spool reader: " + err.Error())
-	}
-	header := transport.XHRHeaders(
-		"application/json", "*/*",
-		"https://console.cloud.google.com", "https://console.cloud.google.com/", "cross-site",
-	)
-
-	status, raw, err := sess.DoAndRead(ctx, "POST", batchGraphqlURL, header, reader)
-	if err != nil {
-		if errors.Is(err, context.Canceled) {
-			return nil, fmt.Errorf("error: %w", err)
-
-		}
-		return nil, NewInternalError("upstream request: " + err.Error())
-	}
-
-	if status != 200 {
-		errText := string(raw)
-		if cfg.DebugMode {
-			debugReq, _ := json.Marshal(newBody)
-			log.Printf("[DEBUG] [CompleteChat] HTTP 报错! 状态码: %d", status)
-			log.Printf("[DEBUG] [CompleteChat] 完整请求体: %s", string(debugReq))
-			log.Printf("[DEBUG] [CompleteChat] 上游回复: %s", errText)
-		} else if status == 400 {
-			debugBody, _ := json.Marshal(newBody["variables"])
-			log.Printf("[Vertex] 收到 400 Bad Request, Variables Payload: %s", string(debugBody))
-		}
-
-		if status == 401 || status == 403 ||
-			strings.Contains(errText, "Failed to verify action") ||
-			strings.Contains(errText, "The caller does not have permission") {
-			return nil, NewAuthenticationError("Authentication/Recaptcha failed: " + errText)
-		}
-		if parsed := parseErrorResponse(errText); parsed != nil {
-			parsed.UpstreamResponse = errText
-			return nil, parsed
-		}
-		return nil, raiseForStatus(status, "", "Upstream Error: "+errText, nil, errText)
-	}
-
-	if len(raw) == 0 {
-		return nil, NewEmptyResponseError("Upstream returned no data")
-	}
-
-	result := ParseUpstreamData(string(raw))
-
-	if result.HasError && len(result.Parts) == 0 {
-		errMsg := result.ErrorMessage
-
-		if cfg.DebugMode {
-			debugReq, _ := json.Marshal(newBody)
-			log.Printf("[DEBUG] [CompleteChat] 业务层报错! errorMessage: %s", errMsg)
-			log.Printf("[DEBUG] [CompleteChat] 完整请求体: %s", string(debugReq))
-			log.Printf("[DEBUG] [CompleteChat] 上游回复: %s", string(raw))
-		}
-
-		isAuth := strings.Contains(errMsg, "Failed to verify action") ||
-			strings.Contains(errMsg, "The caller does not have permission")
-		if isAuth {
-			return nil, NewAuthenticationError("Authentication/Recaptcha failed: " + errMsg)
-		}
-		if result.ErrorObj != nil {
-			return nil, result.ErrorObj
-		}
-		lower := strings.ToLower(errMsg)
-		isRate := strings.Contains(lower, "resource has been exhausted") || strings.Contains(lower, "quota")
-		switch {
-		case strings.Contains(lower, "not found"):
-			return nil, NewNotFoundError(errMsg)
-		case isRate:
-			return nil, NewRateLimitError(errMsg, 0)
-		default:
-			return nil, NewInvalidArgumentError(errMsg)
-		}
-	}
-
-	return c.buildCompleteResponse(result)
-}
-
 func (c *VertexAIClient) buildCompleteResponse(r *ParseResult) (map[string]any, error) {
-	if len(r.Parts) == 0 && !r.HasError && len(r.PromptFeedback) == 0 {
-		return nil, NewEmptyResponseError("Upstream returned empty response (no content)")
+	if len(r.Parts) == 0 {
+		if r.HasError {
+			return nil, NewInternalError("upstream parse error: " + r.ErrorMessage)
+		}
+		if len(r.PromptFeedback) == 0 {
+			return nil, NewEmptyResponseError("Upstream returned empty response (no content)")
+		}
 	}
 
 	allParts := r.Parts
@@ -390,6 +177,84 @@ func (c *VertexAIClient) buildCompleteResponse(r *ParseResult) (map[string]any, 
 	}
 	setIfPresent(resp, "modelStatus", r.ModelStatus)
 	return resp, nil
+}
+
+// collectChunksToParseResult 把流式收集到的 chunk 列表合并为 ParseResult。
+//
+// chunks 是 extractChunk 的输出：每条含 candidates[0].content.parts（已清洗）、
+// finishReason、usageMetadata、promptFeedback 等元数据。
+// parts 经 MergeContentBlocks 合并相邻 text 后写入 result。
+func collectChunksToParseResult(chunks []map[string]any) *ParseResult {
+	s := &ParseResult{
+		PromptFeedback: map[string]any{},
+		UsageMetadata:  map[string]any{},
+	}
+	var allParts []map[string]any
+
+	for _, chunk := range chunks {
+		if cands, ok := chunk["candidates"].([]any); ok && len(cands) > 0 {
+			if c, ok := cands[0].(map[string]any); ok {
+				if fr := c["finishReason"]; isTruthyAny(fr) {
+					s.FinishReason = toStr(fr)
+				}
+				if fm, ok := c["finishMessage"]; ok {
+					s.FinishMessage = fm
+				}
+				if v := c["safetyRatings"]; isTruthyAny(v) {
+					s.SafetyRatings = v
+				}
+				if v := c["citationMetadata"]; isTruthyAny(v) {
+					s.CitationMetadata = v
+				}
+				if v := c["groundingMetadata"]; isTruthyAny(v) {
+					s.GroundingMetadata = v
+				}
+				if v, ok := c["tokenCount"]; ok {
+					s.TokenCount = v
+				}
+				if v, ok := c["avgLogprobs"]; ok {
+					s.AvgLogprobs = v
+				}
+				if v, ok := c["logprobsResult"]; ok {
+					s.LogprobsResult = v
+				}
+				if v := c["index"]; v != nil {
+					s.CandidateIndex = toInt(v, 0)
+				}
+
+				if content, ok := c["content"].(map[string]any); ok {
+					if parts, ok := content["parts"].([]any); ok {
+						for _, pRaw := range parts {
+							if p, ok := pRaw.(map[string]any); ok {
+								allParts = append(allParts, p)
+							}
+						}
+					}
+				}
+			}
+		}
+
+		if pf, ok := chunk["promptFeedback"].(map[string]any); ok && len(pf) > 0 && len(s.PromptFeedback) == 0 {
+			s.PromptFeedback = pf
+		}
+		if um, ok := chunk["usageMetadata"]; ok {
+			if m := toMap(um); len(m) > 0 {
+				s.UsageMetadata = m
+			}
+		}
+		if v, ok := chunk["createTime"]; ok {
+			s.CreateTime = v
+		}
+		if v, ok := chunk["modelVersion"]; ok {
+			s.ModelVersion = v
+		}
+		if v, ok := chunk["responseId"]; ok {
+			s.ResponseID = v
+		}
+	}
+
+	s.Parts = transform.MergeContentBlocks(allParts)
+	return s
 }
 
 func candidateFinish(result map[string]any) string {
@@ -454,8 +319,4 @@ func sleepCtx(ctx context.Context, d time.Duration) error {
 	case <-t.C:
 		return nil
 	}
-}
-
-func ctxCanceledError(err error) error {
-	return NewInternalError("request canceled: " + err.Error())
 }

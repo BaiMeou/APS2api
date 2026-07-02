@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bsfdsagfadg/vertex/internal/config"
 	"github.com/bsfdsagfadg/vertex/internal/nodes"
 	"github.com/bsfdsagfadg/vertex/internal/transport"
 )
@@ -51,7 +50,7 @@ func randomString(n int) string {
 // 最多 3 次重试，每次新建一个 short Timeout Session
 // （即用即毁，FRESH_CONNECT 语义）。全部失败返回 ("", nil) —— 返回空值表示失败，
 // 调用方按“空则换新/重试”处理。返回非空字符串即成功。
-func FetchRecaptchaToken(net *transport.NetworkClient, proxyURI string) (string, error) {
+func FetchRecaptchaToken(net *transport.NetworkClient, proxyURI string, debugMode bool) (string, error) {
 	// 【核心修改：解析并缓存节点友好名称】
 	nodeName := nodes.GetNodeName(proxyURI)
 	if proxyURI == "" {
@@ -61,19 +60,19 @@ func FetchRecaptchaToken(net *transport.NetworkClient, proxyURI string) (string,
 	start := time.Now()
 	for retry := 0; retry < 3; retry++ {
 		// 【核心修改：将具体的节点名称明确输出在日志归属中】
-		if config.Load().DebugMode {
+		if debugMode {
 			log.Printf("[Recaptcha] [节点: %s] 开始获取 reCAPTCHA token (尝试 %d/3)", nodeName, retry+1)
 		}
 		if token, ok := fetchOnce(net, proxyURI); ok {
 			elapsed := time.Since(start)
-			if config.Load().DebugMode {
+			if debugMode {
 				log.Printf("[Recaptcha] [节点: %s] 成功获取 reCAPTCHA token, 耗时: %d ms", nodeName, elapsed.Milliseconds())
 			}
 			return token, nil
 		}
 	}
 	elapsed := time.Since(start)
-	if config.Load().DebugMode {
+	if debugMode {
 		log.Printf("[Recaptcha] [节点: %s] 3次尝试后获取 reCAPTCHA token 失败, 耗时: %d ms", nodeName, elapsed.Milliseconds())
 	}
 	return "", nil
