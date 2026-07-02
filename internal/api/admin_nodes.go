@@ -38,7 +38,7 @@ func (adm *AdminHandler) adminGetNodes(w http.ResponseWriter, _ *http.Request) {
 		"disabled_count":        disabledCount,
 		"sticky_pool_available": sp.AvailableCount(),
 		"sticky_pool_in_use":    sp.StaleCount(),
-		"sticky_pool_enabled":   adm.cfg.GetStickyPoolEnabled(),
+		"sticky_node_priority":   adm.cfg.StickyNodePriority(),
 	})
 }
 
@@ -338,7 +338,7 @@ func (adm *AdminHandler) fetchSubscriptionText(ctx context.Context, rawURL strin
 		return strings.TrimSpace(string(data)), nil
 	}
 
-	proxyURI := firstNonEmpty(adm.cfg.GetActiveNodeURI(), adm.cfg.GetProxyURL())
+	proxyURI := firstNonEmpty(adm.cfg.ActiveNodeURI(), adm.cfg.ProxyURL())
 	if proxyURI == "" || adm.vc == nil || adm.vc.Net() == nil {
 		return "", err
 	}

@@ -18,41 +18,45 @@ var adminAllowedSettings = map[string]bool{
 	"parallel_pool_delay_ms":      true,
 	"recaptcha_expire_seconds":    true,
 	"active_node_uri":             true,
-	"sticky_pool_enabled":         true,
+	"sticky_node_priority":         true,
+	"parallel_pool_retry_enabled": true,
 	"background_image":            true,
 	"font_size":                   true,
 	"font_color_type":             true,
 	"font_color":                  true,
 	"custom_bg_presets":           true,
+	"debug_mode":                  true,
 }
 
 func (adm *AdminHandler) adminGetSettings(w http.ResponseWriter, _ *http.Request) {
 	telEnabled := true
-	if adm.cfg.GetTelemetryEnabled() != nil {
-		telEnabled = *adm.cfg.GetTelemetryEnabled()
+	if adm.cfg.TelemetryEnabled() != nil {
+		telEnabled = *adm.cfg.TelemetryEnabled()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"settings": map[string]any{
-		"max_retries":       adm.cfg.GetMaxRetries(),
-		"token_pool_size":   adm.cfg.GetTokenPoolSize(),
-		"max_spill_mb":      adm.cfg.GetMaxSpillMB(),
-		"max_request_mb":    adm.cfg.GetMaxRequestMB(),
-		"max_n":             adm.cfg.GetMaxN(),
-		"anti429_enabled":   adm.cfg.GetAnti429Enabled(),
-		"anti429_target":    adm.cfg.GetAnti429Target(),
-		"force_no_stream":   adm.cfg.GetForceNoStream(),
-		"anti_tracking":     adm.cfg.GetAntiTracking(),
-		"drop_max_tokens":   adm.cfg.GetDropMaxTokens(),
+		"max_retries":       adm.cfg.MaxRetries(),
+		"token_pool_size":   adm.cfg.TokenPoolSize(),
+		"max_spill_mb":      adm.cfg.MaxSpillMB(),
+		"max_request_mb":    adm.cfg.MaxRequestMB(),
+		"max_n":             adm.cfg.MaxN(),
+		"anti429_enabled":   adm.cfg.Anti429Enabled(),
+		"anti429_target":    adm.cfg.Anti429Target(),
+		"force_no_stream":   adm.cfg.ForceNoStream(),
+		"anti_tracking":     adm.cfg.AntiTracking(),
+		"drop_max_tokens":   adm.cfg.DropMaxTokens(),
 		"telemetry_enabled": telEnabled,
-		"proxy_url":         adm.cfg.GetProxyURL(), "parallel_pool_enabled": adm.cfg.GetParallelPoolEnabled(), "parallel_pool_size": adm.cfg.GetParallelPoolSize(), "active_node_uri": adm.cfg.GetActiveNodeURI(),
-		"parallel_pool_delay_dynamic": adm.cfg.GetParallelPoolDelayDynamic(),
-		"parallel_pool_delay_ms":      adm.cfg.GetParallelPoolDelayMs(),
-		"recaptcha_expire_seconds":    adm.cfg.GetRecaptchaExpireSeconds(),
-		"sticky_pool_enabled":         adm.cfg.GetStickyPoolEnabled(),
-		"background_image":            adm.cfg.GetBackgroundImage(),
-		"font_size":                   adm.cfg.GetFontSize(),
-		"font_color_type":             adm.cfg.GetFontColorType(),
-		"font_color":                  adm.cfg.GetFontColor(),
-		"custom_bg_presets":           adm.cfg.GetCustomBgPresets(),
+		"proxy_url":         adm.cfg.ProxyURL(), "parallel_pool_enabled": adm.cfg.ParallelPoolEnabled(), "parallel_pool_size": adm.cfg.ParallelPoolSize(), "active_node_uri": adm.cfg.ActiveNodeURI(),
+		"parallel_pool_delay_dynamic": adm.cfg.ParallelPoolDelayDynamic(),
+		"parallel_pool_delay_ms":      adm.cfg.ParallelPoolDelayMs(),
+		"recaptcha_expire_seconds":    adm.cfg.RecaptchaExpireSeconds(),
+		"sticky_node_priority":         adm.cfg.StickyNodePriority(),
+		"parallel_pool_retry_enabled": adm.cfg.ParallelPoolRetryEnabled(),
+		"background_image":            adm.cfg.BackgroundImage(),
+		"font_size":                   adm.cfg.FontSize(),
+		"font_color_type":             adm.cfg.FontColorType(),
+		"font_color":                  adm.cfg.FontColor(),
+		"custom_bg_presets":           adm.cfg.CustomBgPresets(),
+		"debug_mode":                  adm.cfg.DebugMode(),
 	}})
 }
 
@@ -67,7 +71,7 @@ func (adm *AdminHandler) adminPutSettings(w http.ResponseWriter, r *http.Request
 
 	// 面板依赖校验：禁用并发池时强制禁用粘性池
 	if ppEnabled, ok := body.Settings["parallel_pool_enabled"].(bool); ok && !ppEnabled {
-		body.Settings["sticky_pool_enabled"] = false
+		body.Settings["sticky_node_priority"] = false
 	}
 
 	for k, v := range body.Settings {

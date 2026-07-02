@@ -27,16 +27,16 @@ func (h *handler) injectAnti429(payload map[string]any) {
 		return
 	}
 	cfg := h.cfg
-	if cfg.GetDropMaxTokens() {
+	if cfg.DropMaxTokens() {
 		if gc, ok := payload["generationConfig"].(map[string]any); ok {
 			delete(gc, "maxOutputTokens")
 		}
 	}
-	if !cfg.GetAnti429Enabled() {
+	if !cfg.Anti429Enabled() {
 		return
 	}
 	randStr := randomDigits(100)
-	target := cfg.GetAnti429Target()
+	target := cfg.Anti429Target()
 	if target == "" {
 		target = "system"
 	}

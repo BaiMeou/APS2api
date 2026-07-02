@@ -58,7 +58,7 @@ func is100Digits(s string) bool {
 // ---- injectAnti429：target=system ----
 
 func TestInjectAnti429System(t *testing.T) {
-	h := &handler{cfg: config.AppConfig{Anti429Enabled: true, Anti429Target: "system"}}
+	h := &handler{cfg: config.StaticProvider(config.AppConfig{Anti429Enabled: true, Anti429Target: "system"})}
 	payload := map[string]any{
 		"contents": []any{
 			map[string]any{"role": "user", "parts": []any{map[string]any{"text": "hi"}}},
@@ -83,7 +83,7 @@ func TestInjectAnti429System(t *testing.T) {
 
 // 默认 target 为空字符串时应回退 system。
 func TestInjectAnti429DefaultTargetSystem(t *testing.T) {
-	h := &handler{cfg: config.AppConfig{Anti429Enabled: true, Anti429Target: ""}} //nolint:exhaustruct
+	h := &handler{cfg: config.StaticProvider(config.AppConfig{Anti429Enabled: true, Anti429Target: ""})} //nolint:exhaustruct
 	payload := map[string]any{}
 	h.injectAnti429(payload)
 	si, ok := payload["systemInstruction"].(map[string]any)
@@ -99,7 +99,7 @@ func TestInjectAnti429DefaultTargetSystem(t *testing.T) {
 
 // system 注入应保留已有 parts（前插）。
 func TestInjectAnti429SystemPrepends(t *testing.T) {
-	h := &handler{cfg: config.AppConfig{Anti429Enabled: true, Anti429Target: "system"}} //nolint:exhaustruct
+	h := &handler{cfg: config.StaticProvider(config.AppConfig{Anti429Enabled: true, Anti429Target: "system"})} //nolint:exhaustruct
 	payload := map[string]any{
 		"systemInstruction": map[string]any{
 			"parts": []any{map[string]any{"text": "original-system"}},
@@ -124,7 +124,7 @@ func TestInjectAnti429SystemPrepends(t *testing.T) {
 // ---- injectAnti429：target=user ----
 
 func TestInjectAnti429User(t *testing.T) {
-	h := &handler{cfg: config.AppConfig{Anti429Enabled: true, Anti429Target: "user"}}
+	h := &handler{cfg: config.StaticProvider(config.AppConfig{Anti429Enabled: true, Anti429Target: "user"})}
 	payload := map[string]any{
 		"contents": []any{
 			map[string]any{"role": "user", "parts": []any{map[string]any{"text": "hi"}}},
@@ -154,7 +154,7 @@ func TestInjectAnti429User(t *testing.T) {
 
 // target=user 且无 user content → 新建一条 user content 置于首位。
 func TestInjectAnti429UserNoExisting(t *testing.T) {
-	h := &handler{cfg: config.AppConfig{Anti429Enabled: true, Anti429Target: "user"}}
+	h := &handler{cfg: config.StaticProvider(config.AppConfig{Anti429Enabled: true, Anti429Target: "user"})}
 	payload := map[string]any{
 		"contents": []any{
 			map[string]any{"role": "model", "parts": []any{map[string]any{"text": "prev"}}},
@@ -176,7 +176,7 @@ func TestInjectAnti429UserNoExisting(t *testing.T) {
 
 // Anti429Enabled=false 时不注入。
 func TestInjectAnti429Disabled(t *testing.T) {
-	h := &handler{cfg: config.AppConfig{Anti429Enabled: false, Anti429Target: "system"}}
+	h := &handler{cfg: config.StaticProvider(config.AppConfig{Anti429Enabled: false, Anti429Target: "system"})}
 	payload := map[string]any{"contents": []any{}}
 	h.injectAnti429(payload)
 	if _, ok := payload["systemInstruction"]; ok {
@@ -186,7 +186,7 @@ func TestInjectAnti429Disabled(t *testing.T) {
 
 // DropMaxTokens=true 时移除 generationConfig.maxOutputTokens。
 func TestInjectAnti429DropMaxTokens(t *testing.T) {
-	h := &handler{cfg: config.AppConfig{DropMaxTokens: true, Anti429Enabled: false}}
+	h := &handler{cfg: config.StaticProvider(config.AppConfig{DropMaxTokens: true, Anti429Enabled: false})}
 	payload := map[string]any{
 		"generationConfig": map[string]any{"maxOutputTokens": 100, "temperature": 0.5},
 	}

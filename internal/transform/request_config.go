@@ -107,7 +107,7 @@ func buildSafetySettings(cfg config.ConfigProvider) []any {
 	out := make([]any, 0, len(safetyCategories))
 	for _, cat := range safetyCategories {
 		threshold := "BLOCK_NONE"
-		if t, ok := cfg.GetSafetySettings()[cat]; ok && t != "" {
+		if t, ok := cfg.SafetySettings()[cat]; ok && t != "" {
 			threshold = t
 		}
 		out = append(out, map[string]any{"category": cat, "threshold": threshold})

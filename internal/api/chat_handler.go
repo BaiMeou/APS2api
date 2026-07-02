@@ -53,7 +53,7 @@ func (c *ChatHandler) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 	cli.UpdateReqModel(vertex.RequestIDFromContext(r.Context()), actualModel)
 
 	stream, _ := body["stream"].(bool)
-	if stream && c.cfg.GetForceNoStream() {
+	if stream && c.cfg.ForceNoStream() {
 		stream = false
 	}
 
@@ -63,7 +63,7 @@ func (c *ChatHandler) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	n, nErr := resolveN(body["n"], c.cfg.GetMaxN())
+	n, nErr := resolveN(body["n"], c.cfg.MaxN())
 	if nErr != "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": map[string]any{
 			"message": nErr, "type": "invalid_request_error", "code": 400, "param": "n",

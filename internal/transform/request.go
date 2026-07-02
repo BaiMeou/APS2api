@@ -27,7 +27,7 @@ var supportedVarFields = []string{ //nolint:gochecknoglobals
 func ConvertChatRequest(body map[string]any, cfg config.ConfigProvider) (string, map[string]any, error) {
 	model, _ := body["model"].(string)
 
-	if cfg.GetDebugMode() {
+	if cfg.DebugMode() {
 		geminiPayloadStr, _ := json.Marshal(body)
 		log.Printf("[DEBUG] Payload 打印: ConvertChatRequest 转换前 payload: %s", string(geminiPayloadStr))
 	}
@@ -162,7 +162,7 @@ func ConvertChatRequest(body map[string]any, cfg config.ConfigProvider) (string,
 		if !ok || f < 1 {
 			return "", nil, fmt.Errorf("max_tokens must be an integer >= 1")
 		}
-		if !cfg.GetDropMaxTokens() {
+		if !cfg.DropMaxTokens() {
 			genCfg["maxOutputTokens"] = maxTokens
 		}
 	}

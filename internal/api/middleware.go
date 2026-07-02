@@ -71,7 +71,7 @@ func (m *middleware) withCORS(next http.Handler) http.Handler {
 }
 
 func (m *middleware) withBodyLimit(next http.Handler) http.Handler {
-	limit := int64(m.cfg.GetMaxRequestMB()) << 20
+	limit := int64(m.cfg.MaxRequestMB()) << 20
 	if limit <= 0 {
 		return next
 	}

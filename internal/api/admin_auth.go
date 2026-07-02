@@ -180,10 +180,10 @@ func (adm *AdminHandler) adminCheckAuth(w http.ResponseWriter, r *http.Request) 
 	authenticated := requireAdmin(r)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"authenticated":     authenticated,
-		"background_image":  adm.cfg.GetBackgroundImage(),
-		"font_size":         adm.cfg.GetFontSize(),
-		"font_color_type":   adm.cfg.GetFontColorType(),
-		"font_color":        adm.cfg.GetFontColor(),
-		"custom_bg_presets": adm.cfg.GetCustomBgPresets(),
+		"background_image":  adm.cfg.BackgroundImage(),
+		"font_size":         adm.cfg.FontSize(),
+		"font_color_type":   adm.cfg.FontColorType(),
+		"font_color":        adm.cfg.FontColor(),
+		"custom_bg_presets": adm.cfg.CustomBgPresets(),
 	})
 }

@@ -42,7 +42,7 @@ func newTestServer(t *testing.T) *testFixture {
 	cfg := config.DefaultConfig()
 	cfg.AdminPassword = "test-admin-pw"
 	cfg.ParallelPoolEnabled = false
-	cfg.StickyPoolEnabled = false
+	cfg.StickyNodePriority = false
 	cfg.ProxyURL = ""
 	cfg.ActiveNodeURI = ""
 	cfg.MaxRetries = 0
@@ -89,7 +89,7 @@ func newTestServer(t *testing.T) *testFixture {
 	})
 
 	// ── VertexAIClient ──
-	vc := vertex.NewVertexAIClient(cfg)
+	vc := vertex.NewVertexAIClient(config.StaticProvider(cfg))
 	vc.SetTokenPool(mockPool)
 
 	// ── 恢复 api 全局状态 ──
@@ -99,7 +99,7 @@ func newTestServer(t *testing.T) *testFixture {
 	keys.LoadKeys()
 
 	// ── HTTP server ──
-	srv := NewServer(vc, keys, cfg)
+	srv := NewServer(vc, keys, config.StaticProvider(cfg))
 	ts := httptest.NewServer(srv.Handler())
 
 	t.Cleanup(func() {

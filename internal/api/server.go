@@ -55,7 +55,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1beta/models/", s.gemini.handleModelsSubtree)
 	mux.HandleFunc("/v1/models/", s.gemini.handleModelsSubtree)
 
-	if s.mw.cfg.GetDebugPprof() {
+	if s.mw.cfg.DebugPprof() {
 		mux.HandleFunc("/debug/pprof/", pprofIndex)
 		mux.HandleFunc("/debug/pprof/cmdline", pprintCmdline)
 		mux.HandleFunc("/debug/pprof/profile", pprofProfile)

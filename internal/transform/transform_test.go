@@ -42,7 +42,7 @@ func TestNormalizeBase64(t *testing.T) {
 }
 
 func TestConvertChatRequest_PlainText(t *testing.T) {
-	cfg := config.DefaultConfig()
+	cfg := config.StaticProvider(config.DefaultConfig())
 	body := map[string]any{
 		"model": "gemini-3.1-flash",
 		"messages": []any{
@@ -87,7 +87,7 @@ func TestConvertChatRequest_PlainText(t *testing.T) {
 }
 
 func TestConvertChatRequest_EmptyMessages(t *testing.T) {
-	_, _, err := ConvertChatRequest(map[string]any{"model": "m", "messages": []any{}}, config.DefaultConfig())
+	_, _, err := ConvertChatRequest(map[string]any{"model": "m", "messages": []any{}}, config.StaticProvider(config.DefaultConfig()))
 	if err == nil {
 		t.Error("expected error for empty messages")
 	}
@@ -99,13 +99,13 @@ func TestConvertChatRequest_MaxTokensInvalid(t *testing.T) {
 		"messages":   []any{map[string]any{"role": "user", "content": "hi"}},
 		"max_tokens": float64(0),
 	}
-	if _, _, err := ConvertChatRequest(body, config.DefaultConfig()); err == nil {
+	if _, _, err := ConvertChatRequest(body, config.StaticProvider(config.DefaultConfig())); err == nil {
 		t.Error("expected error for max_tokens=0")
 	}
 }
 
 func TestBuildVertexVariables_SafetyDefault(t *testing.T) {
-	cfg := config.DefaultConfig()
+	cfg := config.StaticProvider(config.DefaultConfig())
 	payload := map[string]any{"contents": []any{
 		map[string]any{"role": "user", "parts": []any{map[string]any{"text": "hi"}}},
 	}}
@@ -124,7 +124,7 @@ func TestBuildVertexVariables_SafetyDefault(t *testing.T) {
 }
 
 func TestBuildVertexVariables_SystemDemote(t *testing.T) {
-	cfg := config.DefaultConfig()
+	cfg := config.StaticProvider(config.DefaultConfig())
 	payload := map[string]any{
 		"contents":          []any{},
 		"systemInstruction": map[string]any{"parts": []any{map[string]any{"text": "sys"}}},
@@ -207,7 +207,7 @@ func TestMergeContentBlocks(t *testing.T) {
 
 // TestConvertChatRequest_Full 测试 ConvertChatRequest 的完整转换：OpenAI 请求 → Gemini payload。
 func TestConvertChatRequest_Full(t *testing.T) {
-	cfg := config.DefaultConfig()
+	cfg := config.StaticProvider(config.DefaultConfig())
 	body := map[string]any{
 		"model":    "gemini-2.5-flash",
 		"messages": []any{map[string]any{"role": "user", "content": "Hello"}},
@@ -251,7 +251,7 @@ func TestConvertChatRequest_Full(t *testing.T) {
 
 // TestConvertChatRequest_WithTools 测试包含工具的请求转换。
 func TestConvertChatRequest_WithTools(t *testing.T) {
-	cfg := config.DefaultConfig()
+	cfg := config.StaticProvider(config.DefaultConfig())
 	body := map[string]any{
 		"model":    "gemini-2.5-flash",
 		"messages": []any{map[string]any{"role": "user", "content": "What's the weather?"}},
@@ -287,7 +287,7 @@ func TestConvertChatRequest_WithTools(t *testing.T) {
 
 // TestConvertChatRequest_SystemInstruction 测试系统指令。
 func TestConvertChatRequest_SystemInstruction(t *testing.T) {
-	cfg := config.DefaultConfig()
+	cfg := config.StaticProvider(config.DefaultConfig())
 	body := map[string]any{
 		"model":    "gemini-2.5-flash",
 		"messages": []any{map[string]any{"role": "system", "content": "Be helpful."}},
@@ -461,7 +461,7 @@ func TestIntegrationConvertRealtimeChunk(t *testing.T) {
 
 // TestBuildVertexVariables 测试 BuildVertexVariables 的 produced structure。
 func TestBuildVertexVariables(t *testing.T) {
-	cfg := config.DefaultConfig()
+	cfg := config.StaticProvider(config.DefaultConfig())
 	geminiPayload := map[string]any{
 		"contents": []any{map[string]any{
 			"role":  "user",
@@ -483,7 +483,7 @@ func TestBuildVertexVariables(t *testing.T) {
 
 // TestMarshalRoundTrip 验证 ConvertChatRequest + BuildVertexVariables 的 JSON 可序列化。
 func TestMarshalRoundTrip(t *testing.T) {
-	cfg := config.DefaultConfig()
+	cfg := config.StaticProvider(config.DefaultConfig())
 	body := map[string]any{
 		"model":    "gemini-2.5-flash",
 		"messages": []any{map[string]any{"role": "user", "content": "Hello"}},
@@ -642,7 +642,7 @@ func TestConvertToolsFormat_NumericConstraints(t *testing.T) {
 			}},
 		}},
 	}
-	vars := BuildVertexVariables("gemini-3-flash", geminiPayload, config.AppConfig{}) //nolint:exhaustruct
+	vars := BuildVertexVariables("gemini-3-flash", geminiPayload, config.StaticProvider(config.AppConfig{})) //nolint:exhaustruct
 	dump, _ := json.Marshal(vars["tools"])
 	if !strings.Contains(string(dump), `"minItems":"1"`) {
 		t.Errorf("minItems 应转为字符串 \"1\": %s", dump)
