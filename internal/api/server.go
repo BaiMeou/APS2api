@@ -1,4 +1,3 @@
-
 // Package api 暴露 OpenAI 兼容的 HTTP 端点。
 //
 // 里程碑1 只实现非流式 /v1/chat/completions（+ /、/health、/v1/models）。

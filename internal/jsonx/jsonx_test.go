@@ -1,4 +1,3 @@
-
 package jsonx
 
 import (

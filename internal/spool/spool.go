@@ -1,4 +1,3 @@
-
 // Package spool 提供"先写后读"的字节缓冲，用于承载请求/媒体体的序列化输出。
 //
 // 缓冲优先驻留内存；超出 SetMaxSpillBytes 设定的阈值后自动溢出到 os.TempDir 临时文件，

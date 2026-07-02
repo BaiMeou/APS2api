@@ -1,4 +1,3 @@
-
 package vertex
 
 import "github.com/bsfdsagfadg/vertex/internal/transport"

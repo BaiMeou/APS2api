@@ -1,4 +1,3 @@
-
 // Package jsonx 提供关闭 HTML 转义的 JSON 序列化。
 //
 // Go 标准库 json.Marshal 默认会把 < > & 转义成 < > &，

@@ -1,4 +1,3 @@
-
 // Package recaptcha 实现 Google reCAPTCHA Enterprise 匿名 token 的现抓现用。
 //
 // 流程：anchor iframe GET 抠出 base token，再 reload POST

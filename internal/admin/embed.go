@@ -1,4 +1,3 @@
-
 // Package admin 嵌入管理后台的静态前端资源（admin.html + 背景图）。
 //
 // 资源由 go:embed 编进二进制，无需随程序额外分发文件；api 层据此服务 /admin 页面。
