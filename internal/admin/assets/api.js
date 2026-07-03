@@ -1,7 +1,9 @@
 const API = {
   async raw(path, opts) {
     const r = await fetch(path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, opts));
-    if (r.status === 401) { showLogin(); throw new Error('未登录'); }
+    if (r.status === 401 && path !== '/api/admin/login' && path !== '/api/admin/password') {
+      showLogin(); throw new Error('未登录');
+    }
     const ct = r.headers.get('content-type') || '';
     const body = ct.includes('json') ? await r.json() : await r.text();
     if (!r.ok) throw new Error((body && body.error && body.error.message) || body || ('HTTP ' + r.status));

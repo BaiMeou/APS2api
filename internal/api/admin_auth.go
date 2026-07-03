@@ -202,7 +202,7 @@ func (adm *AdminHandler) adminChangePassword(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(body.OldPassword)), []byte(expected)) != 1 {
-		writeJSON(w, http.StatusUnauthorized, adminErr("原密码错误"))
+		writeJSON(w, http.StatusBadRequest, adminErr("原密码错误"))
 		return
 	}
 	newPw := strings.TrimSpace(body.NewPassword)
