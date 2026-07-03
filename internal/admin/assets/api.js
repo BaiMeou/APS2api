@@ -29,6 +29,7 @@ const API = {
     test(uri, opts) { return API.raw('/api/admin/nodes/test', { method: 'POST', body: JSON.stringify(Object.assign({ raw_uri: uri, auto_disable: true, timeout_seconds: 25 }, opts || {})) }); },
     enable(uri) { return API.raw('/api/admin/nodes/enable', { method: 'POST', body: JSON.stringify({ raw_uri: uri }) }); },
     testAll() { return API.raw('/api/admin/nodes/test-all', { method: 'POST' }); },
+    testProgress() { return API.raw('/api/admin/nodes/test-progress', { method: 'GET' }); },
     dedup() { return API.raw('/api/admin/nodes/deduplicate', { method: 'POST' }); },
     deleteDisabled() { return API.raw('/api/admin/nodes/disabled', { method: 'DELETE' }); },
     import(text, replace) { return API.raw('/api/admin/nodes/import', { method: 'POST', body: JSON.stringify({ text, replace }) }); },

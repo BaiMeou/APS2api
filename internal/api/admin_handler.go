@@ -64,6 +64,11 @@ func (adm *AdminHandler) handleAdminAPI(w http.ResponseWriter, r *http.Request) 
 	case "/nodes/test-all":
 		adm.adminTestAll(w, r)
 		return
+	case "/nodes/test-progress":
+		if r.Method == http.MethodGet {
+			adm.adminGetTestProgress(w, r)
+		}
+		return
 	case "/nodes/deduplicate":
 		adm.adminDedupNodes(w, r)
 		return

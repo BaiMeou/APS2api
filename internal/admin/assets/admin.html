@@ -184,6 +184,12 @@
                 </div>
                 <div id="testProgressDetail" class="test-progress-detail"></div>
               </div>
+              <div id="crossPageSelectBanner" class="test-progress"
+                style="display:none; background: rgba(143,208,232,0.15); border: 1px solid var(--blue); color: var(--text); padding: 8px 12px; border-radius: 6px; margin-bottom: 10px;">
+                <span id="crossPageSelectText"></span>
+                <button class="btn ghost btn-blue" style="margin-left:12px; padding:2px 8px; font-size:12px;"
+                  onclick="selectAllNodesAcrossPages()">全选所有页共 <span id="crossPageSelectTotal">0</span> 个节点</button>
+              </div>
               <div class="table-wrap">
                 <table>
                   <thead>
@@ -198,6 +204,17 @@
                   </thead>
                   <tbody id="nodesBody"></tbody>
                 </table>
+              </div>
+              <div id="nodesPaginationBar" class="toolbar m-0 gap-8"
+                style="margin-top: 12px; justify-content: space-between; align-items: center;">
+                <div id="nodesPaginationInfo" style="font-size: 13px; color: var(--text-dim);"></div>
+                <div class="flex-gap-11" style="display: flex; gap: 8px; align-items: center;">
+                  <button class="btn ghost" id="btnPageFirst" onclick="changeNodePage(1)">首页</button>
+                  <button class="btn ghost" id="btnPagePrev" onclick="changeNodePage(curNodePage - 1)">上一页</button>
+                  <span id="nodesPageNumDisplay" style="font-size: 13px; font-weight: 600; padding: 0 6px;">1 / 1</span>
+                  <button class="btn ghost" id="btnPageNext" onclick="changeNodePage(curNodePage + 1)">下一页</button>
+                  <button class="btn ghost" id="btnPageLast" onclick="changeNodePage(totalNodePages)">末页</button>
+                </div>
               </div>
             </div>
           </div>

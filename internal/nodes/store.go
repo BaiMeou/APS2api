@@ -153,6 +153,78 @@ func saveHealthUnsafe() {
 	_ = tx.Commit()
 }
 
+func updateSingleNodeHealthUnsafe(uri string, h *NodeHealth) {
+	if db.GlobalDB == nil || h == nil {
+		return
+	}
+	_, _ = db.GlobalDB.Exec(`INSERT OR REPLACE INTO node_health 
+		(raw_uri, success_count, fail_count, consecutive_failures, last_test_ms, last_test_error, last_success_at, last_fail_at, cooldown_until) 
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		uri, h.SuccessCount, h.FailCount, h.ConsecutiveFailures, h.LastTestMs, h.LastTestError, h.LastSuccessAt, h.LastFailAt, h.CooldownUntil)
+}
+
+func updateSingleNodeDisabledUnsafe(uri string, disabled bool) {
+	if db.GlobalDB == nil {
+		return
+	}
+	_, _ = db.GlobalDB.Exec("UPDATE nodes SET disabled = ? WHERE raw_uri = ?", disabled, uri)
+}
+
+type TestProgress struct {
+	Running     bool   `json:"running"`
+	Total       int    `json:"total"`
+	Done        int    `json:"done"`
+	OkCount     int    `json:"ok_count"`
+	FailCount   int    `json:"fail_count"`
+	CurrentNode string `json:"current_node"`
+}
+
+var (
+	progressMu sync.RWMutex
+	globalProgress TestProgress
+)
+
+func GetTestProgress() TestProgress {
+	progressMu.RLock()
+	defer progressMu.RUnlock()
+	return globalProgress
+}
+
+func StartTestProgress(total int) {
+	progressMu.Lock()
+	defer progressMu.Unlock()
+	globalProgress = TestProgress{
+		Running:     true,
+		Total:       total,
+		Done:        0,
+		OkCount:     0,
+		FailCount:   0,
+		CurrentNode: "准备中...",
+	}
+}
+
+func UpdateTestProgress(nodeName string, ok bool) {
+	progressMu.Lock()
+	defer progressMu.Unlock()
+	if !globalProgress.Running {
+		return
+	}
+	globalProgress.Done++
+	if ok {
+		globalProgress.OkCount++
+	} else {
+		globalProgress.FailCount++
+	}
+	globalProgress.CurrentNode = nodeName
+}
+
+func FinishTestProgress() {
+	progressMu.Lock()
+	defer progressMu.Unlock()
+	globalProgress.Running = false
+	globalProgress.CurrentNode = "测试完成"
+}
+
 func pruneHealthUnsafe() {
 	for uri := range healthMap {
 		found := false
@@ -286,7 +358,19 @@ func BatchUpdateNodesDisabled(uris []string, disabled bool) {
 			nodeList[i].Disabled = disabled
 		}
 	}
-	saveNodesUnsafe()
+	if db.GlobalDB != nil && len(uris) > 0 {
+		tx, err := db.GlobalDB.Begin()
+		if err == nil {
+			stmt, _ := tx.Prepare("UPDATE nodes SET disabled = ? WHERE raw_uri = ?")
+			if stmt != nil {
+				for _, u := range uris {
+					_, _ = stmt.Exec(disabled, u)
+				}
+				_ = stmt.Close()
+			}
+			_ = tx.Commit()
+		}
+	}
 }
 
 func BatchDeleteNodes(uris []string) {
@@ -430,14 +514,12 @@ func EnableNode(uri string) bool {
 			nodeList[i].Disabled = false
 			if h, exists := healthMap[uri]; exists {
 				h.CooldownUntil = 0
+				updateSingleNodeHealthUnsafe(uri, h)
 			}
+			updateSingleNodeDisabledUnsafe(uri, false)
 			found = true
 			break
 		}
-	}
-	if found {
-		saveNodesUnsafe()
-		saveHealthUnsafe()
 	}
 	return found
 }
@@ -556,8 +638,7 @@ func RecordTest(uri string, ok bool, ms float64, errStr string) {
 		cooldown := minInt(1800, 30*(1<<minInt(failures-1, 6)))
 		h.CooldownUntil = time.Now().Unix() + int64(cooldown)
 	}
-	saveNodesUnsafe()
-	saveHealthUnsafe()
+	updateSingleNodeHealthUnsafe(uri, h)
 }
 
 func UpdateNodeTestResult(uri string, ok bool, ms float64, errStr string) {
@@ -580,8 +661,7 @@ func RecordRateLimit(uri string, cooldownSec int) {
 	h.RateLimitCount++
 	h.LastTestError = "429 Rate Limit"
 	h.LastFailAt = now
-	saveNodesUnsafe()
-	saveHealthUnsafe()
+	updateSingleNodeHealthUnsafe(uri, h)
 }
 
 type scoredNode struct {

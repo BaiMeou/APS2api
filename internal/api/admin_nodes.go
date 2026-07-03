@@ -42,6 +42,10 @@ func (adm *AdminHandler) adminGetNodes(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
+func (adm *AdminHandler) adminGetTestProgress(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, nodes.GetTestProgress())
+}
+
 func (adm *AdminHandler) adminFetchSub(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		URL string `json:"url"`
@@ -69,16 +73,19 @@ func (adm *AdminHandler) adminTestAll(w http.ResponseWriter, _ *http.Request) {
 		defer cancel()
 
 		list := nodes.LoadNodes()
-		log.Printf("[Admin] [TestAll] 加载到节点总数: %d", len(list))
+		var enabledNodes []nodes.Node
+		for _, n := range list {
+			if !n.Disabled {
+				enabledNodes = append(enabledNodes, n)
+			}
+		}
+		log.Printf("[Admin] [TestAll] 加载到待测启用节点数: %d / %d", len(enabledNodes), len(list))
+		nodes.StartTestProgress(len(enabledNodes))
 
 		var wg sync.WaitGroup
 		sem := make(chan struct{}, 10)
 
-		for _, n := range list {
-			if n.Disabled {
-				log.Printf("[Admin] [TestAll] 节点已被禁用，跳过测试: %s", n.Name)
-				continue
-			}
+		for _, n := range enabledNodes {
 			wg.Add(1)
 			go func(node nodes.Node) {
 				defer wg.Done()
@@ -112,9 +119,11 @@ func (adm *AdminHandler) adminTestAll(w http.ResponseWriter, _ *http.Request) {
 				if !success {
 					nodes.BatchUpdateNodesDisabled([]string{node.RawURI}, true)
 				}
+				nodes.UpdateTestProgress(node.Name, success)
 			}(n)
 		}
 		wg.Wait()
+		nodes.FinishTestProgress()
 		log.Printf("[Admin] [TestAll] 全局节点测试全部结束")
 	}()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
