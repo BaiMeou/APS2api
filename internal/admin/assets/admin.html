@@ -178,11 +178,25 @@
                 <button class="btn danger" onclick="batchDeleteSelectedNodes()">批量删除</button>
               </div>
               <div id="testProgress" class="test-progress">
-                <div id="testProgressText" class="test-progress-text">准备测试...</div>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 6px;">
+                  <div id="testProgressText" class="test-progress-text" style="margin-bottom:0;">准备测试...</div>
+                  <div style="display:flex; gap:8px;">
+                    <button class="btn ghost" id="btnTestPauseResume" style="padding:2px 10px; font-size:12px;"
+                      onclick="toggleTestPauseResume()">暂停</button>
+                    <button class="btn danger" style="padding:2px 10px; font-size:12px;"
+                      onclick="terminateTestAll()">终止</button>
+                  </div>
+                </div>
                 <div class="progress-track">
                   <div id="testProgressFill" class="progress-fill"></div>
                 </div>
                 <div id="testProgressDetail" class="test-progress-detail"></div>
+              </div>
+              <div id="crossPageSelectBanner" class="test-progress"
+                style="display:none; background: rgba(143,208,232,0.15); border: 1px solid var(--blue); color: var(--text); padding: 8px 12px; border-radius: 6px; margin-bottom: 10px;">
+                <span id="crossPageSelectText"></span>
+                <button class="btn ghost btn-blue" style="margin-left:12px; padding:2px 8px; font-size:12px;"
+                  onclick="selectAllNodesAcrossPages()">全选所有页共 <span id="crossPageSelectTotal">0</span> 个节点</button>
               </div>
               <div class="table-wrap">
                 <table>
@@ -198,6 +212,17 @@
                   </thead>
                   <tbody id="nodesBody"></tbody>
                 </table>
+              </div>
+              <div id="nodesPaginationBar" class="toolbar m-0 gap-8"
+                style="margin-top: 12px; justify-content: space-between; align-items: center;">
+                <div id="nodesPaginationInfo" style="font-size: 13px; color: var(--text-dim);"></div>
+                <div class="flex-gap-11" style="display: flex; gap: 8px; align-items: center;">
+                  <button class="btn ghost" id="btnPageFirst" onclick="changeNodePage(1)">首页</button>
+                  <button class="btn ghost" id="btnPagePrev" onclick="changeNodePage(curNodePage - 1)">上一页</button>
+                  <span id="nodesPageNumDisplay" style="font-size: 13px; font-weight: 600; padding: 0 6px;">1 / 1</span>
+                  <button class="btn ghost" id="btnPageNext" onclick="changeNodePage(curNodePage + 1)">下一页</button>
+                  <button class="btn ghost" id="btnPageLast" onclick="changeNodePage(totalNodePages)">末页</button>
+                </div>
               </div>
             </div>
           </div>
@@ -354,15 +379,25 @@
               <h2>运行日志</h2>
               <div class="hint">系统最近 200 条日志</div>
             </div>
-            <button class="btn ghost" onclick="loadLogs()">刷新</button>
+            <div style="display:flex; align-items:center; gap:16px;">
+              <div style="display:flex; align-items:center; gap:10px;">
+                <span
+                  style="font-size:calc(var(--base-font-size) * 13 / 14); color:var(--text); font-weight:500;">自动刷新</span>
+                <label class="toggle">
+                  <input type="checkbox" id="autoRefreshLogsCheck" checked onchange="toggleAutoRefreshLogs()">
+                  <span class="track"></span>
+                </label>
+              </div>
+              <button class="btn ghost" onclick="loadLogs()">立即刷新</button>
+            </div>
           </div>
           <div class="card glass">
             <div class="table-wrap" id="logContentUI" style="max-height: 60vh; overflow-y: auto;">
-              <table>
+              <table id="logsTable">
                 <thead>
                   <tr>
-                    <th style="width: 160px">时间</th>
-                    <th style="width: 80px">级别</th>
+                    <th>时间</th>
+                    <th>级别</th>
                     <th>消息</th>
                   </tr>
                 </thead>
@@ -386,6 +421,31 @@
       <div style="display:flex;gap:12px;justify-content:center;">
         <button class="btn ghost" id="confirmCancelBtn" style="flex:1;">取消</button>
         <button class="btn danger" id="confirmOkBtn" style="flex:1;">确认离开</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="changePasswordModal" class="hidden"
+    style="position:fixed;inset:0;display:grid;place-items:center;z-index:9999;background:rgba(0,0,0,0.5);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);transition:opacity .3s var(--ease);">
+    <div class="box glass" style="width:360px;padding:32px 24px;text-align:left;animation:pop .4s var(--ease);">
+      <h3 style="margin-bottom:18px;font-size:16px;text-align:center;">修改后台管理员密码</h3>
+      <div class="field" style="margin-bottom:14px;">
+        <label for="oldPwInput">原密码</label>
+        <input type="password" id="oldPwInput" placeholder="请输入当前使用的密码">
+      </div>
+      <div class="field" style="margin-bottom:14px;">
+        <label for="newPwInput">新密码</label>
+        <input type="password" id="newPwInput" placeholder="至少 6 位新密码">
+      </div>
+      <div class="field" style="margin-bottom:20px;">
+        <label for="confirmPwInput">确认新密码</label>
+        <input type="password" id="confirmPwInput" placeholder="请再次输入新密码">
+      </div>
+      <div class="err" id="changePwErr" style="color:#ff5f56;font-size:12px;margin-bottom:12px;text-align:center;">
+      </div>
+      <div style="display:flex;gap:12px;justify-content:flex-end;">
+        <button class="btn ghost" onclick="closeChangePasswordModal()">取消</button>
+        <button class="btn" onclick="submitChangePassword()">确定修改</button>
       </div>
     </div>
   </div>

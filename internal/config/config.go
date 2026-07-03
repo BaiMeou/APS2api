@@ -57,6 +57,7 @@ type AppConfig struct { //nolint:govet
 	FontColorType   string   `json:"font_color_type"`
 	FontColor       string   `json:"font_color"`
 	CustomBgPresets []string `json:"custom_bg_presets"`
+	AutoRefreshLogs *bool    `json:"auto_refresh_logs,omitempty"`
 }
 
 func DefaultConfig() AppConfig {
@@ -190,4 +191,11 @@ func (c AppConfig) ConfigPath() string { return ConfigPath() }
 func (c *AppConfig) WriteSettings(updates map[string]any) error { return WriteSettings(updates) }
 func (c *AppConfig) WriteModels(models []string, aliasMap map[string]string) error {
 	return WriteModels(models, aliasMap)
+}
+
+func (c AppConfig) GetAutoRefreshLogs() bool {
+	if c.AutoRefreshLogs == nil {
+		return true
+	}
+	return *c.AutoRefreshLogs
 }

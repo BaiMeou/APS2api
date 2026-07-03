@@ -10,6 +10,61 @@ document.getElementById('nodesBody').addEventListener('click', function (e) {
   else if (action === 'enable-node') enableNode(uri);
 });
 
+var curNodePage = 1;
+var nodePageSize = 50;
+var totalNodePages = 1;
+var cachedNodesList = [];
+window.selectedNodeURIs = window.selectedNodeURIs || new Set();
+var testProgressTimer = null;
+
+function changeNodePage(p) {
+  if (p < 1) p = 1;
+  if (p > totalNodePages) p = totalNodePages;
+  curNodePage = p;
+  loadNodes();
+}
+
+function updateSelectHeaderAndBanner() {
+  var mainCb = document.getElementById('selectAllNodesCheckbox');
+  var banner = document.getElementById('crossPageSelectBanner');
+  var bannerText = document.getElementById('crossPageSelectText');
+  var bannerTotal = document.getElementById('crossPageSelectTotal');
+
+  if (!cachedNodesList.length) {
+    if (mainCb) mainCb.checked = false;
+    if (banner) banner.style.display = 'none';
+    return;
+  }
+
+  var startIdx = (curNodePage - 1) * nodePageSize;
+  var endIdx = Math.min(startIdx + nodePageSize, cachedNodesList.length);
+  var pageNodes = cachedNodesList.slice(startIdx, endIdx);
+
+  var allPageChecked = pageNodes.length > 0 && pageNodes.every(function (n) { return window.selectedNodeURIs.has(n.raw_uri); });
+  if (mainCb) mainCb.checked = allPageChecked;
+
+  if (allPageChecked && cachedNodesList.length > pageNodes.length && window.selectedNodeURIs.size < cachedNodesList.length) {
+    if (banner) {
+      banner.style.display = 'block';
+      if (bannerText) bannerText.textContent = '当前已选择本页 ' + pageNodes.length + ' 个节点。';
+      if (bannerTotal) bannerTotal.textContent = cachedNodesList.length;
+    }
+  } else {
+    if (banner) banner.style.display = 'none';
+  }
+}
+
+function selectAllNodesAcrossPages() {
+  cachedNodesList.forEach(function (n) { window.selectedNodeURIs.add(n.raw_uri); });
+  var cbs = document.querySelectorAll('.node-select-cb');
+  cbs.forEach(function (cb) { cb.checked = true; });
+  var banner = document.getElementById('crossPageSelectBanner');
+  if (banner) banner.style.display = 'none';
+  var mainCb = document.getElementById('selectAllNodesCheckbox');
+  if (mainCb) mainCb.checked = true;
+  toast('已选择全部 ' + window.selectedNodeURIs.size + ' 个节点');
+}
+
 async function loadNodes() {
   try {
     const sd = await API.settings.get();
@@ -24,15 +79,34 @@ async function loadNodes() {
 
   const d = await API.nodes.list();
   const nodes = d.nodes || [];
+  cachedNodesList = nodes;
+
+  try {
+    const prog = await API.nodes.testProgress();
+    if (prog && prog.running) {
+      showTestProgressUI(prog);
+      startTestProgressPolling();
+    } else if (!testProgressTimer) {
+      const progressEl = document.getElementById('testProgress');
+      if (progressEl) progressEl.style.display = 'none';
+    }
+  } catch (e) { }
 
   const enabledCount = nodes.filter(n => !n.disabled).length;
   const disabledCount = nodes.filter(n => n.disabled).length;
   document.getElementById('nodesSummary').textContent = '\u5F53\u524D\u5171 ' + nodes.length + ' \u4E2A\u8282\u70B9\uFF08\u542F\u7528 ' + enabledCount + ' / \u7981\u7528 ' + disabledCount + '\uFF09';
 
+  totalNodePages = Math.max(1, Math.ceil(nodes.length / nodePageSize));
+  if (curNodePage > totalNodePages) curNodePage = totalNodePages;
+
+  const startIdx = (curNodePage - 1) * nodePageSize;
+  const endIdx = Math.min(startIdx + nodePageSize, nodes.length);
+  const pageNodes = nodes.slice(startIdx, endIdx);
+
   const tbody = document.getElementById('nodesBody');
   const frag = document.createDocumentFragment();
 
-  if (nodes.length === 0) {
+  if (pageNodes.length === 0) {
     var tr = document.createElement('tr');
     var td = document.createElement('td');
     td.colSpan = 5;
@@ -41,8 +115,8 @@ async function loadNodes() {
     tr.appendChild(td);
     frag.appendChild(tr);
   } else {
-    for (var i = 0; i < nodes.length; i++) {
-      var n = nodes[i];
+    for (var i = 0; i < pageNodes.length; i++) {
+      var n = pageNodes[i];
       var tr = document.createElement('tr');
 
       var cbTd = document.createElement('td');
@@ -51,7 +125,13 @@ async function loadNodes() {
       cb.type = 'checkbox';
       cb.className = 'node-select-cb';
       cb.dataset.uri = n.raw_uri;
+      cb.checked = window.selectedNodeURIs.has(n.raw_uri);
       cb.setAttribute('aria-label', '选择节点 ' + n.name);
+      cb.onchange = function () {
+        if (this.checked) window.selectedNodeURIs.add(this.dataset.uri);
+        else window.selectedNodeURIs.delete(this.dataset.uri);
+        updateSelectHeaderAndBanner();
+      };
       cbTd.appendChild(cb);
       tr.appendChild(cbTd);
 
@@ -196,8 +276,22 @@ async function loadNodes() {
 
   tbody.textContent = '';
   tbody.appendChild(frag);
-  var mainCb = document.getElementById('selectAllNodesCheckbox');
-  if (mainCb) mainCb.checked = false;
+
+  const pageNumDisplay = document.getElementById('nodesPageNumDisplay');
+  if (pageNumDisplay) pageNumDisplay.textContent = curNodePage + ' / ' + totalNodePages;
+  const pageInfo = document.getElementById('nodesPaginationInfo');
+  if (pageInfo) pageInfo.textContent = nodes.length > 0 ? ('显示第 ' + (startIdx + 1) + ' - ' + endIdx + ' 条，共 ' + nodes.length + ' 条') : '共 0 条';
+
+  const btnFirst = document.getElementById('btnPageFirst');
+  const btnPrev = document.getElementById('btnPagePrev');
+  const btnNext = document.getElementById('btnPageNext');
+  const btnLast = document.getElementById('btnPageLast');
+  if (btnFirst) btnFirst.disabled = curNodePage <= 1;
+  if (btnPrev) btnPrev.disabled = curNodePage <= 1;
+  if (btnNext) btnNext.disabled = curNodePage >= totalNodePages;
+  if (btnLast) btnLast.disabled = curNodePage >= totalNodePages;
+
+  updateSelectHeaderAndBanner();
 }
 
 async function addAndFetchSub() {
@@ -220,48 +314,115 @@ async function testAllNodes() {
   if (!nodes.length) return toast('无可测试节点');
 
   const enabled = nodes.filter(function (n) { return !n.disabled; });
-  const total = enabled.length;
-  if (!total) return toast('没有已启用的节点可测试');
+  if (!enabled.length) return toast('没有已启用的节点可测试');
 
-  const concurrency = Math.min(4, total);
-  let next = 0, done = 0, ok = 0, failed = 0;
+  toast('后台全量测速任务已提交启动...');
+  await API.nodes.testAll();
+  startTestProgressPolling();
+}
 
+let currentTestPaused = false;
+
+function showTestProgressUI(prog) {
   const progressEl = document.getElementById('testProgress');
   const progressText = document.getElementById('testProgressText');
   const progressFill = document.getElementById('testProgressFill');
   const progressDetail = document.getElementById('testProgressDetail');
-
+  const btnPause = document.getElementById('btnTestPauseResume');
+  if (!progressEl) return;
   progressEl.style.display = 'block';
-  progressFill.style.width = '0%';
-  progressText.textContent = '\u6D4B\u8BD5\u4E2D...';
-  progressDetail.textContent = '';
-
-  function formatRecentTest(node, ok, elapsed_ms, error) {
-    if (ok) { return '\u6700\u8FD1\uFF1A' + node.name + ' \u00B7 \u6D4B\u8BD5\u901A\u8FC7 ' + Math.round(elapsed_ms) + 'ms'; }
-    return '\u6700\u8FD1\uFF1A' + node.name + ' \u00B7 \u6D4B\u8BD5\u5931\u8D25' + (error ? ' ' + error : '');
+  currentTestPaused = !!prog.paused;
+  if (btnPause) {
+    btnPause.textContent = currentTestPaused ? '恢复' : '暂停';
+    btnPause.className = 'btn ghost';
   }
-  async function worker() {
-    while (next < total) {
-      const node = enabled[next++];
-      progressDetail.textContent = '正在测试: ' + node.name;
-      let result;
-      try {
-        result = await API.nodes.test(node.raw_uri, { auto_disable: true });
-      } catch (e) {
-        result = { ok: false, elapsed_ms: 0, error: e.message };
+  if (currentTestPaused && testProgressTimer) {
+    clearInterval(testProgressTimer);
+    testProgressTimer = null;
+  }
+  const done = prog.done || 0;
+  const total = prog.total || 1;
+  const ok = prog.ok_count || 0;
+  const failed = prog.fail_count || 0;
+  progressFill.style.width = Math.round(done / total * 100) + '%';
+  const statusStr = currentTestPaused ? '已暂停' : '测试中';
+  progressText.textContent = statusStr + ' ' + done + '/' + total + ' \u00B7 \u901A\u8FC7 ' + ok + ' \u00B7 \u5931\u8D25 ' + failed;
+  progressDetail.textContent = '当前状态: ' + (prog.current_node || '');
+}
+
+async function toggleTestPauseResume() {
+  try {
+    if (currentTestPaused) {
+      await API.nodes.testResume();
+      currentTestPaused = false;
+      const btnPause = document.getElementById('btnTestPauseResume');
+      if (btnPause) {
+        btnPause.textContent = '暂停';
+        btnPause.className = 'btn ghost';
       }
-      done++;
-      if (result.ok) ok++; else failed++;
-      progressFill.style.width = Math.round(done / total * 100) + '%';
-      progressText.textContent = '\u5DF2\u5B8C\u6210 ' + done + '/' + total + ' \u00B7 \u901A\u8FC7 ' + ok + ' \u00B7 \u5931\u8D25 ' + failed;
-      progressDetail.textContent = formatRecentTest(node, result.ok, result.elapsed_ms, result.error);
+      const progressText = document.getElementById('testProgressText');
+      if (progressText && progressText.textContent.startsWith('已暂停')) {
+        progressText.textContent = progressText.textContent.replace(/^已暂停/, '测试中');
+      }
+      startTestProgressPolling();
+      toast('已恢复批量测速');
+    } else {
+      await API.nodes.testPause();
+      currentTestPaused = true;
+      if (testProgressTimer) {
+        clearInterval(testProgressTimer);
+        testProgressTimer = null;
+      }
+      const btnPause = document.getElementById('btnTestPauseResume');
+      if (btnPause) {
+        btnPause.textContent = '恢复';
+        btnPause.className = 'btn ghost';
+      }
+      const progressText = document.getElementById('testProgressText');
+      if (progressText && progressText.textContent.startsWith('测试中')) {
+        progressText.textContent = progressText.textContent.replace(/^测试中/, '已暂停');
+      }
+      toast('批量测速已暂停');
     }
+  } catch (e) {
+    toast(e.message || '操作失败');
   }
+}
 
-  await Promise.all(Array.from({ length: concurrency }, worker));
-  await loadNodes();
-  toast('\u6279\u91CF\u6D4B\u8BD5\u5B8C\u6210\uFF1A\u901A\u8FC7 ' + ok + ' / \u5931\u8D25 ' + failed);
-  progressEl.style.display = 'none';
+async function terminateTestAll() {
+  try {
+    await API.nodes.testTerminate();
+    if (testProgressTimer) {
+      clearInterval(testProgressTimer);
+      testProgressTimer = null;
+    }
+    currentTestPaused = false;
+    const progressEl = document.getElementById('testProgress');
+    if (progressEl) progressEl.style.display = 'none';
+    loadNodes();
+    toast('正在终止批量测速...');
+  } catch (e) {
+    toast(e.message || '操作失败');
+  }
+}
+
+function startTestProgressPolling() {
+  if (testProgressTimer) return;
+  testProgressTimer = setInterval(async function () {
+    try {
+      const prog = await API.nodes.testProgress();
+      if (prog && prog.running) {
+        showTestProgressUI(prog);
+      } else {
+        clearInterval(testProgressTimer);
+        testProgressTimer = null;
+        const progressEl = document.getElementById('testProgress');
+        if (progressEl) progressEl.style.display = 'none';
+        toast('全局批量测速结束！');
+        loadNodes();
+      }
+    } catch (e) { }
+  }, 1000);
 }
 
 async function dedupNodes() { await API.nodes.dedup(); loadNodes(); toast('去重完成'); }
@@ -316,49 +477,65 @@ async function unuseNode(uri) { await API.useNode(''); loadSettings(); loadNodes
 async function delNode(uri) { if (!confirm('删除该节点？')) return; await API.nodes.delete(uri); loadNodes(); toast('已删除'); }
 
 function getSelectedNodeURIs() {
-  const cbs = document.querySelectorAll('.node-select-cb:checked');
-  const uris = [];
-  cbs.forEach(cb => uris.push(cb.getAttribute('data-uri')));
-  return uris;
+  return Array.from(window.selectedNodeURIs);
 }
 
 function toggleSelectAllNodes() {
-  const cbs = document.querySelectorAll('.node-select-cb');
-  let hasUnchecked = false;
-  cbs.forEach(cb => { if (!cb.checked) hasUnchecked = true; });
-  cbs.forEach(cb => { cb.checked = hasUnchecked; });
-  const mainCb = document.getElementById('selectAllNodesCheckbox');
-  if (mainCb) mainCb.checked = hasUnchecked;
+  if (window.selectedNodeURIs.size === cachedNodesList.length && cachedNodesList.length > 0) {
+    window.selectedNodeURIs.clear();
+  } else {
+    cachedNodesList.forEach(function (n) { window.selectedNodeURIs.add(n.raw_uri); });
+  }
+  loadNodes();
 }
 
 function toggleSelectAllNodesCheckbox(mainCb) {
-  const cbs = document.querySelectorAll('.node-select-cb');
-  cbs.forEach(cb => { cb.checked = mainCb.checked; });
+  const startIdx = (curNodePage - 1) * nodePageSize;
+  const endIdx = Math.min(startIdx + nodePageSize, cachedNodesList.length);
+  const pageNodes = cachedNodesList.slice(startIdx, endIdx);
+
+  pageNodes.forEach(function (n) {
+    if (mainCb.checked) window.selectedNodeURIs.add(n.raw_uri);
+    else window.selectedNodeURIs.delete(n.raw_uri);
+  });
+  loadNodes();
 }
 
 async function batchEnableSelectedNodes() {
   const uris = getSelectedNodeURIs();
   if (!uris.length) return toast('请先勾选需要批量操作的节点');
   toast('批量启用中...');
-  try { await API.nodes.batchEnable(uris); await loadNodes(); toast('已成功启用 ' + uris.length + ' 个节点'); }
-  catch (e) { toast('操作失败: ' + e.message); }
+  try {
+    await API.nodes.batchEnable(uris);
+    window.selectedNodeURIs.clear();
+    await loadNodes();
+    toast('已成功启用 ' + uris.length + ' 个节点');
+  } catch (e) { toast('操作失败: ' + e.message); }
 }
 
 async function batchDisableSelectedNodes() {
   const uris = getSelectedNodeURIs();
   if (!uris.length) return toast('请先勾选需要批量操作的节点');
   toast('批量禁用中...');
-  try { await API.nodes.batchDisable(uris); await loadNodes(); toast('已成功禁用 ' + uris.length + ' 个节点'); }
-  catch (e) { toast('操作失败: ' + e.message); }
+  try {
+    await API.nodes.batchDisable(uris);
+    window.selectedNodeURIs.clear();
+    await loadNodes();
+    toast('已成功禁用 ' + uris.length + ' 个节点');
+  } catch (e) { toast('操作失败: ' + e.message); }
 }
 
 async function batchDeleteSelectedNodes() {
   const uris = getSelectedNodeURIs();
   if (!uris.length) return toast('请先勾选需要批量操作的节点');
-  if (!confirm('确定要批量删除这 ' + uris.length + ' 个节点吗？')) return;
+  if (!confirm('确定要批量删除选中 ' + uris.length + ' 个节点吗？')) return;
   toast('批量删除中...');
-  try { await API.nodes.batchDelete(uris); await loadNodes(); toast('已成功删除 ' + uris.length + ' 个节点'); }
-  catch (e) { toast('操作失败: ' + e.message); }
+  try {
+    await API.nodes.batchDelete(uris);
+    window.selectedNodeURIs.clear();
+    await loadNodes();
+    toast('已成功删除 ' + uris.length + ' 个节点');
+  } catch (e) { toast('操作失败: ' + e.message); }
 }
 
 function importFileNodes(replace) {

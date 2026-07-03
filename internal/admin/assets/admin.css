@@ -187,6 +187,20 @@ td code { background: rgba(0, 0, 0, .3); padding: 2px 9px; border-radius: 8px; f
   }
 }
 
+#logsTable {
+  table-layout: auto !important;
+  width: 100% !important;
+}
+#logsTable th:nth-child(1), #logsTable td:nth-child(1),
+#logsTable th:nth-child(2), #logsTable td:nth-child(2) {
+  white-space: nowrap !important;
+  width: 1% !important;
+}
+#logsTable th:nth-child(3), #logsTable td:nth-child(3) {
+  word-break: break-all !important;
+  white-space: pre-wrap !important;
+}
+
 .field { margin-bottom: 18px; }
 .field label { display: block; color: var(--text-dim-custom, var(--text-dim)); font-size: calc(var(--base-font-size) * 12.5 / 14); margin-bottom: 7px; }
 .field.bool { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
