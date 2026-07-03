@@ -89,12 +89,18 @@ func (adm *AdminHandler) adminTestAll(w http.ResponseWriter, _ *http.Request) {
 			wg.Add(1)
 			go func(node nodes.Node) {
 				defer wg.Done()
+				if nodes.CheckTestControl() {
+					return
+				}
 				select {
 				case sem <- struct{}{}:
 				case <-ctx.Done():
 					return
 				}
 				defer func() { <-sem }()
+				if nodes.CheckTestControl() {
+					return
+				}
 
 				start := time.Now()
 				log.Printf("[Admin] [TestAll] 开始测试节点: %s (%s)", node.Name, node.Type)
@@ -126,6 +132,33 @@ func (adm *AdminHandler) adminTestAll(w http.ResponseWriter, _ *http.Request) {
 		nodes.FinishTestProgress()
 		log.Printf("[Admin] [TestAll] 全局节点测试全部结束")
 	}()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (adm *AdminHandler) adminTestPause(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		adm.adminMethodNotAllowed(w)
+		return
+	}
+	nodes.PauseTestProgress()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (adm *AdminHandler) adminTestResume(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		adm.adminMethodNotAllowed(w)
+		return
+	}
+	nodes.ResumeTestProgress()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (adm *AdminHandler) adminTestTerminate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		adm.adminMethodNotAllowed(w)
+		return
+	}
+	nodes.TerminateTestProgress()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 

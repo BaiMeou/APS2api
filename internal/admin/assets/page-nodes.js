@@ -321,20 +321,52 @@ async function testAllNodes() {
   startTestProgressPolling();
 }
 
+let currentTestPaused = false;
+
 function showTestProgressUI(prog) {
   const progressEl = document.getElementById('testProgress');
   const progressText = document.getElementById('testProgressText');
   const progressFill = document.getElementById('testProgressFill');
   const progressDetail = document.getElementById('testProgressDetail');
+  const btnPause = document.getElementById('btnTestPauseResume');
   if (!progressEl) return;
   progressEl.style.display = 'block';
+  currentTestPaused = !!prog.paused;
+  if (btnPause) {
+    btnPause.textContent = currentTestPaused ? '恢复' : '暂停';
+    btnPause.className = currentTestPaused ? 'btn btn-green' : 'btn ghost';
+  }
   const done = prog.done || 0;
   const total = prog.total || 1;
   const ok = prog.ok_count || 0;
   const failed = prog.fail_count || 0;
   progressFill.style.width = Math.round(done / total * 100) + '%';
-  progressText.textContent = '\u6D4B\u8BD5\u4E2D ' + done + '/' + total + ' \u00B7 \u901A\u8FC7 ' + ok + ' \u00B7 \u5931\u8D25 ' + failed;
-  progressDetail.textContent = '正在测速: ' + (prog.current_node || '');
+  const statusStr = currentTestPaused ? '已暂停' : '测试中';
+  progressText.textContent = statusStr + ' ' + done + '/' + total + ' \u00B7 \u901A\u8FC7 ' + ok + ' \u00B7 \u5931\u8D25 ' + failed;
+  progressDetail.textContent = '当前状态: ' + (prog.current_node || '');
+}
+
+async function toggleTestPauseResume() {
+  try {
+    if (currentTestPaused) {
+      await API.nodes.testResume();
+      toast('已恢复批量测速');
+    } else {
+      await API.nodes.testPause();
+      toast('批量测速已暂停');
+    }
+  } catch (e) {
+    toast(e.message || '操作失败');
+  }
+}
+
+async function terminateTestAll() {
+  try {
+    await API.nodes.testTerminate();
+    toast('正在终止批量测速...');
+  } catch (e) {
+    toast(e.message || '操作失败');
+  }
 }
 
 function startTestProgressPolling() {
@@ -349,7 +381,7 @@ function startTestProgressPolling() {
         testProgressTimer = null;
         const progressEl = document.getElementById('testProgress');
         if (progressEl) progressEl.style.display = 'none';
-        toast('全局批量测速完成！');
+        toast('全局批量测速结束！');
         loadNodes();
       }
     } catch (e) { }

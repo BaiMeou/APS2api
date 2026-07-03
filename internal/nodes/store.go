@@ -172,6 +172,8 @@ func updateSingleNodeDisabledUnsafe(uri string, disabled bool) {
 
 type TestProgress struct {
 	Running     bool   `json:"running"`
+	Paused      bool   `json:"paused"`
+	Terminated  bool   `json:"terminated"`
 	Total       int    `json:"total"`
 	Done        int    `json:"done"`
 	OkCount     int    `json:"ok_count"`
@@ -182,6 +184,7 @@ type TestProgress struct {
 var (
 	progressMu sync.RWMutex
 	globalProgress TestProgress
+	testControlCond = sync.NewCond(&progressMu)
 )
 
 func GetTestProgress() TestProgress {
@@ -195,6 +198,8 @@ func StartTestProgress(total int) {
 	defer progressMu.Unlock()
 	globalProgress = TestProgress{
 		Running:     true,
+		Paused:      false,
+		Terminated:  false,
 		Total:       total,
 		Done:        0,
 		OkCount:     0,
@@ -206,7 +211,7 @@ func StartTestProgress(total int) {
 func UpdateTestProgress(nodeName string, ok bool) {
 	progressMu.Lock()
 	defer progressMu.Unlock()
-	if !globalProgress.Running {
+	if !globalProgress.Running || globalProgress.Terminated {
 		return
 	}
 	globalProgress.Done++
@@ -222,7 +227,48 @@ func FinishTestProgress() {
 	progressMu.Lock()
 	defer progressMu.Unlock()
 	globalProgress.Running = false
+	globalProgress.Paused = false
 	globalProgress.CurrentNode = "测试完成"
+	testControlCond.Broadcast()
+}
+
+func PauseTestProgress() {
+	progressMu.Lock()
+	defer progressMu.Unlock()
+	if globalProgress.Running && !globalProgress.Terminated {
+		globalProgress.Paused = true
+		globalProgress.CurrentNode = "已暂停..."
+	}
+}
+
+func ResumeTestProgress() {
+	progressMu.Lock()
+	defer progressMu.Unlock()
+	if globalProgress.Running && globalProgress.Paused {
+		globalProgress.Paused = false
+		globalProgress.CurrentNode = "恢复测试中..."
+		testControlCond.Broadcast()
+	}
+}
+
+func TerminateTestProgress() {
+	progressMu.Lock()
+	defer progressMu.Unlock()
+	if globalProgress.Running {
+		globalProgress.Terminated = true
+		globalProgress.Paused = false
+		globalProgress.CurrentNode = "正在终止..."
+		testControlCond.Broadcast()
+	}
+}
+
+func CheckTestControl() bool {
+	progressMu.Lock()
+	defer progressMu.Unlock()
+	for globalProgress.Running && globalProgress.Paused && !globalProgress.Terminated {
+		testControlCond.Wait()
+	}
+	return !globalProgress.Running || globalProgress.Terminated
 }
 
 func pruneHealthUnsafe() {

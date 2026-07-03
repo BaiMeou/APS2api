@@ -69,6 +69,15 @@ func (adm *AdminHandler) handleAdminAPI(w http.ResponseWriter, r *http.Request) 
 			adm.adminGetTestProgress(w, r)
 		}
 		return
+	case "/nodes/test-pause":
+		adm.adminTestPause(w, r)
+		return
+	case "/nodes/test-resume":
+		adm.adminTestResume(w, r)
+		return
+	case "/nodes/test-terminate":
+		adm.adminTestTerminate(w, r)
+		return
 	case "/nodes/deduplicate":
 		adm.adminDedupNodes(w, r)
 		return
