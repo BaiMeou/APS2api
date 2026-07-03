@@ -25,6 +25,7 @@ var adminAllowedSettings = map[string]bool{
 	"font_color":                  true,
 	"custom_bg_presets":           true,
 	"debug_mode":                  true,
+	"auto_refresh_logs":           true,
 }
 
 func (adm *AdminHandler) adminGetSettings(w http.ResponseWriter, _ *http.Request) {
@@ -56,6 +57,7 @@ func (adm *AdminHandler) adminGetSettings(w http.ResponseWriter, _ *http.Request
 		"font_color":                  adm.cfg.FontColor(),
 		"custom_bg_presets":           adm.cfg.CustomBgPresets(),
 		"debug_mode":                  adm.cfg.DebugMode(),
+		"auto_refresh_logs":           adm.cfg.AutoRefreshLogs(),
 	}})
 }
 

@@ -2,8 +2,19 @@ let logsRefreshTimer = null;
 
 async function loadLogs() {
   const check = $('#autoRefreshLogsCheck');
-  if (check && check.checked && !logsRefreshTimer) {
-    toggleAutoRefreshLogs(true);
+  if (check) {
+    try {
+      const sRes = await API.settings.get();
+      const sets = sRes.settings || sRes;
+      if (sets && sets.auto_refresh_logs !== undefined) {
+        check.checked = !!sets.auto_refresh_logs;
+      }
+    } catch (e) {}
+    if (check.checked && !logsRefreshTimer) {
+      toggleAutoRefreshLogs(true);
+    } else if (!check.checked && logsRefreshTimer) {
+      toggleAutoRefreshLogs(true);
+    }
   }
   try {
     const res = await fetch('/api/admin/log');
@@ -77,6 +88,9 @@ function escapeHtml(str) {
 function toggleAutoRefreshLogs(silent) {
   const check = $('#autoRefreshLogsCheck');
   if (!check) return;
+  if (silent !== true) {
+    API.settings.put({ auto_refresh_logs: check.checked }).catch(() => {});
+  }
   if (check.checked) {
     if (!logsRefreshTimer) {
       logsRefreshTimer = setInterval(() => {

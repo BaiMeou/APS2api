@@ -40,6 +40,7 @@ type ConfigProvider interface {
 	FontColorType() string
 	FontColor() string
 	CustomBgPresets() []string
+	AutoRefreshLogs() bool
 
 	TelemetryEnabled() *bool
 
@@ -120,5 +121,6 @@ func (d dynamicConfig) AliasMap() map[string]string               { return Load(
 func (d dynamicConfig) ModelsWithFakeVariants() []string          { return Load().ModelsWithFakeVariants() }
 func (d dynamicConfig) FakePrefixes() []string                    { return Load().FakePrefixes() }
 func (d dynamicConfig) ResolveModelName(s string) string          { return Load().ResolveModelName(s) }
+func (d dynamicConfig) AutoRefreshLogs() bool                     { return Load().GetAutoRefreshLogs() }
 func (d dynamicConfig) ConfigDir() string                         { return Load().ConfigDir() }
 func (d dynamicConfig) ConfigPath() string                        { return Load().ConfigPath() }
