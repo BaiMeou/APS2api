@@ -334,7 +334,11 @@ function showTestProgressUI(prog) {
   currentTestPaused = !!prog.paused;
   if (btnPause) {
     btnPause.textContent = currentTestPaused ? '恢复' : '暂停';
-    btnPause.className = currentTestPaused ? 'btn btn-green' : 'btn ghost';
+    btnPause.className = 'btn ghost';
+  }
+  if (currentTestPaused && testProgressTimer) {
+    clearInterval(testProgressTimer);
+    testProgressTimer = null;
   }
   const done = prog.done || 0;
   const total = prog.total || 1;
@@ -350,9 +354,34 @@ async function toggleTestPauseResume() {
   try {
     if (currentTestPaused) {
       await API.nodes.testResume();
+      currentTestPaused = false;
+      const btnPause = document.getElementById('btnTestPauseResume');
+      if (btnPause) {
+        btnPause.textContent = '暂停';
+        btnPause.className = 'btn ghost';
+      }
+      const progressText = document.getElementById('testProgressText');
+      if (progressText && progressText.textContent.startsWith('已暂停')) {
+        progressText.textContent = progressText.textContent.replace(/^已暂停/, '测试中');
+      }
+      startTestProgressPolling();
       toast('已恢复批量测速');
     } else {
       await API.nodes.testPause();
+      currentTestPaused = true;
+      if (testProgressTimer) {
+        clearInterval(testProgressTimer);
+        testProgressTimer = null;
+      }
+      const btnPause = document.getElementById('btnTestPauseResume');
+      if (btnPause) {
+        btnPause.textContent = '恢复';
+        btnPause.className = 'btn ghost';
+      }
+      const progressText = document.getElementById('testProgressText');
+      if (progressText && progressText.textContent.startsWith('测试中')) {
+        progressText.textContent = progressText.textContent.replace(/^测试中/, '已暂停');
+      }
       toast('批量测速已暂停');
     }
   } catch (e) {
@@ -363,6 +392,14 @@ async function toggleTestPauseResume() {
 async function terminateTestAll() {
   try {
     await API.nodes.testTerminate();
+    if (testProgressTimer) {
+      clearInterval(testProgressTimer);
+      testProgressTimer = null;
+    }
+    currentTestPaused = false;
+    const progressEl = document.getElementById('testProgress');
+    if (progressEl) progressEl.style.display = 'none';
+    loadNodes();
     toast('正在终止批量测速...');
   } catch (e) {
     toast(e.message || '操作失败');
