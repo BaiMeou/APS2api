@@ -305,10 +305,16 @@ func (adm *AdminHandler) adminGetLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	const maxLogSize = 200 * 1024
-	if len(data) > maxLogSize {
-		data = data[len(data)-maxLogSize:]
+	lines := strings.Split(string(data), "\n")
+	var validLines []string
+	for _, l := range lines {
+		if strings.TrimSpace(l) != "" {
+			validLines = append(validLines, l)
+		}
+	}
+	if len(validLines) > 200 {
+		validLines = validLines[len(validLines)-200:]
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "content": string(data)})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "content": strings.Join(validLines, "\n")})
 }

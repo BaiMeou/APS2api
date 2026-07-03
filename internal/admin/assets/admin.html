@@ -371,15 +371,21 @@
               <h2>运行日志</h2>
               <div class="hint">系统最近 200 条日志</div>
             </div>
-            <button class="btn ghost" onclick="loadLogs()">刷新</button>
+            <div style="display:flex; align-items:center; gap:14px;">
+              <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:var(--text); cursor:pointer;">
+                <input type="checkbox" id="autoRefreshLogsCheck" onchange="toggleAutoRefreshLogs()">
+                <span>自动刷新 (3s)</span>
+              </label>
+              <button class="btn ghost" onclick="loadLogs()">立即刷新</button>
+            </div>
           </div>
           <div class="card glass">
             <div class="table-wrap" id="logContentUI" style="max-height: 60vh; overflow-y: auto;">
-              <table>
+              <table id="logsTable">
                 <thead>
                   <tr>
-                    <th style="width: 160px">时间</th>
-                    <th style="width: 80px">级别</th>
+                    <th>时间</th>
+                    <th>级别</th>
                     <th>消息</th>
                   </tr>
                 </thead>

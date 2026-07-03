@@ -69,3 +69,25 @@ function escapeHtml(str) {
     }
   });
 }
+
+function toggleAutoRefreshLogs() {
+  const check = $('#autoRefreshLogsCheck');
+  if (!check) return;
+  if (check.checked) {
+    if (!logsRefreshTimer) {
+      logsRefreshTimer = setInterval(() => {
+        const pageLogs = $('#page-logs');
+        if (pageLogs && !pageLogs.classList.contains('hidden')) {
+          loadLogs();
+        }
+      }, 3000);
+      toast('已开启自动刷新日志');
+    }
+  } else {
+    if (logsRefreshTimer) {
+      clearInterval(logsRefreshTimer);
+      logsRefreshTimer = null;
+      toast('已关闭自动刷新日志');
+    }
+  }
+}
