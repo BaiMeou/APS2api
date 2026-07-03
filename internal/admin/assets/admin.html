@@ -181,8 +181,10 @@
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 6px;">
                   <div id="testProgressText" class="test-progress-text" style="margin-bottom:0;">准备测试...</div>
                   <div style="display:flex; gap:8px;">
-                    <button class="btn ghost" id="btnTestPauseResume" style="padding:2px 10px; font-size:12px;" onclick="toggleTestPauseResume()">暂停</button>
-                    <button class="btn danger" style="padding:2px 10px; font-size:12px;" onclick="terminateTestAll()">终止</button>
+                    <button class="btn ghost" id="btnTestPauseResume" style="padding:2px 10px; font-size:12px;"
+                      onclick="toggleTestPauseResume()">暂停</button>
+                    <button class="btn danger" style="padding:2px 10px; font-size:12px;"
+                      onclick="terminateTestAll()">终止</button>
                   </div>
                 </div>
                 <div class="progress-track">
@@ -377,11 +379,15 @@
               <h2>运行日志</h2>
               <div class="hint">系统最近 200 条日志</div>
             </div>
-            <div style="display:flex; align-items:center; gap:14px;">
-              <label style="display:flex; align-items:center; gap:6px; font-size:13px; color:var(--text); cursor:pointer;">
-                <input type="checkbox" id="autoRefreshLogsCheck" onchange="toggleAutoRefreshLogs()">
-                <span>自动刷新 (3s)</span>
-              </label>
+            <div style="display:flex; align-items:center; gap:16px;">
+              <div style="display:flex; align-items:center; gap:10px;">
+                <span
+                  style="font-size:calc(var(--base-font-size) * 13 / 14); color:var(--text); font-weight:500;">自动刷新</span>
+                <label class="toggle">
+                  <input type="checkbox" id="autoRefreshLogsCheck" checked onchange="toggleAutoRefreshLogs()">
+                  <span class="track"></span>
+                </label>
+              </div>
               <button class="btn ghost" onclick="loadLogs()">立即刷新</button>
             </div>
           </div>
@@ -435,7 +441,8 @@
         <label for="confirmPwInput">确认新密码</label>
         <input type="password" id="confirmPwInput" placeholder="请再次输入新密码">
       </div>
-      <div class="err" id="changePwErr" style="color:#ff5f56;font-size:12px;margin-bottom:12px;text-align:center;"></div>
+      <div class="err" id="changePwErr" style="color:#ff5f56;font-size:12px;margin-bottom:12px;text-align:center;">
+      </div>
       <div style="display:flex;gap:12px;justify-content:flex-end;">
         <button class="btn ghost" onclick="closeChangePasswordModal()">取消</button>
         <button class="btn" onclick="submitChangePassword()">确定修改</button>

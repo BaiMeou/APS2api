@@ -1,6 +1,10 @@
 let logsRefreshTimer = null;
 
 async function loadLogs() {
+  const check = $('#autoRefreshLogsCheck');
+  if (check && check.checked && !logsRefreshTimer) {
+    toggleAutoRefreshLogs(true);
+  }
   try {
     const res = await fetch('/api/admin/log');
     const data = await res.json();
@@ -70,7 +74,7 @@ function escapeHtml(str) {
   });
 }
 
-function toggleAutoRefreshLogs() {
+function toggleAutoRefreshLogs(silent) {
   const check = $('#autoRefreshLogsCheck');
   if (!check) return;
   if (check.checked) {
@@ -81,13 +85,13 @@ function toggleAutoRefreshLogs() {
           loadLogs();
         }
       }, 3000);
-      toast('已开启自动刷新日志');
+      if (silent !== true) toast('已开启自动刷新日志');
     }
   } else {
     if (logsRefreshTimer) {
       clearInterval(logsRefreshTimer);
       logsRefreshTimer = null;
-      toast('已关闭自动刷新日志');
+      if (silent !== true) toast('已关闭自动刷新日志');
     }
   }
 }
