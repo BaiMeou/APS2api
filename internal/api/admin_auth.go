@@ -187,3 +187,46 @@ func (adm *AdminHandler) adminCheckAuth(w http.ResponseWriter, r *http.Request) 
 		"custom_bg_presets": adm.cfg.CustomBgPresets(),
 	})
 }
+
+func (adm *AdminHandler) adminChangePassword(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		OldPassword string `json:"old_password"`
+		NewPassword string `json:"new_password"`
+	}
+	if !adm.decodeAdminBody(w, r, &body) {
+		return
+	}
+	expected := strings.TrimSpace(config.Load().AdminPassword)
+	if expected == "" {
+		writeJSON(w, http.StatusInternalServerError, adminErr("未设置管理员密码"))
+		return
+	}
+	if subtle.ConstantTimeCompare([]byte(strings.TrimSpace(body.OldPassword)), []byte(expected)) != 1 {
+		writeJSON(w, http.StatusUnauthorized, adminErr("原密码错误"))
+		return
+	}
+	newPw := strings.TrimSpace(body.NewPassword)
+	if len(newPw) < 6 {
+		writeJSON(w, http.StatusBadRequest, adminErr("新密码不能少于 6 个字符"))
+		return
+	}
+	if err := config.WriteSettings(map[string]any{"admin_password": newPw}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, adminErr("写入新密码失败"))
+		return
+	}
+	adminSessionsMu.Lock()
+	adminSessions = map[string]time.Time{}
+	adminSessionsMu.Unlock()
+
+	http.SetCookie(w, &http.Cookie{
+		Name:     adminCookieName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
+		MaxAge:   -1,
+	})
+	log.Printf("[Security] 后台管理员密码已修改，所有在线会话已重置。来源 IP: %s", r.RemoteAddr)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}

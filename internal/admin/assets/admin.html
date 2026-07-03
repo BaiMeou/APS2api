@@ -418,6 +418,30 @@
       </div>
     </div>
   </div>
+
+  <div id="changePasswordModal" class="hidden"
+    style="position:fixed;inset:0;display:grid;place-items:center;z-index:9999;background:rgba(0,0,0,0.5);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);transition:opacity .3s var(--ease);">
+    <div class="box glass" style="width:360px;padding:32px 24px;text-align:left;animation:pop .4s var(--ease);">
+      <h3 style="margin-bottom:18px;font-size:16px;text-align:center;">修改后台管理员密码</h3>
+      <div class="field" style="margin-bottom:14px;">
+        <label for="oldPwInput">原密码</label>
+        <input type="password" id="oldPwInput" placeholder="请输入当前使用的密码">
+      </div>
+      <div class="field" style="margin-bottom:14px;">
+        <label for="newPwInput">新密码</label>
+        <input type="password" id="newPwInput" placeholder="至少 6 位新密码">
+      </div>
+      <div class="field" style="margin-bottom:20px;">
+        <label for="confirmPwInput">确认新密码</label>
+        <input type="password" id="confirmPwInput" placeholder="请再次输入新密码">
+      </div>
+      <div class="err" id="changePwErr" style="color:#ff5f56;font-size:12px;margin-bottom:12px;text-align:center;"></div>
+      <div style="display:flex;gap:12px;justify-content:flex-end;">
+        <button class="btn ghost" onclick="closeChangePasswordModal()">取消</button>
+        <button class="btn" onclick="submitChangePassword()">确定修改</button>
+      </div>
+    </div>
+  </div>
   <script src="utils.js"></script>
   <script src="api.js"></script>
   <script src="page-overview.js"></script>

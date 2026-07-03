@@ -126,6 +126,12 @@ func (adm *AdminHandler) handleAdminAPI(w http.ResponseWriter, r *http.Request) 
 	switch path {
 	case "/logout":
 		adm.adminLogout(w, r)
+	case "/password":
+		if r.Method == http.MethodPost {
+			adm.adminChangePassword(w, r)
+		} else {
+			adm.adminMethodNotAllowed(w)
+		}
 	case "/settings":
 		switch r.Method {
 		case http.MethodGet:

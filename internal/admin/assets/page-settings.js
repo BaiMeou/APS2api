@@ -57,10 +57,24 @@ async function loadSettings() {
     const numFields = g.fields.filter(f => f.type !== 'bool');
     const boolFields = g.fields.filter(f => f.type === 'bool');
 
+    let extraHtml = '';
+    if (key === 'security') {
+      extraHtml = `
+        <div class="field" style="margin-top:12px; display:flex; justify-content:space-between; align-items:center; background:rgba(255,255,255,0.03); padding:14px; border-radius:10px; border:1px solid var(--stroke);">
+          <div>
+            <div style="font-weight:600; font-size:14px;">管理后台密码</div>
+            <div class="desc" style="margin-top:4px;">定期修改密码有助于保障管理后台及节点会话安全</div>
+          </div>
+          <button type="button" class="btn ghost" style="padding:8px 16px;" onclick="showChangePasswordModal()">修改密码</button>
+        </div>
+      `;
+    }
+
     sectionsHtml += `
       <div class="settings-section-title">${g.title}</div>
       ${numFields.length ? `<div class="grid grid-2">${numFields.map(fld).join('')}</div>` : ''}
       ${boolFields.length ? `<div class="grid grid-2" style="margin-top:10px;">${boolFields.map(fld).join('')}</div>` : ''}
+      ${extraHtml}
     `;
   }
 
@@ -138,4 +152,37 @@ async function saveSettings() {
   await API.settings.put(out); toast('设置已保存');
   window.hasUnsavedSettings = false;
   await loadSettings();
+}
+
+function showChangePasswordModal() {
+  $('#oldPwInput').value = '';
+  $('#newPwInput').value = '';
+  $('#confirmPwInput').value = '';
+  $('#changePwErr').textContent = '';
+  $('#changePasswordModal').classList.remove('hidden');
+}
+
+function closeChangePasswordModal() {
+  $('#changePasswordModal').classList.add('hidden');
+}
+
+async function submitChangePassword() {
+  const oldPw = $('#oldPwInput').value;
+  const newPw = $('#newPwInput').value;
+  const confirmPw = $('#confirmPwInput').value;
+  const errEl = $('#changePwErr');
+
+  if (!oldPw) { errEl.textContent = '请输入原密码'; return; }
+  if (newPw.length < 6) { errEl.textContent = '新密码长度至少需要 6 个字符'; return; }
+  if (newPw !== confirmPw) { errEl.textContent = '两次输入的新密码不一致'; return; }
+
+  errEl.textContent = '';
+  try {
+    await API.changePassword(oldPw, newPw);
+    closeChangePasswordModal();
+    toast('密码修改成功，请使用新密码重新登录！');
+    setTimeout(() => { logout(); }, 1500);
+  } catch (e) {
+    errEl.textContent = e.message || '修改密码失败';
+  }
 }

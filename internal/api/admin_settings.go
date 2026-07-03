@@ -2,7 +2,6 @@ package api
 
 import (
 	"net/http"
-	"strings"
 
 	"github.com/bsfdsagfadg/vertex/internal/config"
 )
@@ -11,7 +10,7 @@ var adminAllowedSettings = map[string]bool{
 	"max_retries": true, "token_pool_size": true, "max_spill_mb": true,
 	"max_request_mb": true, "max_n": true, "anti429_enabled": true,
 	"anti429_target": true, "force_no_stream": true, "anti_tracking": true,
-	"drop_max_tokens": true, "proxy_url": true, "admin_password": true,
+	"drop_max_tokens": true, "proxy_url": true,
 	"parallel_pool_enabled": true, "parallel_pool_size": true,
 	"telemetry_enabled":           true,
 	"parallel_pool_delay_dynamic": true,
@@ -82,13 +81,6 @@ func (adm *AdminHandler) adminPutSettings(w http.ResponseWriter, r *http.Request
 		case "max_retries", "token_pool_size", "max_spill_mb", "max_request_mb", "max_n", "parallel_pool_size", "parallel_pool_delay_ms", "recaptcha_expire_seconds":
 			if f, ok := v.(float64); ok {
 				updates[k] = int(f)
-				continue
-			}
-		case "admin_password":
-			if pw, ok := v.(string); !ok || strings.TrimSpace(pw) == "" {
-				continue
-			} else {
-				updates[k] = strings.TrimSpace(pw)
 				continue
 			}
 		}

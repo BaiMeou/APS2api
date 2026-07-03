@@ -10,6 +10,7 @@ const API = {
   checkAuth() { return this.raw('/api/admin/check-auth'); },
   login(password) { return this.raw('/api/admin/login', { method: 'POST', body: JSON.stringify({ password }) }); },
   logout() { return this.raw('/api/admin/logout', { method: 'POST' }); },
+  changePassword(oldPw, newPw) { return this.raw('/api/admin/password', { method: 'POST', body: JSON.stringify({ old_password: oldPw, new_password: newPw }) }); },
   settings: {
     get() { return API.raw('/api/admin/settings'); },
     put(v) { return API.raw('/api/admin/settings', { method: 'PUT', body: JSON.stringify({ settings: v }) }); },
