@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/rivo/uniseg"
 )
 
 // ReqState 记录单个活跃请求的状态。
@@ -40,7 +42,7 @@ var (
 
 	// 环形日志缓冲区，存放原始文本（渲染时动态换行）
 	//nolint:gochecknoglobals // Internal CLI state
-	logBuffer []string
+	logBuffer = []string{}
 
 	// 软件版本与平台常驻信息
 	//nolint:gochecknoglobals // Internal CLI state
@@ -114,33 +116,12 @@ func boxInnerWidth() int {
 
 // ─── 字符宽度计算 ───
 
-func runeWidth(r rune) int {
-	if r >= 0x1100 && ((r >= 0x1100 && r <= 0x115F) ||
-		(r >= 0x2E80 && r <= 0xA4CF && r != 0x303F) ||
-		(r >= 0xAC00 && r <= 0xD7A3) ||
-		(r >= 0xF900 && r <= 0xFAFF) ||
-		(r >= 0xFE10 && r <= 0xFE19) ||
-		(r >= 0xFE30 && r <= 0xFE6F) ||
-		(r >= 0xFF00 && r <= 0xFF60) ||
-		(r >= 0xFFE0 && r <= 0xFFE6) ||
-		(r >= 0x1F000 && r <= 0x1F9FF) ||
-		(r >= 0x20000 && r <= 0x2FA1F) ||
-		(r >= 0x2600 && r <= 0x27BF)) {
-		return 2
-	}
-	return 1
-}
-
 func stringWidth(s string) int {
-	w := 0
-	for _, r := range s {
-		w += runeWidth(r)
-	}
-	return w
+	return uniseg.StringWidth(s)
 }
 
 func padOrTrunc(s string, maxCol int) string {
-	w := stringWidth(s)
+	w := uniseg.StringWidth(s)
 	if w <= maxCol {
 		return s + strings.Repeat(" ", maxCol-w)
 	}
@@ -149,13 +130,14 @@ func padOrTrunc(s string, maxCol int) string {
 	}
 	var sb strings.Builder
 	cur := 0
-	for _, r := range s {
-		rw := runeWidth(r)
-		if cur+rw > maxCol-2 {
+	g := uniseg.NewGraphemes(s)
+	for g.Next() {
+		gw := g.Width()
+		if cur+gw > maxCol-2 {
 			break
 		}
-		sb.WriteRune(r)
-		cur += rw
+		sb.WriteString(g.Str())
+		cur += gw
 	}
 	sb.WriteString("..")
 	cur += 2
@@ -169,24 +151,38 @@ func wordWrap(text string, maxCol int) []string {
 	if maxCol <= 0 {
 		return []string{text}
 	}
-	if stringWidth(text) <= maxCol {
-		return []string{text + strings.Repeat(" ", maxCol-stringWidth(text))}
+	w := uniseg.StringWidth(text)
+	if w <= maxCol {
+		return []string{text + strings.Repeat(" ", maxCol-w)}
+	}
+
+	g := uniseg.NewGraphemes(text)
+	type graphemeItem struct {
+		str   string
+		width int
+	}
+	var items []graphemeItem
+	for g.Next() {
+		items = append(items, graphemeItem{
+			str:   g.Str(),
+			width: g.Width(),
+		})
 	}
 
 	var lines []string
 	var cur strings.Builder
 	curW := 0
-	runes := []rune(text)
-	i := 0
-	for i < len(runes) {
-		r := runes[i]
-		rw := runeWidth(r)
 
-		if r == ' ' && curW > 0 {
+	i := 0
+	for i < len(items) {
+		item := items[i]
+		gw := item.width
+
+		if item.str == " " && curW > 0 {
 			nextW := 0
 			j := i + 1
-			for j < len(runes) && runes[j] != ' ' {
-				nextW += runeWidth(runes[j])
+			for j < len(items) && items[j].str != " " {
+				nextW += items[j].width
 				j++
 			}
 			if curW+1+nextW > maxCol {
@@ -198,14 +194,14 @@ func wordWrap(text string, maxCol int) []string {
 			}
 		}
 
-		if curW+rw > maxCol {
+		if curW+gw > maxCol {
 			lines = append(lines, cur.String()+strings.Repeat(" ", maxCol-curW))
 			cur.Reset()
 			curW = 0
 		}
 
-		cur.WriteRune(r)
-		curW += rw
+		cur.WriteString(item.str)
+		curW += gw
 		i++
 	}
 
@@ -227,6 +223,7 @@ func dashBar(w int) string {
 
 // ─── 日志拦截 ───
 
+//nolint:gochecknoglobals // Log writer for interceptor
 var additionalLogWriter io.Writer
 
 type logInterceptor struct{}
@@ -384,15 +381,14 @@ func printBanner() {
 	if d < 0 {
 		d = 0
 	}
-	sb.WriteString(fmt.Sprintf("\033[33m%s%s╮\033[0m\n", prefix, dashBar(d)))
+	fmt.Fprintf(&sb, "\033[33m%s%s╮\033[0m\n", prefix, dashBar(d))
 
 	line1 := fmt.Sprintf("Version: %s | %s", appVersion, platformInfo)
-	sb.WriteString(fmt.Sprintf("\033[33m│\033[0m %s \033[33m│\033[0m\n", padOrTrunc(line1, biw)))
-	sb.WriteString(fmt.Sprintf("\033[33m│\033[0m %s \033[33m│\033[0m\n", padOrTrunc(buildInfo, biw)))
+	fmt.Fprintf(&sb, "\033[33m│\033[0m %s \033[33m│\033[0m\n", padOrTrunc(line1, biw))
+	fmt.Fprintf(&sb, "\033[33m│\033[0m %s \033[33m│\033[0m\n", padOrTrunc(buildInfo, biw))
 
 	warn := "⚠️  本软件完全免费！付费即被骗，请退款。"
-	sb.WriteString(fmt.Sprintf("\033[33m│\033[0m \033[31m%s\033[0m \033[33m│\033[0m\n", padOrTrunc(warn, biw)))
-
+	fmt.Fprintf(&sb, "\033[33m│\033[0m \033[31m%s\033[0m \033[33m│\033[0m\n", padOrTrunc(warn, biw))
 	sb.WriteString("\033[33m" + bottomBorder() + "\033[0m")
 
 	fmt.Fprint(osStdout, sb.String())
@@ -421,7 +417,7 @@ func drawTUI() {
 		if d < 0 {
 			d = 0
 		}
-		sb.WriteString(fmt.Sprintf("\033[36m%s%s╮\033[0m\n", prefix, dashBar(d)))
+		fmt.Fprintf(&sb, "\033[36m%s%s╮\033[0m\n", prefix, dashBar(d))
 
 		var visualLines []string
 		for i := len(logBuffer) - 1; i >= 0 && len(visualLines) < maxLogs*5; i-- {
@@ -433,9 +429,9 @@ func drawTUI() {
 		}
 		for i := 0; i < maxLogs; i++ {
 			if i < len(visualLines) {
-				sb.WriteString(fmt.Sprintf("\033[36m│\033[0m %s \033[36m│\033[0m\n", visualLines[i]))
+				fmt.Fprintf(&sb, "\033[36m│\033[0m %s \033[36m│\033[0m\n", visualLines[i])
 			} else {
-				sb.WriteString(fmt.Sprintf("\033[36m│\033[0m %s \033[36m│\033[0m\n", strings.Repeat(" ", biw)))
+				fmt.Fprintf(&sb, "\033[36m│\033[0m %s \033[36m│\033[0m\n", strings.Repeat(" ", biw))
 			}
 		}
 		sb.WriteString("\033[36m" + bottomBorder() + "\033[0m")
@@ -457,7 +453,7 @@ func drawTUI() {
 		if d < 0 {
 			d = 0
 		}
-		sb.WriteString(fmt.Sprintf("\033[36m%s%s╮\033[0m\n", prefix, dashBar(d)))
+		fmt.Fprintf(&sb, "\033[36m%s%s╮\033[0m\n", prefix, dashBar(d))
 
 		// 字符间距计算：表头包含 6 个边框字符和 10 个内边距空格，总计 16 像素固定开销
 		const separatorOverhead = 16
@@ -483,8 +479,8 @@ func drawTUI() {
 		}
 
 		// 表头 (每列左右两侧必须带 1 个空格边距)
-		sb.WriteString(fmt.Sprintf("\033[36m│\033[0m %-*s \033[36m│\033[0m %-*s \033[36m│\033[0m %-*s \033[36m│\033[0m %-*s \033[36m│\033[0m %-*s \033[36m│\033[0m\n",
-			idW, "ID", modelW, "Model", stateW, "State", timeW, "Time", detailW, "Details"))
+		fmt.Fprintf(&sb, "\033[36m│\033[0m %-*s \033[36m│\033[0m %-*s \033[36m│\033[0m %-*s \033[36m│\033[0m %-*s \033[36m│\033[0m %-*s \033[36m│\033[0m\n",
+			idW, "ID", modelW, "Model", stateW, "State", timeW, "Time", detailW, "Details")
 
 		// 分隔线：宽度加上两边的内边距空格(各+2)从而保持对齐
 		sep := fmt.Sprintf("\033[36m├%s┼%s┼%s┼%s┼%s┤\033[0m\n",
@@ -513,10 +509,10 @@ func drawTUI() {
 			timeCol = padOrTrunc(timeCol, timeW)
 			detailCol := padOrTrunc(detailStr, detailW)
 
-			sb.WriteString(fmt.Sprintf(
+			fmt.Fprintf(&sb,
 				"\033[36m│\033[0m \033[36m%c\033[0m %s \033[36m│\033[0m %s \033[36m│\033[0m %s%s\033[0m \033[36m│\033[0m %s \033[36m│\033[0m \033[90m%s\033[0m \033[36m│\033[0m\n",
 				spinners[spinnerIdx], idCol, modelCol, r.Color, stateCol, timeCol, detailCol,
-			))
+			)
 		}
 		sb.WriteString("\033[36m" + bottomBorder() + "\033[0m")
 	}

@@ -17,12 +17,14 @@ type AudioHandler struct {
 const ttsDefaultModel = "gemini-3.1-flash-tts-preview"
 const ttsDefaultVoice = "Kore"
 
+//nolint:gochecknoglobals // Voice translation map
 var ttsVoiceMap = map[string]string{
 	"alloy": "Kore", "echo": "Puck", "fable": "Charon", "onyx": "Fenrir",
 	"nova": "Aoede", "shimmer": "Leda", "ash": "Orus", "ballad": "Zephyr",
 	"coral": "Aoede", "sage": "Charon", "verse": "Puck",
 }
 
+//nolint:gochecknoglobals // Valid Gemini voices
 var ttsGeminiVoices = map[string]bool{
 	"Kore": true, "Puck": true, "Charon": true, "Aoede": true, "Fenrir": true, "Leda": true,
 	"Orus": true, "Zephyr": true, "Autonoe": true, "Enceladus": true, "Iapetus": true,
@@ -37,6 +39,7 @@ type ttsFormat struct {
 	wrapWAV     bool
 }
 
+//nolint:gochecknoglobals // Audio format formats
 var ttsFormatInfo = map[string]ttsFormat{
 	"mp3":  {"audio/wav", true},
 	"wav":  {"audio/wav", true},

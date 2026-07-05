@@ -13,6 +13,7 @@ config/data.db-wal
 vertex-proxy
 vertex-proxy-*
 *.exe
+*~
 
 # Release packaging output
 dist/

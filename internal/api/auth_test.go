@@ -205,8 +205,8 @@ func TestAPIKeyManagerAddListDelete(t *testing.T) {
 	}
 
 	// 同名覆盖：alice 换新 key，旧 key 失效。
-	if errAdd := m.Add("alice", "sk-alice2", "Alice2"); errAdd != nil { //nolint:govet
-		t.Fatalf("Add 覆盖 alice: %v", err)
+	if errAdd := m.Add("alice", "sk-alice2", "Alice2"); errAdd != nil {
+		t.Fatalf("Add 覆盖 alice: %v", errAdd)
 	}
 	if m.ValidateKey("sk-alice") {
 		t.Fatalf("覆盖后旧 key 应失效")
@@ -214,8 +214,8 @@ func TestAPIKeyManagerAddListDelete(t *testing.T) {
 	if !m.ValidateKey("sk-alice2") {
 		t.Fatalf("覆盖后新 key 应有效")
 	}
-	if entries2, _ := m.List(); len(entries2) != 2 { //nolint:govet
-		t.Fatalf("覆盖不应新增条目，应仍为 2，got %d", len(entries))
+	if entries2, _ := m.List(); len(entries2) != 2 {
+		t.Fatalf("覆盖不应新增条目，应仍为 2，got %d", len(entries2))
 	}
 
 	// 删除 bob。
@@ -228,8 +228,8 @@ func TestAPIKeyManagerAddListDelete(t *testing.T) {
 	}
 
 	// 删除不存在的 → false、无错。
-	if ok2, errDel := m.Delete("ghost"); errDel != nil || ok2 { //nolint:govet
-		t.Fatalf("删除不存在的应返回 false 无错，got ok=%v err=%v", ok, err)
+	if ok2, errDel := m.Delete("ghost"); errDel != nil || ok2 {
+		t.Fatalf("删除不存在的应返回 false 无错，got ok=%v err=%v", ok2, errDel)
 	}
 
 	// 描述应被持久化保留。

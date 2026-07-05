@@ -51,7 +51,7 @@ func TestDailyLogger(t *testing.T) {
 
 	nowDate := time.Now().Format("2006-01-02")
 	expectedName := fmt.Sprintf("vproxy-%s.log", nowDate)
-	
+
 	// Read merged content
 	mergedContent, err := os.ReadFile(filepath.Join(logDir, expectedName))
 	if err != nil {

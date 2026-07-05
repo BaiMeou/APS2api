@@ -20,7 +20,9 @@ const (
 )
 
 var (
+	//nolint:gochecknoglobals // Admin sessions state
 	adminSessionsMu sync.Mutex
+	//nolint:gochecknoglobals // Admin sessions state
 	adminSessions   = map[string]time.Time{}
 )
 

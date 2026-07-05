@@ -102,6 +102,7 @@ func (g *GeminiHandler) handleGeminiGenerate(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, ve.Code, vertexErrorToGemini(ve))
 		return
 	}
+	cleanGeminiFinishReason(resp)
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -138,7 +139,7 @@ func (g *GeminiHandler) handleGeminiStreamGenerate(w http.ResponseWriter, r *htt
 			return false
 		}
 		gotChunk = true
-		if fr := chunkFinishReasonFromData(ch.Data); fr != "" {
+		if fr := cleanGeminiFinishReason(ch.Data); fr != "" {
 			hasFinish = true
 		}
 		return sw.write(g.geminiSSE(ch.Data))
@@ -245,17 +246,27 @@ func (g *GeminiHandler) geminiError(w http.ResponseWriter, status int, msg, gemi
 	}})
 }
 
-func chunkFinishReasonFromData(data map[string]any) string {
+func cleanGeminiFinishReason(data map[string]any) string {
 	cands, ok := data["candidates"].([]any)
 	if !ok || len(cands) == 0 {
 		return ""
 	}
-	c, ok := cands[0].(map[string]any)
-	if !ok {
-		return ""
+	var realFR string
+	for _, candRaw := range cands {
+		cand, ok := candRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		fr, _ := cand["finishReason"].(string)
+		if fr == "FINISH_REASON_UNSPECIFIED" {
+			delete(cand, "finishReason")
+		} else if fr != "" {
+			if realFR == "" {
+				realFR = fr
+			}
+		}
 	}
-	fr, _ := c["finishReason"].(string)
-	return fr
+	return realFR
 }
 
 func vertexErrorToGemini(e *vertex.VertexError) map[string]any {

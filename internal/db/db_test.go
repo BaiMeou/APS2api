@@ -40,8 +40,8 @@ func TestInitDBAndMigrate(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(tempDir, "node_health.json"), healthContent, 0644)
 
 	// Init DB
-	if errInit := InitDB(dbPath); errInit != nil { //nolint:govet
-		t.Fatalf("Failed to InitDB: %v", err)
+	if errInit := InitDB(dbPath); errInit != nil {
+		t.Fatalf("Failed to InitDB: %v", errInit)
 	}
 	defer CloseDB()
 

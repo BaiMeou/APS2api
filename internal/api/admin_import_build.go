@@ -11,7 +11,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-
 func applyCommonImportedProxyFields(proxy map[string]any, obj map[string]any) {
 	if sni := strings.TrimSpace(valueToString(obj["Sni"])); sni != "" {
 		proxy["sni"] = sni

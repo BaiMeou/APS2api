@@ -38,7 +38,7 @@ func (adm *AdminHandler) adminGetNodes(w http.ResponseWriter, _ *http.Request) {
 		"disabled_count":        disabledCount,
 		"sticky_pool_available": sp.AvailableCount(),
 		"sticky_pool_in_use":    sp.StaleCount(),
-		"sticky_node_priority":   adm.cfg.StickyNodePriority(),
+		"sticky_node_priority":  adm.cfg.StickyNodePriority(),
 	})
 }
 

@@ -7,6 +7,7 @@ require (
 	github.com/bogdanfinn/tls-client v1.15.1
 	github.com/glebarez/go-sqlite v1.22.0
 	github.com/metacubex/mihomo v1.19.27
+	github.com/rivo/uniseg v0.4.7
 	gopkg.in/yaml.v3 v3.0.1
 )
 

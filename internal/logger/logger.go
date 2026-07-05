@@ -20,7 +20,7 @@ type DailyLogger struct {
 // NewDailyLogger creates a new DailyLogger that writes logs to the specified directory.
 func NewDailyLogger(dir string) *DailyLogger {
 	_ = os.MkdirAll(dir, 0755)
-	
+
 	latestPath := filepath.Join(dir, "logs_latest.log")
 	f, _ := os.OpenFile(latestPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 
@@ -61,7 +61,7 @@ func (l *DailyLogger) Close() error {
 	targetPath := filepath.Join(l.logDir, fmt.Sprintf("vproxy-%s.log", nowDate))
 
 	latestData, _ := os.ReadFile(latestPath)
-	
+
 	// Create or open the target file regardless of whether there's data
 	f, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	if err == nil {

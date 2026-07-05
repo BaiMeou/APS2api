@@ -36,7 +36,7 @@ type AppConfig struct { //nolint:govet
 	// 并发池与节点锁定配置
 	ActiveNodeURI            string `json:"active_node_uri"`
 	ParallelPoolEnabled      bool   `json:"parallel_pool_enabled"`
-	StickyNodePriority        bool   `json:"sticky_node_priority"`
+	StickyNodePriority       bool   `json:"sticky_node_priority"`
 	ParallelPoolRetryEnabled bool   `json:"parallel_pool_retry_enabled"`
 	ParallelPoolSize         int    `json:"parallel_pool_size"`
 	ParallelPoolMaxRounds    int    `json:"parallel_pool_max_rounds"`
@@ -52,8 +52,8 @@ type AppConfig struct { //nolint:govet
 	TelemetryEnabled *bool `json:"telemetry_enabled,omitempty"`
 
 	// 外观配置
-	BackgroundImage string `json:"background_image"`
-	FontSize        string `json:"font_size"`
+	BackgroundImage string   `json:"background_image"`
+	FontSize        string   `json:"font_size"`
 	FontColorType   string   `json:"font_color_type"`
 	FontColor       string   `json:"font_color"`
 	CustomBgPresets []string `json:"custom_bg_presets"`
@@ -72,7 +72,7 @@ func DefaultConfig() AppConfig {
 		TokenPoolSize:             30, // 配套 15 并发，池子扩容至 30 更加稳健
 		MaxSpillMB:                2048,
 		ParallelPoolEnabled:       true,
-		StickyNodePriority:         false,
+		StickyNodePriority:        false,
 		ParallelPoolSize:          15, // 默认为 15 并发
 		ParallelNodeTopK:          80,
 		ParallelPoolDelayDynamic:  false, // 建议默认关闭动态对冲，改为稳定的秒级接力

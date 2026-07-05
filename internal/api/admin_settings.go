@@ -6,6 +6,7 @@ import (
 	"github.com/bsfdsagfadg/vertex/internal/config"
 )
 
+//nolint:gochecknoglobals // Constant-like map of allowed settings
 var adminAllowedSettings = map[string]bool{
 	"max_retries": true, "token_pool_size": true, "max_spill_mb": true,
 	"max_request_mb": true, "max_n": true, "anti429_enabled": true,
@@ -17,7 +18,7 @@ var adminAllowedSettings = map[string]bool{
 	"parallel_pool_delay_ms":      true,
 	"recaptcha_expire_seconds":    true,
 	"active_node_uri":             true,
-	"sticky_node_priority":         true,
+	"sticky_node_priority":        true,
 	"parallel_pool_retry_enabled": true,
 	"background_image":            true,
 	"font_size":                   true,
@@ -49,7 +50,7 @@ func (adm *AdminHandler) adminGetSettings(w http.ResponseWriter, _ *http.Request
 		"parallel_pool_delay_dynamic": adm.cfg.ParallelPoolDelayDynamic(),
 		"parallel_pool_delay_ms":      adm.cfg.ParallelPoolDelayMs(),
 		"recaptcha_expire_seconds":    adm.cfg.RecaptchaExpireSeconds(),
-		"sticky_node_priority":         adm.cfg.StickyNodePriority(),
+		"sticky_node_priority":        adm.cfg.StickyNodePriority(),
 		"parallel_pool_retry_enabled": adm.cfg.ParallelPoolRetryEnabled(),
 		"background_image":            adm.cfg.BackgroundImage(),
 		"font_size":                   adm.cfg.FontSize(),
