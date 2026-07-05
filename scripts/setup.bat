@@ -55,9 +55,6 @@ set "MAX_RETRIES=2"
 set /p "MAX_RETRIES=请求失败重试次数 [2]: "
 if "%MAX_RETRIES%"=="" set "MAX_RETRIES=2"
 
-set "TOKEN_POOL=8"
-set /p "TOKEN_POOL=reCAPTCHA token 预取池大小（0=关闭）[8]: "
-if "%TOKEN_POOL%"=="" set "TOKEN_POOL=8"
 
 :: ---- 创建配置 ----
 echo.
@@ -71,8 +68,7 @@ echo {
 echo   "port_api": %PORT%,
 echo   "max_retries": %MAX_RETRIES%,
 echo   "admin_password": "%ADMIN_PASS%",
-echo   "proxy_url": "%PROXY_URL%",
-echo   "token_pool_size": %TOKEN_POOL%
+echo   "proxy_url": "%PROXY_URL%"
 echo }
 ) > "%SCRIPT_DIR%config\config.json"
 echo [OK] config\config.json

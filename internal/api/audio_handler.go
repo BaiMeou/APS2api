@@ -85,7 +85,6 @@ func (a *AudioHandler) handleAudioSpeech(w http.ResponseWriter, r *http.Request)
 	}
 
 	geminiPayload := ttsBuildGeminiPayload(text, voice, body["speed"])
-	a.injectAnti429(geminiPayload)
 
 	audio, vErr := a.vc.CompleteChatAudio(r.Context(), actualModel, geminiPayload)
 	if vErr != nil {

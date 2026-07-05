@@ -20,16 +20,12 @@ type AppConfig struct { //nolint:govet
 	MaxRetries                int               `json:"max_retries"`
 	AdminPassword             string            `json:"admin_password"`
 	ProxyURL                  string            `json:"proxy_url"`
-	Anti429Enabled            bool              `json:"anti429_enabled"`
-	Anti429Target             string            `json:"anti429_target"`
-	ForceNoStream             bool              `json:"force_no_stream"`
-	AntiTracking              bool              `json:"anti_tracking"`
+	AggregateStream           bool              `json:"aggregate_stream"`
 	DropMaxTokens             bool              `json:"drop_max_tokens"`
 	SafetySettings            map[string]string `json:"safety_settings"`
 	VertexAPIKey              string            `json:"vertex_api_key"`
 	CountTokensQuerySignature string            `json:"count_tokens_query_signature"`
 	MaxN                      int               `json:"max_n"`
-	TokenPoolSize             int               `json:"token_pool_size"`
 	MaxSpillMB                int               `json:"max_spill_mb"`
 	MaxRequestMB              int               `json:"max_request_mb"`
 
@@ -39,13 +35,11 @@ type AppConfig struct { //nolint:govet
 	StickyNodePriority       bool   `json:"sticky_node_priority"`
 	ParallelPoolRetryEnabled bool   `json:"parallel_pool_retry_enabled"`
 	ParallelPoolSize         int    `json:"parallel_pool_size"`
-	ParallelPoolMaxRounds    int    `json:"parallel_pool_max_rounds"`
 	DebugPprof               bool   `json:"debug_pprof"`
 	ParallelNodeTopK         int    `json:"parallel_node_top_k"`
 	DebugMode                bool   `json:"debug_mode"`
 	ParallelPoolDelayDynamic bool   `json:"parallel_pool_delay_dynamic"`
 	ParallelPoolDelayMs      int    `json:"parallel_pool_delay_ms"`
-	RecaptchaExpireSeconds   int    `json:"recaptcha_expire_seconds"`
 
 	// 匿名遥测：仅发送实例 ID + 版本 + 平台，不含任何用户/网络/隐私数据。
 	// 用于了解软件的版本分布和活跃数。指针类型区分"未设置"和"显式 false"，未设置时默认开启。
@@ -64,12 +58,9 @@ func DefaultConfig() AppConfig {
 	return AppConfig{ //nolint:exhaustruct
 		PortAPI:                   2156,
 		MaxRetries:                1, // 默认为 1 次
-		Anti429Target:             "system",
-		AntiTracking:              true,
 		VertexAPIKey:              defaultAnonAPIKey,
 		CountTokensQuerySignature: defaultCountTokensQuerySig,
 		MaxN:                      8,
-		TokenPoolSize:             30, // 配套 15 并发，池子扩容至 30 更加稳健
 		MaxSpillMB:                2048,
 		ParallelPoolEnabled:       true,
 		StickyNodePriority:        false,
@@ -77,7 +68,6 @@ func DefaultConfig() AppConfig {
 		ParallelNodeTopK:          80,
 		ParallelPoolDelayDynamic:  false, // 建议默认关闭动态对冲，改为稳定的秒级接力
 		ParallelPoolDelayMs:       2500,  // 固定对冲间隔设为 2500ms（2.5秒），单节点撞墙后触发接力
-		RecaptchaExpireSeconds:    60,
 		BackgroundImage:           "url('background.jpg')",
 		FontSize:                  "14px",
 		FontColorType:             "adaptive",

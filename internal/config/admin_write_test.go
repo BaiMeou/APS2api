@@ -21,7 +21,7 @@ func TestWriteSettingsMergesAndPreservesUnknown(t *testing.T) {
 	}
 	InvalidateCache()
 
-	if err := WriteSettings(map[string]any{"max_retries": 5, "anti429_enabled": true}); err != nil {
+	if err := WriteSettings(map[string]any{"max_retries": 5, "aggregate_stream": true}); err != nil {
 		t.Fatalf("WriteSettings: %v", err)
 	}
 
@@ -30,8 +30,8 @@ func TestWriteSettingsMergesAndPreservesUnknown(t *testing.T) {
 	if cfg.MaxRetries != 5 {
 		t.Fatalf("max_retries 应为 5，got %d", cfg.MaxRetries)
 	}
-	if !cfg.Anti429Enabled {
-		t.Fatalf("anti429_enabled 应为 true")
+	if !cfg.AggregateStream {
+		t.Fatalf("aggregate_stream 应为 true")
 	}
 
 	// 原始 map 读取：未提及字段 + 额外字段都应保留。

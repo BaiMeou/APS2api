@@ -8,15 +8,13 @@ import (
 
 //nolint:gochecknoglobals // Constant-like map of allowed settings
 var adminAllowedSettings = map[string]bool{
-	"max_retries": true, "token_pool_size": true, "max_spill_mb": true,
-	"max_request_mb": true, "max_n": true, "anti429_enabled": true,
-	"anti429_target": true, "force_no_stream": true, "anti_tracking": true,
+	"max_retries": true, "max_spill_mb": true,
+	"max_request_mb": true, "max_n": true, "aggregate_stream": true,
 	"drop_max_tokens": true, "proxy_url": true,
 	"parallel_pool_enabled": true, "parallel_pool_size": true,
 	"telemetry_enabled":           true,
 	"parallel_pool_delay_dynamic": true,
 	"parallel_pool_delay_ms":      true,
-	"recaptcha_expire_seconds":    true,
 	"active_node_uri":             true,
 	"sticky_node_priority":        true,
 	"parallel_pool_retry_enabled": true,
@@ -36,20 +34,15 @@ func (adm *AdminHandler) adminGetSettings(w http.ResponseWriter, _ *http.Request
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"settings": map[string]any{
 		"max_retries":       adm.cfg.MaxRetries(),
-		"token_pool_size":   adm.cfg.TokenPoolSize(),
 		"max_spill_mb":      adm.cfg.MaxSpillMB(),
 		"max_request_mb":    adm.cfg.MaxRequestMB(),
 		"max_n":             adm.cfg.MaxN(),
-		"anti429_enabled":   adm.cfg.Anti429Enabled(),
-		"anti429_target":    adm.cfg.Anti429Target(),
-		"force_no_stream":   adm.cfg.ForceNoStream(),
-		"anti_tracking":     adm.cfg.AntiTracking(),
+		"aggregate_stream":   adm.cfg.AggregateStream(),
 		"drop_max_tokens":   adm.cfg.DropMaxTokens(),
 		"telemetry_enabled": telEnabled,
 		"proxy_url":         adm.cfg.ProxyURL(), "parallel_pool_enabled": adm.cfg.ParallelPoolEnabled(), "parallel_pool_size": adm.cfg.ParallelPoolSize(), "active_node_uri": adm.cfg.ActiveNodeURI(),
 		"parallel_pool_delay_dynamic": adm.cfg.ParallelPoolDelayDynamic(),
 		"parallel_pool_delay_ms":      adm.cfg.ParallelPoolDelayMs(),
-		"recaptcha_expire_seconds":    adm.cfg.RecaptchaExpireSeconds(),
 		"sticky_node_priority":        adm.cfg.StickyNodePriority(),
 		"parallel_pool_retry_enabled": adm.cfg.ParallelPoolRetryEnabled(),
 		"background_image":            adm.cfg.BackgroundImage(),
@@ -81,7 +74,7 @@ func (adm *AdminHandler) adminPutSettings(w http.ResponseWriter, r *http.Request
 			continue
 		}
 		switch k {
-		case "max_retries", "token_pool_size", "max_spill_mb", "max_request_mb", "max_n", "parallel_pool_size", "parallel_pool_delay_ms", "recaptcha_expire_seconds":
+		case "max_retries", "max_spill_mb", "max_request_mb", "max_n", "parallel_pool_size", "parallel_pool_delay_ms":
 			if f, ok := v.(float64); ok {
 				updates[k] = int(f)
 				continue

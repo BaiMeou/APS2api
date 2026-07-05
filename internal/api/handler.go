@@ -22,54 +22,6 @@ type handler struct {
 	cfg  config.ConfigProvider
 }
 
-func (h *handler) injectAnti429(payload map[string]any) {
-	if payload == nil {
-		return
-	}
-	cfg := h.cfg
-	if cfg.DropMaxTokens() {
-		if gc, ok := payload["generationConfig"].(map[string]any); ok {
-			delete(gc, "maxOutputTokens")
-		}
-	}
-	if !cfg.Anti429Enabled() {
-		return
-	}
-	randStr := randomDigits(100)
-	target := cfg.Anti429Target()
-	if target == "" {
-		target = "system"
-	}
-	if target == "system" {
-		si, _ := payload["systemInstruction"].(map[string]any)
-		if si == nil {
-			si = map[string]any{}
-		}
-		parts, _ := si["parts"].([]any)
-		parts = append([]any{map[string]any{"text": randStr}}, parts...)
-		si["parts"] = parts
-		payload["systemInstruction"] = si
-		return
-	}
-	contents, _ := payload["contents"].([]any)
-	inserted := false
-	for _, cRaw := range contents {
-		c, ok := cRaw.(map[string]any)
-		if !ok {
-			continue
-		}
-		if c["role"] == "user" {
-			parts, _ := c["parts"].([]any)
-			c["parts"] = append([]any{map[string]any{"text": randStr}}, parts...)
-			inserted = true
-			break
-		}
-	}
-	if !inserted {
-		newUser := map[string]any{"role": "user", "parts": []any{map[string]any{"text": randStr}}}
-		payload["contents"] = append([]any{newUser}, contents...)
-	}
-}
 
 func (h *handler) decodeAdminBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	if r.Body == nil {

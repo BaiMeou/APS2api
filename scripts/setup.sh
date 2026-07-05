@@ -135,7 +135,6 @@ fi
 echo ""
 echo -e "${CYAN}── 高级选项 ──${NC}"
 MAX_RETRIES=$(ask "请求失败重试次数" "2")
-TOKEN_POOL=$(ask "reCAPTCHA token 预取池大小（0=关闭）" "8")
 
 AUTO_START=false
 if ask_yn "是否设置开机自启？(y/n)" "n"; then
@@ -155,8 +154,7 @@ cat > "$CONFIG_DIR/config.json" << EOF
   "port_api": $PORT,
   "max_retries": $MAX_RETRIES,
   "admin_password": "$ADMIN_PASS",
-  "proxy_url": "$PROXY_URL",
-  "token_pool_size": $TOKEN_POOL
+  "proxy_url": "$PROXY_URL"
 }
 EOF
 echo -e "${GREEN}[✓] config/config.json${NC}"

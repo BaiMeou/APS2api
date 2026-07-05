@@ -8,18 +8,13 @@ type ConfigProvider interface {
 	DebugPprof() bool
 	DebugMode() bool
 
-	Anti429Enabled() bool
-	Anti429Target() string
-	AntiTracking() bool
 	DropMaxTokens() bool
 
-	ForceNoStream() bool
+	AggregateStream() bool
 	MaxN() int
 	MaxRequestMB() int
 	MaxSpillMB() int
 
-	TokenPoolSize() int
-	RecaptchaExpireSeconds() int
 	VertexAPIKey() string
 	CountTokensQuerySignature() string
 
@@ -29,7 +24,6 @@ type ConfigProvider interface {
 	StickyNodePriority() bool
 	ParallelPoolRetryEnabled() bool
 	ParallelPoolSize() int
-	ParallelPoolMaxRounds() int
 	ParallelPoolDelayDynamic() bool
 	ParallelPoolDelayMs() int
 	ActiveNodeURI() string
@@ -69,16 +63,11 @@ func (d dynamicConfig) AdminPassword() string             { return Load().AdminP
 func (d dynamicConfig) ProxyURL() string                  { return Load().ProxyURL }
 func (d dynamicConfig) DebugPprof() bool                  { return Load().DebugPprof }
 func (d dynamicConfig) DebugMode() bool                   { return Load().DebugMode }
-func (d dynamicConfig) Anti429Enabled() bool              { return Load().Anti429Enabled }
-func (d dynamicConfig) Anti429Target() string             { return Load().Anti429Target }
-func (d dynamicConfig) AntiTracking() bool                { return Load().AntiTracking }
 func (d dynamicConfig) DropMaxTokens() bool               { return Load().DropMaxTokens }
-func (d dynamicConfig) ForceNoStream() bool               { return Load().ForceNoStream }
+func (d dynamicConfig) AggregateStream() bool               { return Load().AggregateStream }
 func (d dynamicConfig) MaxN() int                         { return Load().MaxN }
 func (d dynamicConfig) MaxRequestMB() int                 { return Load().MaxRequestMB }
 func (d dynamicConfig) MaxSpillMB() int                   { return Load().MaxSpillMB }
-func (d dynamicConfig) TokenPoolSize() int                { return Load().TokenPoolSize }
-func (d dynamicConfig) RecaptchaExpireSeconds() int       { return Load().RecaptchaExpireSeconds }
 func (d dynamicConfig) VertexAPIKey() string              { return Load().VertexAPIKey }
 func (d dynamicConfig) CountTokensQuerySignature() string { return Load().CountTokensQuerySignature }
 func (d dynamicConfig) SafetySettings() map[string]string {
@@ -93,7 +82,6 @@ func (d dynamicConfig) ParallelPoolEnabled() bool      { return Load().ParallelP
 func (d dynamicConfig) StickyNodePriority() bool       { return Load().StickyNodePriority }
 func (d dynamicConfig) ParallelPoolRetryEnabled() bool { return Load().ParallelPoolRetryEnabled }
 func (d dynamicConfig) ParallelPoolSize() int          { return Load().ParallelPoolSize }
-func (d dynamicConfig) ParallelPoolMaxRounds() int     { return Load().ParallelPoolMaxRounds }
 func (d dynamicConfig) ParallelPoolDelayDynamic() bool { return Load().ParallelPoolDelayDynamic }
 func (d dynamicConfig) ParallelPoolDelayMs() int       { return Load().ParallelPoolDelayMs }
 func (d dynamicConfig) ActiveNodeURI() string          { return Load().ActiveNodeURI }

@@ -1,6 +1,12 @@
 package transport
 
-import http "github.com/bogdanfinn/fhttp"
+import (
+	"crypto/sha1"
+	"encoding/base64"
+	"strings"
+
+	http "github.com/bogdanfinn/fhttp"
+)
 
 // Chrome 150 的 UA 与 sec-ch-ua（与 transport 的 TLS 指纹保持一致）。
 const (
@@ -47,6 +53,7 @@ func XHRHeaders(contentType, accept, origin, referer, site string) http.Header {
 		"x-goog-authuser":             {"0"},
 		"x-browser-channel":           {"stable"},
 		"x-browser-copyright":         {"Copyright 2026 Google LLC. All Rights Reserved."},
+		"x-browser-validation":        {GenerateXBrowserValidation(userAgent)},
 		"x-browser-year":              {"2026"},
 		"x-goog-ext-353267353-jspb":   {"[null,null,null,194274]"},
 		http.HeaderOrderKey: {
@@ -54,7 +61,7 @@ func XHRHeaders(contentType, accept, origin, referer, site string) http.Header {
 			"sec-ch-ua-full-version", "sec-ch-ua-full-version-list", "sec-ch-ua-platform-version",
 			"sec-ch-ua-model", "sec-ch-ua-wow64", "sec-ch-ua-form-factors",
 			"user-agent", "content-type", "accept", "x-goog-authuser", "x-browser-channel",
-			"x-browser-copyright", "x-browser-year", "x-goog-ext-353267353-jspb",
+			"x-browser-copyright", "x-browser-validation", "x-browser-year", "x-goog-ext-353267353-jspb",
 			"origin", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest",
 			"referer", "accept-encoding", "accept-language", "priority",
 		},
@@ -96,4 +103,18 @@ func AnchorHeaders() http.Header {
 			"accept-encoding", "accept-language",
 		},
 	}
+}
+
+// GenerateXBrowserValidation calculates the x-browser-validation header based on User-Agent.
+func GenerateXBrowserValidation(ua string) string {
+	apiKey := "AIzaSyA2KlwBX3mkFo30om9LUFYQhpqLoa_BNhE" // Default Windows key
+	uaLower := strings.ToLower(ua)
+	if strings.Contains(uaLower, "linux") {
+		apiKey = "AIzaSyBqJZh-7pA44blAaAkH6490hUFOwX0KCYM"
+	} else if strings.Contains(uaLower, "macintosh") || strings.Contains(uaLower, "mac os x") {
+		apiKey = "AIzaSyDr2UxVnv_U85AbhhY8XSHSIavUW0DC-sY"
+	}
+	h := sha1.New()
+	h.Write([]byte(apiKey + ua))
+	return base64.StdEncoding.EncodeToString(h.Sum(nil))
 }

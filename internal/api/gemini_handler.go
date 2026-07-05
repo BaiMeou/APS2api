@@ -90,7 +90,6 @@ func (g *GeminiHandler) handleGeminiGenerate(w http.ResponseWriter, r *http.Requ
 		body = reqObj
 	}
 	log.Printf("[Server] [GeminiGenerate] 收到请求: 模型=%s, 真模型=%s", model, actualModel)
-	g.injectAnti429(body)
 
 	resp, vErr := g.vc.CompleteChat(r.Context(), actualModel, body)
 	if vErr != nil {
@@ -116,7 +115,6 @@ func (g *GeminiHandler) handleGeminiStreamGenerate(w http.ResponseWriter, r *htt
 		body = reqObj
 	}
 	log.Printf("[Server] [GeminiStreamGenerate] 收到请求: 模型=%s, 真模型=%s, 假流式=%v", model, actualModel, useFake)
-	g.injectAnti429(body)
 
 	sw := newSSEWriter(w, "text/event-stream")
 

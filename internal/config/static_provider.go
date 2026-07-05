@@ -12,16 +12,11 @@ func (s staticConfig) AdminPassword() string             { return s.c.AdminPassw
 func (s staticConfig) ProxyURL() string                  { return s.c.ProxyURL }
 func (s staticConfig) DebugPprof() bool                  { return s.c.DebugPprof }
 func (s staticConfig) DebugMode() bool                   { return s.c.DebugMode }
-func (s staticConfig) Anti429Enabled() bool              { return s.c.Anti429Enabled }
-func (s staticConfig) Anti429Target() string             { return s.c.Anti429Target }
-func (s staticConfig) AntiTracking() bool                { return s.c.AntiTracking }
 func (s staticConfig) DropMaxTokens() bool               { return s.c.DropMaxTokens }
-func (s staticConfig) ForceNoStream() bool               { return s.c.ForceNoStream }
+func (s staticConfig) AggregateStream() bool               { return s.c.AggregateStream }
 func (s staticConfig) MaxN() int                         { return s.c.MaxN }
 func (s staticConfig) MaxRequestMB() int                 { return s.c.MaxRequestMB }
 func (s staticConfig) MaxSpillMB() int                   { return s.c.MaxSpillMB }
-func (s staticConfig) TokenPoolSize() int                { return s.c.TokenPoolSize }
-func (s staticConfig) RecaptchaExpireSeconds() int       { return s.c.RecaptchaExpireSeconds }
 func (s staticConfig) VertexAPIKey() string              { return s.c.VertexAPIKey }
 func (s staticConfig) CountTokensQuerySignature() string { return s.c.CountTokensQuerySignature }
 func (s staticConfig) SafetySettings() map[string]string { return s.c.SafetySettings }
@@ -29,7 +24,6 @@ func (s staticConfig) ParallelPoolEnabled() bool         { return s.c.ParallelPo
 func (s staticConfig) StickyNodePriority() bool          { return s.c.StickyNodePriority }
 func (s staticConfig) ParallelPoolRetryEnabled() bool    { return s.c.ParallelPoolRetryEnabled }
 func (s staticConfig) ParallelPoolSize() int             { return s.c.ParallelPoolSize }
-func (s staticConfig) ParallelPoolMaxRounds() int        { return s.c.ParallelPoolMaxRounds }
 func (s staticConfig) ParallelPoolDelayDynamic() bool    { return s.c.ParallelPoolDelayDynamic }
 func (s staticConfig) ParallelPoolDelayMs() int          { return s.c.ParallelPoolDelayMs }
 func (s staticConfig) ActiveNodeURI() string             { return s.c.ActiveNodeURI }

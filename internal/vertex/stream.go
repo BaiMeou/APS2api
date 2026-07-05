@@ -226,7 +226,7 @@ func (c *VertexAIClient) executeStreamingAttempt(ctx context.Context, sess *tran
 		"https://console.cloud.google.com", "https://console.cloud.google.com/", "cross-site",
 	)
 
-	sr, err := sess.DoStream(ctx, "POST", batchGraphqlURL, header, reader)
+	sr, err := sess.DoStream(ctx, "POST", c.getBatchGraphqlURL(), header, reader)
 	if err != nil {
 		return NewInternalError("upstream request: " + err.Error())
 	}

@@ -183,9 +183,9 @@ type TestProgress struct {
 
 var (
 	//nolint:gochecknoglobals // Test progress lock
-	progressMu      sync.RWMutex
+	progressMu sync.RWMutex
 	//nolint:gochecknoglobals // Test progress state
-	globalProgress  TestProgress
+	globalProgress TestProgress
 	//nolint:gochecknoglobals // Test progress control cond
 	testControlCond = sync.NewCond(&progressMu)
 )

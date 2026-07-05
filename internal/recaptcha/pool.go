@@ -9,7 +9,7 @@ type TokenPool struct {
 	defaultProxy string
 }
 
-func NewTokenPoolSize(net *transport.NetworkClient, poolSize int, defaultProxy string, debugMode bool) *TokenPool {
+func NewTokenPool(net *transport.NetworkClient, defaultProxy string, debugMode bool) *TokenPool {
 	return &TokenPool{
 		fetch:        func(proxyURI string) (string, error) { return FetchRecaptchaToken(net, proxyURI, debugMode) },
 		defaultProxy: defaultProxy,

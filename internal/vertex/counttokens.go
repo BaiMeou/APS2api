@@ -50,7 +50,7 @@ func (c *VertexAIClient) CountTokens(ctx context.Context, model string, contents
 	// 逐字节保持既定 headers。
 	header := countTokensHeaders()
 
-	status, raw, err := sess.DoAndRead(ctx, "POST", batchGraphqlURL, header, bytes.NewReader(bodyBytes))
+	status, raw, err := sess.DoAndRead(ctx, "POST", c.getBatchGraphqlURL(), header, bytes.NewReader(bodyBytes))
 	if err != nil || status != 200 {
 		log.Printf("[Vertex] [CountTokens] 上游请求失败, status=%d, err=%v, resp=%s", status, err, string(raw))
 		return 0

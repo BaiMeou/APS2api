@@ -53,9 +53,7 @@ func (c *ChatHandler) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 	cli.UpdateReqModel(vertex.RequestIDFromContext(r.Context()), actualModel)
 
 	stream, _ := body["stream"].(bool)
-	if stream && c.cfg.ForceNoStream() {
-		stream = false
-	}
+	aggregateStream := stream && c.cfg.AggregateStream()
 
 	model, geminiPayload, convErr := c.reqConv.Convert(body, c.cfg)
 	if convErr != nil {
@@ -97,8 +95,11 @@ func (c *ChatHandler) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	c.injectAnti429(geminiPayload)
 
+	if aggregateStream {
+		c.oaiAggregateStream(r.Context(), w, model, geminiPayload)
+		return
+	}
 	if stream && useFake {
 		c.oaiFakeStream(r.Context(), w, model, geminiPayload)
 		return
@@ -262,6 +263,46 @@ func (c *ChatHandler) oaiFakeStream(ctx context.Context, w http.ResponseWriter, 
 			return
 		}
 	}
+	_ = sw.write("data: [DONE]\n\n")
+}
+
+func (c *ChatHandler) oaiAggregateStream(ctx context.Context, w http.ResponseWriter, model string, geminiPayload map[string]any) {
+	requestID := reqID24()
+	sw := newSSEWriter(w, "text/event-stream")
+
+	resp, vErr := c.vc.CompleteChat(ctx, model, geminiPayload)
+	if vErr != nil {
+		ve := toVertexError(vErr)
+		c.writeStreamError(sw.write, ve, requestID, model)
+		return
+	}
+
+	oai := c.respConv.ToOAI(resp, model)
+	contentText := firstChoiceContent(oai)
+
+	createdTS := time.Now().Unix()
+	base := streamChunkBase(model, requestID)
+	base["created"] = createdTS
+	
+	choice := map[string]any{
+		"index": 0, 
+		"delta": map[string]any{"role": "assistant", "content": contentText},
+	}
+	base["choices"] = []any{choice}
+	if !sw.write(sseEvent(base)) {
+		return
+	}
+	
+	// Stream end
+	baseEnd := streamChunkBase(model, requestID)
+	baseEnd["created"] = createdTS
+	choiceEnd := map[string]any{
+		"index": 0, 
+		"delta": map[string]any{},
+		"finish_reason": "stop",
+	}
+	baseEnd["choices"] = []any{choiceEnd}
+	sw.write(sseEvent(baseEnd))
 	_ = sw.write("data: [DONE]\n\n")
 }
 

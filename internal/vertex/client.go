@@ -53,7 +53,7 @@ func NewVertexAIClient(cfg config.ConfigProvider) *VertexAIClient {
 	net := transport.NewNetworkClient(cfg.DebugMode())
 	return &VertexAIClient{
 		net:  net,
-		pool: recaptcha.NewTokenPoolSize(net, cfg.TokenPoolSize(), cfg.ProxyURL(), cfg.DebugMode()),
+		pool: recaptcha.NewTokenPool(net, cfg.ProxyURL(), cfg.DebugMode()),
 		cfg:  cfg,
 	}
 }
@@ -61,6 +61,17 @@ func NewVertexAIClient(cfg config.ConfigProvider) *VertexAIClient {
 func (c *VertexAIClient) StartTokenPool()                  { c.pool.Start() }
 func (c *VertexAIClient) StopTokenPool()                   { c.pool.Stop() }
 func (c *VertexAIClient) TokenPoolStats() (size, fill int) { return c.pool.Stats() }
+
+func (c *VertexAIClient) getBatchGraphqlURL() string {
+	if !strings.HasPrefix(batchGraphqlURL, anonBaseURL) {
+		return batchGraphqlURL
+	}
+	key := c.cfg.VertexAPIKey()
+	if key == "" {
+		key = anonAPIKey
+	}
+	return anonBaseURL + batchGraphqlPath + "?key=" + key + "&prettyPrint=false"
+}
 
 const largePayloadThreshold = 1 << 20 // 1MB
 

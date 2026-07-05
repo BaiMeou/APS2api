@@ -213,7 +213,6 @@ func main() {
 			}
 			cancel()
 			transport.StopAllProxies()
-			vc.StopTokenPool()
 			telemetry.Stop()
 			_ = dailyLogger.Close()
 			close(shutdownDone)
@@ -221,8 +220,12 @@ func main() {
 		}
 	}()
 
-	log.Printf("[vproxy] 监听 %s（API 密钥 %d 个，max_retries=%d，token_pool=%d）",
-		httpServer.Addr, keys.Count(), cfg.MaxRetries(), cfg.TokenPoolSize())
+	poolStr := "关闭"
+	if cfg.ParallelPoolEnabled() {
+		poolStr = strconv.Itoa(cfg.ParallelPoolSize()) + "（开启）"
+	}
+	log.Printf("[vproxy] 监听 %s（API 密钥 %d 个，max_retries=%d，并发池=%s）",
+		httpServer.Addr, keys.Count(), cfg.MaxRetries(), poolStr)
 	if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("[vproxy] server error: %v", err)
 	}
