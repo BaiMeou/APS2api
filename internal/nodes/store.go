@@ -131,36 +131,110 @@ func saveNodesUnsafe() {
 	_ = tx.Commit()
 }
 
+type healthUpdate struct {
+	uri string
+	h   NodeHealth
+}
+
+var (
+	healthUpdateChan chan healthUpdate //nolint:gochecknoglobals
+	healthOnce       sync.Once         //nolint:gochecknoglobals
+)
+
+func initHealthQueue() {
+	healthUpdateChan = make(chan healthUpdate, 2048)
+	go func() {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+
+		batch := make(map[string]NodeHealth)
+
+		flush := func() {
+			if len(batch) == 0 || db.GlobalDB == nil {
+				return
+			}
+			tx, err := db.GlobalDB.Begin()
+			if err != nil {
+				log.Printf("[ERROR] Failed to begin health save transaction: %v", err)
+				if len(batch) > 1000 {
+					for k := range batch {
+						delete(batch, k)
+					}
+				}
+				return
+			}
+			stmt, err := tx.Prepare(`INSERT OR REPLACE INTO node_health 
+				(raw_uri, success_count, fail_count, consecutive_failures, last_test_ms, last_test_error, last_success_at, last_fail_at, cooldown_until) 
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+			if err != nil {
+				_ = tx.Rollback()
+				log.Printf("[ERROR] Failed to prepare health save statement: %v", err)
+				if len(batch) > 1000 {
+					for k := range batch {
+						delete(batch, k)
+					}
+				}
+				return
+			}
+			defer stmt.Close()
+
+			for uri, h := range batch {
+				_, _ = stmt.Exec(uri, h.SuccessCount, h.FailCount, h.ConsecutiveFailures, h.LastTestMs, h.LastTestError, h.LastSuccessAt, h.LastFailAt, h.CooldownUntil)
+			}
+			_ = tx.Commit()
+			for k := range batch {
+				delete(batch, k)
+			}
+		}
+
+		for {
+			select {
+			case update, ok := <-healthUpdateChan:
+				if !ok {
+					flush()
+					return
+				}
+				batch[update.uri] = update.h
+				if len(batch) >= 100 {
+					flush()
+				}
+			case <-ticker.C:
+				flush()
+			}
+		}
+	}()
+}
+
 func saveHealthUnsafe() {
 	if db.GlobalDB == nil {
 		return
 	}
-	tx, err := db.GlobalDB.Begin()
-	if err != nil {
-		return
-	}
-	stmt, _ := tx.Prepare(`INSERT OR REPLACE INTO node_health 
-		(raw_uri, success_count, fail_count, consecutive_failures, last_test_ms, last_test_error, last_success_at, last_fail_at, cooldown_until) 
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-	if stmt == nil {
-		_ = tx.Rollback()
-		return
-	}
+	healthOnce.Do(initHealthQueue)
 	for uri, h := range healthMap {
-		_, _ = stmt.Exec(uri, h.SuccessCount, h.FailCount, h.ConsecutiveFailures, h.LastTestMs, h.LastTestError, h.LastSuccessAt, h.LastFailAt, h.CooldownUntil)
+		if h != nil {
+			select {
+			case healthUpdateChan <- healthUpdate{uri: uri, h: *h}:
+			default:
+				go func(update healthUpdate) {
+					healthUpdateChan <- update
+				}(healthUpdate{uri: uri, h: *h})
+			}
+		}
 	}
-	_ = stmt.Close()
-	_ = tx.Commit()
 }
 
 func updateSingleNodeHealthUnsafe(uri string, h *NodeHealth) {
 	if db.GlobalDB == nil || h == nil {
 		return
 	}
-	_, _ = db.GlobalDB.Exec(`INSERT OR REPLACE INTO node_health 
-		(raw_uri, success_count, fail_count, consecutive_failures, last_test_ms, last_test_error, last_success_at, last_fail_at, cooldown_until) 
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		uri, h.SuccessCount, h.FailCount, h.ConsecutiveFailures, h.LastTestMs, h.LastTestError, h.LastSuccessAt, h.LastFailAt, h.CooldownUntil)
+	healthOnce.Do(initHealthQueue)
+	select {
+	case healthUpdateChan <- healthUpdate{uri: uri, h: *h}:
+	default:
+		go func(update healthUpdate) {
+			healthUpdateChan <- update
+		}(healthUpdate{uri: uri, h: *h})
+	}
 }
 
 func updateSingleNodeDisabledUnsafe(uri string, disabled bool) {

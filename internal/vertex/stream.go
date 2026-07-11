@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bsfdsagfadg/vertex/internal/nodes"
@@ -286,9 +287,18 @@ func (c *VertexAIClient) executeStreamingAttempt(ctx context.Context, sess *tran
 //
 // onObject 返回 (stop, err)：stop=true（命中真实 finishReason / 客户端断开）即正常结束扫描；
 // err 非 nil 即中断并上抛（上游错误）。
+var scanBufPool = sync.Pool{ //nolint:gochecknoglobals
+	New: func() any {
+		buf := make([]byte, 16*1024)
+		return &buf
+	},
+}
+
 func scanStream(body io.Reader, onObject func(map[string]any) (bool, error)) error {
 	reader := bufio.NewReader(body)
-	readBuf := make([]byte, 16*1024)
+	readBufPtr := scanBufPool.Get().(*[]byte)
+	defer scanBufPool.Put(readBufPtr)
+	readBuf := *readBufPtr
 
 	var buffer []byte
 	scanPos := 0  // 已扫到的位置（buffer 内），下个网络 chunk 从这里续扫。
@@ -355,13 +365,13 @@ func scanStream(body io.Reader, onObject func(map[string]any) (bool, error)) err
 
 				if endIdx != -1 {
 					jsonStr := buffer[startIdx : endIdx+1]
-					// 复制出对象后裁剪 buffer（drop 已消费前缀），重置扫描状态。
-					rest := make([]byte, len(buffer)-(endIdx+1))
-					copy(rest, buffer[endIdx+1:])
-					buffer = rest
+					obj := parseJSONObject(jsonStr)
+
+					// In-place compaction to avoid memory allocation and copying overhead on every chunk
+					copy(buffer, buffer[endIdx+1:])
+					buffer = buffer[:len(buffer)-(endIdx+1)]
 					scanPos = 0
 
-					obj := parseJSONObject(jsonStr)
 					if obj != nil {
 						stop, err := onObject(obj)
 						if err != nil {
@@ -371,7 +381,6 @@ func scanStream(body io.Reader, onObject func(map[string]any) (bool, error)) err
 							return nil
 						}
 					}
-					// jsonStr 解析失败（半截/畸形）静默跳过。
 				} else {
 					// 未扫到完整对象：记下已扫位置，下个 chunk 续扫，不重扫前缀。
 					scanPos = len(buffer)

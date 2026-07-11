@@ -55,7 +55,7 @@ func (c *VertexAIClient) CountTokens(ctx context.Context, model string, contents
 		log.Printf("[Vertex] [CountTokens] 上游请求失败, status=%d, err=%v, resp=%s", status, err, string(raw))
 		return 0
 	}
-	return parseCountTokensResponse(string(raw))
+	return parseCountTokensResponse(raw)
 }
 
 // buildCountTokensPayload 构建 CountTokens 的 batchGraphql 请求体。
@@ -105,9 +105,9 @@ func countTokensHeaders() transport.Header {
 //
 // 上游可能是单对象或数组；逐层 results → data.ui.countTokensV2 / data.countTokensV2 / data.countTokens，
 // 命中 totalTokens 即返回。任何错误/缺字段返回 0。
-func parseCountTokensResponse(raw string) int {
+func parseCountTokensResponse(raw []byte) int {
 	var parsed any
-	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return 0
 	}
 	var items []any

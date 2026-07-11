@@ -88,7 +88,7 @@ func TestParseCountTokensResponse(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := parseCountTokensResponse(c.raw); got != c.want {
+			if got := parseCountTokensResponse([]byte(c.raw)); got != c.want {
 				t.Errorf("parseCountTokensResponse(%s)=%d，期望 %d", c.raw, got, c.want)
 			}
 		})
