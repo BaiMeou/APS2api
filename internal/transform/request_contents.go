@@ -187,7 +187,6 @@ func BuildVertexVariables(model string, geminiPayload map[string]any, cfg config
 		c = handleInlineDataCase(c)
 		c = normalizeContents(c)
 		c = HandleBase64InContents(c)
-		c = mergeContiguousRoles(c)
 		c = filterEmptyContents(c)
 		c = EncodeThoughtSignature(c, 0)
 		vars["contents"] = c
@@ -535,33 +534,3 @@ func filterEmptyContents(contents any) any {
 	return filtered
 }
 
-// mergeContiguousRoles 合并相邻同 role 的 content。
-func mergeContiguousRoles(contents any) any {
-	list, ok := contents.([]any)
-	if !ok || len(list) == 0 {
-		return contents
-	}
-
-	merged := []any{list[0]}
-	for _, c := range list[1:] {
-		cm, ok := c.(map[string]any)
-		if !ok {
-			continue
-		}
-		prev, ok := merged[len(merged)-1].(map[string]any)
-		if !ok {
-			merged = append(merged, cm)
-			continue
-		}
-		role, _ := cm["role"].(string)
-		prevRole, _ := prev["role"].(string)
-		if role == prevRole {
-			prevParts := asAnySlice(prev["parts"])
-			curParts := asAnySlice(cm["parts"])
-			prev["parts"] = append(prevParts, curParts...)
-		} else {
-			merged = append(merged, cm)
-		}
-	}
-	return merged
-}

@@ -584,48 +584,6 @@ func TestToNativeSchema_UnknownTypeFallsBackToSTRING(t *testing.T) {
 	}
 }
 
-// TestMergeContiguousRoles 验证相邻同 role content 被合并。
-func TestMergeContiguousRoles(t *testing.T) {
-	contents := []any{
-		map[string]any{"role": "model", "parts": []any{map[string]any{"text": "hi"}}},
-		map[string]any{"role": "user", "parts": []any{map[string]any{"text": "q1"}}},
-		map[string]any{"role": "user", "parts": []any{map[string]any{"text": "q2"}}},
-		map[string]any{"role": "model", "parts": []any{map[string]any{"text": "bye"}}},
-	}
-	merged := mergeContiguousRoles(contents).([]any)
-	if len(merged) != 3 {
-		t.Fatalf("应合并为 3 个 content，实际 %d", len(merged))
-	}
-	user := merged[1].(map[string]any)
-	if parts := user["parts"].([]any); len(parts) != 2 {
-		t.Errorf("user content 应有 2 个 parts，实际 %d", len(parts))
-	}
-}
-
-// TestMergeContiguousRoles_FunctionResponse 合并多轮工具结果（连续 function 角色）。
-func TestMergeContiguousRoles_FunctionResponse(t *testing.T) {
-	contents := []any{
-		map[string]any{"role": "model", "parts": []any{
-			map[string]any{"functionCall": map[string]any{"name": "get_weather", "args": map[string]any{"city": "NY"}}},
-			map[string]any{"functionCall": map[string]any{"name": "get_time", "args": map[string]any{"tz": "EST"}}},
-		}},
-		map[string]any{"role": "function", "parts": []any{
-			map[string]any{"functionResponse": map[string]any{"name": "get_weather", "response": map[string]any{"temp": 20}}},
-		}},
-		map[string]any{"role": "function", "parts": []any{
-			map[string]any{"functionResponse": map[string]any{"name": "get_time", "response": map[string]any{"time": "10:00"}}},
-		}},
-		map[string]any{"role": "model", "parts": []any{map[string]any{"text": "done"}}},
-	}
-	merged := mergeContiguousRoles(contents).([]any)
-	if len(merged) != 3 {
-		t.Fatalf("应合并为 3 个 content，实际 %d", len(merged))
-	}
-	funcContent := merged[1].(map[string]any)
-	if parts := funcContent["parts"].([]any); len(parts) != 2 {
-		t.Errorf("function content 应合并两个 functionResponse 为 2 个 parts，实际 %d", len(parts))
-	}
-}
 
 // TestConvertToolsFormat_NumericConstraints 端到端验证工具参数数值约束转字符串。
 func TestConvertToolsFormat_NumericConstraints(t *testing.T) {
