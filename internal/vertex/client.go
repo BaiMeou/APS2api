@@ -284,6 +284,25 @@ func shallowCopy(m map[string]any) map[string]any {
 	return out
 }
 
+func deepCopyAny(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, val := range x {
+			out[k] = deepCopyAny(val)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, item := range x {
+			out[i] = deepCopyAny(item)
+		}
+		return out
+	default:
+		return v
+	}
+}
+
 func asVertexError(err error) *VertexError {
 	if ve, ok := err.(*VertexError); ok {
 		return ve
