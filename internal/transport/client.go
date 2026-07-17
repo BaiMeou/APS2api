@@ -87,7 +87,7 @@ func NewNetworkClient(debugMode bool) *NetworkClient { return &NetworkClient{deb
 
 //nolint:gochecknoglobals // Read-only list of browser profiles
 var browserProfiles = []profiles.ClientProfile{
-	profiles.Chrome_124, profiles.Chrome_131,
+	profiles.Chrome_144, profiles.Chrome_146,
 }
 
 func pickProfile() profiles.ClientProfile {

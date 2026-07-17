@@ -41,7 +41,8 @@ func (c *VertexAIClient) CompleteChat(ctx context.Context, model string, geminiP
 	for _, cand := range cands {
 		uri := cand.RawURI
 		go func() {
-			resp, err := c.runSingleCandidate(ctxRace, model, geminiPayload, uri)
+			copiedPayload := deepCopyAny(geminiPayload).(map[string]any)
+			resp, err := c.runSingleCandidate(ctxRace, model, copiedPayload, uri)
 			select {
 			case resCh <- candidateResult{proxyURI: uri, resp: resp, err: err}:
 			case <-ctxRace.Done():

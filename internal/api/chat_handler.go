@@ -205,7 +205,10 @@ func (c *ChatHandler) streamChatCompletions(ctx context.Context, w http.Response
 		return true
 	}
 
-	if !gotContent && !streamErrWritten {
+	if streamErrWritten {
+		return
+	}
+	if !gotContent {
 		ee := vertex.NewEmptyResponseError("Upstream returned empty response (no content)")
 		c.writeStreamError(write, ee, requestID, model)
 		return
