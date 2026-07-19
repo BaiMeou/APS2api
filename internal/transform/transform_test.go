@@ -702,3 +702,44 @@ func TestSplitAssistantContent_PlainText(t *testing.T) {
 		t.Errorf("纯文本应原样为单个 text part，got %v", parts)
 	}
 }
+func TestStripGeminiIDs(t *testing.T) {
+	payload := map[string]any{
+		"contents": []any{
+			map[string]any{
+				"role": "model",
+				"parts": []any{
+					map[string]any{
+						"functionCall": map[string]any{
+							"id": "gemini-tool-call-1-vp12345678",
+						},
+					},
+				},
+			},
+			map[string]any{
+				"role": "function",
+				"parts": []any{
+					map[string]any{
+						"functionResponse": map[string]any{
+							"id": "gemini-tool-call-1-vp12345678",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	stripGeminiIDs(payload)
+
+	contents := payload["contents"].([]any)
+	m1 := contents[0].(map[string]any)
+	fc := m1["parts"].([]any)[0].(map[string]any)["functionCall"].(map[string]any)
+	if fc["id"] != "gemini-tool-call-1" {
+		t.Errorf("functionCall.id stripping 失败: %v", fc["id"])
+	}
+
+	m2 := contents[1].(map[string]any)
+	fr := m2["parts"].([]any)[0].(map[string]any)["functionResponse"].(map[string]any)
+	if fr["id"] != "gemini-tool-call-1" {
+		t.Errorf("functionResponse.id stripping 失败: %v", fr["id"])
+	}
+}

@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -102,6 +104,7 @@ func (g *GeminiHandler) handleGeminiGenerate(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	cleanGeminiFinishReason(resp)
+	rewriteGeminiIDs(resp, generateVPSuffix())
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -125,6 +128,7 @@ func (g *GeminiHandler) handleGeminiStreamGenerate(w http.ResponseWriter, r *htt
 
 	gotChunk := false
 	hasFinish := false
+	suffix := generateVPSuffix()
 	g.vc.StreamChat(r.Context(), actualModel, body, func(ch vertex.StreamChunk) bool {
 		if ch.Err != nil {
 			if isSafetyBlock(ch.Err) {
@@ -140,6 +144,7 @@ func (g *GeminiHandler) handleGeminiStreamGenerate(w http.ResponseWriter, r *htt
 		if fr := cleanGeminiFinishReason(ch.Data); fr != "" {
 			hasFinish = true
 		}
+		rewriteGeminiIDs(ch.Data, suffix)
 		return sw.write(g.geminiSSE(ch.Data))
 	})
 
@@ -352,3 +357,25 @@ func geminiResponseText(resp map[string]any) string {
 }
 
 func isTruthyAny(v any) bool { return jsonx.Truthy(v) }
+func generateVPSuffix() string {
+	var buf [4]byte
+	_, _ = rand.Read(buf[:])
+	return fmt.Sprintf("-vp%08x", buf)
+}
+
+func rewriteGeminiIDs(val any, suffix string) {
+	switch v := val.(type) {
+	case map[string]any:
+		for k, mv := range v {
+			if s, ok := mv.(string); ok && strings.HasPrefix(s, "gemini-tool-call-") {
+				v[k] = s + suffix
+			} else {
+				rewriteGeminiIDs(mv, suffix)
+			}
+		}
+	case []any:
+		for _, item := range v {
+			rewriteGeminiIDs(item, suffix)
+		}
+	}
+}

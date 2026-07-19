@@ -39,6 +39,9 @@ func (e *VertexError) Error() string { return e.Message }
 
 // IsRetryable 判定是否可重试：408/429/5xx 可重试；认证错误（按 Kind 判，不看 code）也可重试。
 func (e *VertexError) IsRetryable() bool {
+	if strings.Contains(e.Message, "Please ensure that the number of function response parts is equal to the number of function call parts") {
+		return false
+	}
 	switch e.Code {
 	case 408, 429, 500, 502, 503, 504:
 		return true

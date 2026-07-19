@@ -62,6 +62,13 @@ func (c *VertexAIClient) CompleteChat(ctx context.Context, model string, geminiP
 			if res.err != nil {
 				if res.err != context.Canceled && !errors.Is(res.err, context.Canceled) {
 					ve := asVertexError(res.err)
+					if ve != nil && !ve.IsRetryable() {
+						if c.cfg.DebugMode() {
+							log.Printf("[Vertex] [CompleteChat] 节点 %s 触发不可重试的硬性错误: %s", nodes.GetNodeName(res.proxyURI), res.err.Error())
+						}
+						cancel()
+						return nil, res.err
+					}
 					if ve != nil && ve.Kind == "ratelimit" {
 						if c.cfg.DebugMode() {
 							log.Printf("[Vertex] [CompleteChat] 节点 %s 触发 429 API 限制，进入 30 秒短时歇息", nodes.GetNodeName(res.proxyURI))

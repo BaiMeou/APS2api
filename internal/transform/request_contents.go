@@ -167,6 +167,7 @@ func hasRemotePrefix(url string) bool {
 
 // BuildVertexVariables 由 geminiPayload 构建发往上游的 variables。
 func BuildVertexVariables(model string, geminiPayload map[string]any, cfg config.ConfigProvider) map[string]any {
+	stripGeminiIDs(geminiPayload)
 	vars := map[string]any{}
 	vars["model"] = parseModelName(model)
 
@@ -287,7 +288,32 @@ func normalizeContents(contents any) any {
 		if len(pendingText) > 0 {
 			normalized = append(normalized, map[string]any{"role": "user", "parts": pendingText})
 		}
-		return normalized
+
+		// 合并相邻的具有相同 normalized 角色的 content 回合，确保角色严格交替
+		merged := []any{}
+		for _, item := range normalized {
+			m, ok := item.(map[string]any)
+			if !ok {
+				merged = append(merged, item)
+				continue
+			}
+			role, _ := m["role"].(string)
+			if role == "function" || role == "tool" {
+				if len(merged) > 0 {
+					if last, ok := merged[len(merged)-1].(map[string]any); ok {
+						lastRole, _ := last["role"].(string)
+						if lastRole == "function" || lastRole == "tool" {
+							lastParts, _ := last["parts"].([]any)
+							currentParts, _ := m["parts"].([]any)
+							last["parts"] = append(lastParts, currentParts...)
+							continue
+						}
+					}
+				}
+			}
+			merged = append(merged, m)
+		}
+		return merged
 	default:
 		return contents
 	}
@@ -534,3 +560,24 @@ func filterEmptyContents(contents any) any {
 	return filtered
 }
 
+func stripGeminiIDs(val any) {
+	switch v := val.(type) {
+	case map[string]any:
+		for k, mv := range v {
+			if s, ok := mv.(string); ok && strings.HasPrefix(s, "gemini-tool-call-") {
+				if len(s) > 11 && strings.Contains(s, "-vp") {
+					idx := strings.LastIndex(s, "-vp")
+					if idx > 0 && len(s)-idx == 11 {
+						v[k] = s[:idx]
+					}
+				}
+			} else {
+				stripGeminiIDs(mv)
+			}
+		}
+	case []any:
+		for _, item := range v {
+			stripGeminiIDs(item)
+		}
+	}
+}
