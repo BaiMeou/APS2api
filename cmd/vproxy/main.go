@@ -206,10 +206,10 @@ func main() {
 				log.Printf("[vproxy] 收到 SIGHUP：已清配置/模型缓存，下次读取即热重载")
 				continue
 			}
-			log.Printf("[vproxy] 收到 %v：开始优雅关闭，排干在途请求（最长 %s）…", s, shutdownGrace)
+			log.Printf("[vproxy] 收到 %v：开始关闭程序，等待在途请求处理完成(最长 %s)…", s, shutdownGrace)
 			ctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 			if err := httpServer.Shutdown(ctx); err != nil {
-				log.Printf("[vproxy] 优雅关闭超时/出错：%v（强制结束）", err)
+				log.Printf("[vproxy] 关闭超时/出错：%v(强制结束)", err)
 			}
 			cancel()
 			transport.StopAllProxies()
@@ -230,7 +230,7 @@ func main() {
 		log.Fatalf("[vproxy] server error: %v", err)
 	}
 	<-shutdownDone
-	log.Printf("[vproxy] 优雅关闭完成，vproxy 退出")
+	log.Printf("[vproxy] 关闭完成，程序退出")
 }
 
 func checkRulesAgreed(curHash string) bool {
