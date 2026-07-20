@@ -11,6 +11,7 @@ var adminAllowedSettings = map[string]bool{
 	"max_retries": true, "max_spill_mb": true,
 	"max_request_mb": true, "max_n": true, "aggregate_stream": true,
 	"drop_max_tokens": true, "proxy_url": true,
+	"request_timeout":       true,
 	"parallel_pool_enabled": true, "parallel_pool_size": true,
 	"telemetry_enabled":           true,
 	"parallel_pool_delay_dynamic": true,
@@ -40,6 +41,7 @@ func (adm *AdminHandler) adminGetSettings(w http.ResponseWriter, _ *http.Request
 		"aggregate_stream":   adm.cfg.AggregateStream(),
 		"drop_max_tokens":   adm.cfg.DropMaxTokens(),
 		"telemetry_enabled": telEnabled,
+		"request_timeout":   adm.cfg.RequestTimeout(),
 		"proxy_url":         adm.cfg.ProxyURL(), "parallel_pool_enabled": adm.cfg.ParallelPoolEnabled(), "parallel_pool_size": adm.cfg.ParallelPoolSize(), "active_node_uri": adm.cfg.ActiveNodeURI(),
 		"parallel_pool_delay_dynamic": adm.cfg.ParallelPoolDelayDynamic(),
 		"parallel_pool_delay_ms":      adm.cfg.ParallelPoolDelayMs(),
@@ -74,9 +76,13 @@ func (adm *AdminHandler) adminPutSettings(w http.ResponseWriter, r *http.Request
 			continue
 		}
 		switch k {
-		case "max_retries", "max_spill_mb", "max_request_mb", "max_n", "parallel_pool_size", "parallel_pool_delay_ms":
+		case "max_retries", "max_spill_mb", "max_request_mb", "max_n", "parallel_pool_size", "parallel_pool_delay_ms", "request_timeout":
 			if f, ok := v.(float64); ok {
-				updates[k] = int(f)
+				val := int(f)
+				if k == "request_timeout" && val > 1800 {
+					val = 1800
+				}
+				updates[k] = val
 				continue
 			}
 		}

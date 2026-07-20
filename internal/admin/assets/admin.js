@@ -10,7 +10,13 @@ const PAGE_CACHE = {};
 let curPage = null;
 function go(page, instant) {
   if (curPage === 'settings' && page !== 'settings' && window.hasUnsavedSettings) {
-    showConfirm('您对设置进行了修改且未保存，离开将丢失这些更改。确认离开吗？', () => {
+    showConfirm('您对设置进行了修改且未保存，离开将丢失这些更改。<br>确认离开吗？', () => {
+      window.hasUnsavedSettings = false;
+      go(page, instant);
+    }, null, async () => {
+      if (typeof saveSettings === 'function') {
+        await saveSettings();
+      }
       window.hasUnsavedSettings = false;
       go(page, instant);
     });

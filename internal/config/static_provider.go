@@ -17,6 +17,7 @@ func (s staticConfig) AggregateStream() bool               { return s.c.Aggregat
 func (s staticConfig) MaxN() int                         { return s.c.MaxN }
 func (s staticConfig) MaxRequestMB() int                 { return s.c.MaxRequestMB }
 func (s staticConfig) MaxSpillMB() int                   { return s.c.MaxSpillMB }
+func (s staticConfig) RequestTimeout() int               { return s.c.RequestTimeout }
 func (s staticConfig) VertexAPIKey() string              { return s.c.VertexAPIKey }
 func (s staticConfig) CountTokensQuerySignature() string { return s.c.CountTokensQuerySignature }
 func (s staticConfig) SafetySettings() map[string]string { return s.c.SafetySettings }

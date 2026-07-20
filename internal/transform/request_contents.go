@@ -311,7 +311,12 @@ func normalizeContents(contents any) any {
 					}
 				}
 			}
-			merged = append(merged, m)
+			// 浅拷贝一份 map，避免在重试（第二次走 pipeline）时污染原始的 geminiPayload
+			newM := make(map[string]any, len(m))
+			for k, v := range m {
+				newM[k] = v
+			}
+			merged = append(merged, newM)
 		}
 		return merged
 	default:
