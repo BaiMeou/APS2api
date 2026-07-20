@@ -28,6 +28,7 @@ type AppConfig struct { //nolint:govet
 	MaxN                      int               `json:"max_n"`
 	MaxSpillMB                int               `json:"max_spill_mb"`
 	MaxRequestMB              int               `json:"max_request_mb"`
+	RequestTimeout            int               `json:"request_timeout"`
 
 	// 并发池与节点锁定配置
 	ActiveNodeURI            string `json:"active_node_uri"`
@@ -62,6 +63,7 @@ func DefaultConfig() AppConfig {
 		CountTokensQuerySignature: defaultCountTokensQuerySig,
 		MaxN:                      8,
 		MaxSpillMB:                2048,
+		RequestTimeout:            180,
 		ParallelPoolEnabled:       true,
 		StickyNodePriority:        false,
 		ParallelPoolSize:          15, // 默认为 15 并发
@@ -154,10 +156,30 @@ func Load() AppConfig {
 		if errUnm := json.Unmarshal(data, &cfg); errUnm != nil { //nolint:govet
 			log.Printf("[Config] 解析 config.json 失败: %v", err)
 		} else {
+			var needsSave bool
+			// 自动补偿 RequestTimeout 默认值
+			if cfg.RequestTimeout <= 0 {
+				cfg.RequestTimeout = 180
+				needsSave = true
+			} else if cfg.RequestTimeout > 1800 {
+				log.Printf("[Config] 警告: 请求超时配置过高 (%d)，已限制为上限 1800", cfg.RequestTimeout)
+				cfg.RequestTimeout = 1800
+				needsSave = true
+			}
 			// 拦截在文件读取配置时过高的并发数限制为 20
 			if cfg.ParallelPoolSize > 20 {
-				log.Printf("[Config] 警告: 并发数配置过高 (%d)，已强制限制为上限 20", cfg.ParallelPoolSize)
+				log.Printf("[Config] 警告: 并发数配置过高 (%d)，已限制为上限 20", cfg.ParallelPoolSize)
 				cfg.ParallelPoolSize = 20
+				needsSave = true
+			}
+			if needsSave {
+				// 异步回写，避免阻塞加载，并保留未知字段
+				go func(t int, p int) {
+					_ = WriteSettings(map[string]any{
+						"request_timeout":    t,
+						"parallel_pool_size": p,
+					})
+				}(cfg.RequestTimeout, cfg.ParallelPoolSize)
 			}
 			log.Printf("[Config] 成功加载配置文件 config.json")
 		}

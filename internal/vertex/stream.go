@@ -42,7 +42,7 @@ type StreamChunk struct {
 //
 // 通过 yield 回调推送增量：回调返回 false 表示客户端断开/上层要求停止，立即终止。
 // 单 session复用 + response 排干防串流。重试逻辑与非流式对齐，但 content_yielded 后
-// 不再重试（已发出的内容不能重来）。ctx 取消（客户端断开/优雅关闭）时干净结束流：
+// 不再重试（已发出的内容不能重来）。ctx 取消（客户端断开/关闭）时干净结束流：
 // 重试退避被打断、上游流连接中断，不再空转。
 func (c *VertexAIClient) StreamChat(ctx context.Context, model string, geminiPayload map[string]any, yield func(StreamChunk) bool) {
 	op := func(ctx context.Context, proxyURI string) <-chan StreamChunk {
@@ -76,7 +76,7 @@ func (c *VertexAIClient) executeStreamingWithRetries(ctx context.Context, model 
 	var lastError *VertexError
 
 	reqID := RequestIDFromContext(ctx)
-	sess, err := c.net.CreateSession(180, proxyURI, reqID)
+	sess, err := c.net.CreateSession(cfg.RequestTimeout(), proxyURI, reqID)
 	if err != nil {
 		yield(StreamChunk{Err: NewInternalError("create session: " + err.Error())})
 		return
@@ -159,7 +159,7 @@ retryLoop:
 			}
 			// 429：销毁旧 session 重建新的，换 token。
 			sess.Close()
-			newSess, e := c.net.CreateSession(180, proxyURI, reqID)
+			newSess, e := c.net.CreateSession(cfg.RequestTimeout(), proxyURI, reqID)
 			if e != nil {
 				yield(StreamChunk{Err: NewInternalError("recreate session: " + e.Error())})
 				return

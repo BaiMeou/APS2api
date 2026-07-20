@@ -14,6 +14,7 @@ type ConfigProvider interface {
 	MaxN() int
 	MaxRequestMB() int
 	MaxSpillMB() int
+	RequestTimeout() int
 
 	VertexAPIKey() string
 	CountTokensQuerySignature() string
@@ -68,6 +69,7 @@ func (d dynamicConfig) AggregateStream() bool               { return Load().Aggr
 func (d dynamicConfig) MaxN() int                         { return Load().MaxN }
 func (d dynamicConfig) MaxRequestMB() int                 { return Load().MaxRequestMB }
 func (d dynamicConfig) MaxSpillMB() int                   { return Load().MaxSpillMB }
+func (d dynamicConfig) RequestTimeout() int               { return Load().RequestTimeout }
 func (d dynamicConfig) VertexAPIKey() string              { return Load().VertexAPIKey }
 func (d dynamicConfig) CountTokensQuerySignature() string { return Load().CountTokensQuerySignature }
 func (d dynamicConfig) SafetySettings() map[string]string {
