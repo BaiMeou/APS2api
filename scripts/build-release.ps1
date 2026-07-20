@@ -16,7 +16,8 @@ try {
     if ($LASTEXITCODE -eq 0 -and $gitOutput) {
         $COMMIT = ($gitOutput -join "").Trim()
     }
-} catch {
+}
+catch {
 }
 
 $BUILD_TIME = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
@@ -70,7 +71,8 @@ function Build-Release {
         Remove-Item Env:\GOOS
         Remove-Item Env:\GOARCH
         Remove-Item Env:\CC
-    } else {
+    }
+    else {
         $env:CGO_ENABLED = "0"
         $env:GOOS = $goos
         $env:GOARCH = $goarch
@@ -104,7 +106,8 @@ function Build-Release {
         7z a -tzip -mx=9 "..\$pkg.zip" * > $null
         Set-Location $pwd
         Remove-Item -Recurse -Force $stage
-    } else {
+    }
+    else {
         Compress-Archive -Path (Join-Path $stage "*") -DestinationPath $zipPath -Force
         Remove-Item -Recurse -Force $stage
     }
@@ -120,7 +123,7 @@ Build-Release -goos windows -goarch 386   -bin vertex-proxy.exe -pkg vertex-prox
 Build-Release -goos linux -goarch amd64 -bin vertex-proxy -pkg vertex-proxy-linux-amd64 -files @("scripts\start.sh", "scripts\vertex-proxy.service", "scripts\setup.sh")
 Build-Release -goos linux -goarch 386   -bin vertex-proxy -pkg vertex-proxy-linux-386   -files @("scripts\start.sh", "scripts\vertex-proxy.service", "scripts\setup.sh")
 Build-Release -goos linux -goarch arm64 -bin vertex-proxy -pkg vertex-proxy-linux-arm64 -files @("scripts\start.sh", "scripts\vertex-proxy.service", "scripts\setup.sh")
-Build-Release -goos linux -goarch arm32 -bin vertex-proxy -pkg vertex-proxy-linux-arm32 -files @("scripts\start.sh", "scripts\vertex-proxy.service", "scripts\setup.sh")
+Build-Release -goos linux -goarch arm   -bin vertex-proxy -pkg vertex-proxy-linux-arm32 -files @("scripts\start.sh", "scripts\vertex-proxy.service", "scripts\setup.sh")
 
 # Android
 Build-Release -goos android -goarch arm64 -bin vertex-proxy -pkg vertex-proxy-android-arm64 -files @("scripts\start.sh", "scripts\setup.sh")
