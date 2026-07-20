@@ -414,13 +414,14 @@
 
   <div id="confirmModal" class="hidden"
     style="position:fixed;inset:0;display:grid;place-items:center;z-index:9999;background:rgba(0,0,0,0.5);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);transition:opacity .3s var(--ease);">
-    <div class="box glass" style="width:340px;padding:32px 24px;text-align:center;animation:pop .4s var(--ease);">
+    <div class="box glass" style="width:420px;padding:32px 24px;text-align:center;animation:pop .4s var(--ease);">
       <h3 style="margin-bottom:12px;font-size:16px;">未保存的更改</h3>
       <div style="color:var(--text-dim);margin-bottom:24px;font-size:13px;" id="confirmModalText">
-        您对设置进行了修改且未保存，离开将丢失这些更改。确认离开吗？</div>
+        您对设置进行了修改且未保存，离开将丢失这些更改。<br>确认离开吗？</div>
       <div style="display:flex;gap:12px;justify-content:center;">
         <button class="btn ghost" id="confirmCancelBtn" style="flex:1;">取消</button>
         <button class="btn danger" id="confirmOkBtn" style="flex:1;">确认离开</button>
+        <button class="btn primary" id="confirmSaveBtn" style="flex:1;">保存并离开</button>
       </div>
     </div>
   </div>

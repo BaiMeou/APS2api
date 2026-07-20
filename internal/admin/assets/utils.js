@@ -4,21 +4,32 @@ function esc(s) { return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<'
 const _tmap = { vless: 'VLESS', vmess: 'VMess', trojan: 'Trojan', ss: 'Shadowsocks', shadowsocks: 'Shadowsocks', hysteria2: 'Hysteria2', hy2: 'Hysteria2', tuic: 'TUIC' };
 const DEFAULT_BG = "url('background.jpg')";
 
-function showConfirm(msg, onOk, onCancel) {
+function showConfirm(msg, onOk, onCancel, onSave) {
   const m = $('#confirmModal');
   if (!m) return;
-  $('#confirmModalText').textContent = msg;
+  $('#confirmModalText').innerHTML = msg;
   m.classList.remove('hidden');
   
   const okBtn = $('#confirmOkBtn');
   const cancelBtn = $('#confirmCancelBtn');
+  const saveBtn = $('#confirmSaveBtn');
   
+  if (onSave) {
+    saveBtn.classList.remove('hidden');
+  } else if (saveBtn) {
+    saveBtn.classList.add('hidden');
+  }
+
   const cleanup = () => {
     m.classList.add('hidden');
     okBtn.onclick = null;
     cancelBtn.onclick = null;
+    if (saveBtn) saveBtn.onclick = null;
   };
   
   okBtn.onclick = () => { cleanup(); if(onOk) onOk(); };
   cancelBtn.onclick = () => { cleanup(); if(onCancel) onCancel(); };
+  if (saveBtn) {
+    saveBtn.onclick = () => { cleanup(); if(onSave) onSave(); };
+  }
 }
