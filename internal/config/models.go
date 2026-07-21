@@ -88,11 +88,28 @@ func loadModelsFile() *modelsFile {
 		if errUnm := json.Unmarshal(data, &parsed); errUnm != nil { //nolint:govet
 			log.Printf("[Config] 解析 models.json 失败: %v", err)
 		} else if len(parsed.Models) > 0 {
-			mf.Models = parsed.Models
+			hasNewModel := false
+			for _, m := range parsed.Models {
+				if m == "gemini-3.6-flash" {
+					hasNewModel = true
+					break
+				}
+			}
+
 			if parsed.AliasMap != nil {
 				mf.AliasMap = parsed.AliasMap
 			}
-			log.Printf("[Config] 成功加载模型配置文件 models.json (模型数: %d)", len(mf.Models))
+
+			if !hasNewModel {
+				log.Printf("[Config] 检测到 models.json 缺少 gemini-3.6-flash，正使用内置最新模型列表进行升级覆盖")
+				mf.Models = defaultModels
+				if errWrite := writeJSONFile(modelsPath(), *mf); errWrite != nil {
+					log.Printf("[Config] 自动升级 models.json 失败: %v", errWrite)
+				}
+			} else {
+				mf.Models = parsed.Models
+				log.Printf("[Config] 成功加载模型配置文件 models.json (模型数: %d)", len(mf.Models))
+			}
 		}
 	} else if !os.IsNotExist(err) {
 		log.Printf("[Config] 读取 models.json 失败: %v", err)
