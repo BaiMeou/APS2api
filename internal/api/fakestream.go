@@ -32,12 +32,35 @@ func splitIntoRuneChunks(text string) []string {
 
 // sseWriter 是一个带 flush 的 SSE 行写出器；write 返回 false 表示客户端断开。
 type sseWriter struct {
-	w     http.ResponseWriter
-	flush func()
+	w           http.ResponseWriter
+	contentType string
+	wroteHeader bool
+	flush       func()
+}
+
+func (sw *sseWriter) ensureHeader() {
+	if sw.wroteHeader {
+		return
+	}
+	sw.wroteHeader = true
+	ct := sw.contentType
+	if ct == "" {
+		ct = "text/event-stream"
+	}
+	sw.w.Header().Set("Content-Type", ct)
+	sw.w.Header().Set("Cache-Control", "no-cache")
+	sw.w.Header().Set("Connection", "keep-alive")
+	sw.w.Header().Set("X-Accel-Buffering", "no")
+	sw.w.WriteHeader(http.StatusOK)
+}
+
+func (sw *sseWriter) hasWritten() bool {
+	return sw.wroteHeader
 }
 
 // write 写一条原始字符串并 flush。返回 false 表示客户端断开。
 func (sw *sseWriter) write(line string) bool {
+	sw.ensureHeader()
 	if _, err := sw.w.Write([]byte(line)); err != nil {
 		return false
 	}

@@ -84,12 +84,10 @@ func streamChunkBase(model, requestID string) map[string]any {
 
 func newSSEWriter(w http.ResponseWriter, contentType string) *sseWriter {
 	flusher, _ := w.(http.Flusher)
-	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-	sw := &sseWriter{w: w}
+	sw := &sseWriter{
+		w:           w,
+		contentType: contentType,
+	}
 	if flusher != nil {
 		sw.flush = flusher.Flush
 	}

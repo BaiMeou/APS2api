@@ -122,22 +122,33 @@ func (g *GeminiHandler) handleGeminiStreamGenerate(w http.ResponseWriter, r *htt
 	sw := newSSEWriter(w, "text/event-stream")
 
 	if useFake {
-		g.geminiFakeStream(r.Context(), sw, actualModel, body)
+		g.geminiFakeStream(r.Context(), w, sw, actualModel, body)
 		return
 	}
 
 	gotChunk := false
 	hasFinish := false
+	streamErrWritten := false
 	suffix := generateVPSuffix()
 	g.vc.StreamChat(r.Context(), actualModel, body, func(ch vertex.StreamChunk) bool {
 		if ch.Err != nil {
-			if isSafetyBlock(ch.Err) {
-				_ = sw.write(g.geminiSSE(geminiSafetyChunk(ch.Err)))
+			if !sw.hasWritten() {
+				ve := toVertexError(ch.Err)
+				if isSafetyBlock(ve) {
+					writeJSON(w, http.StatusOK, geminiSafetyResponse(ve))
+				} else {
+					writeJSON(w, ve.Code, vertexErrorToGemini(ve))
+				}
 			} else {
-				_ = sw.write(g.geminiSSE(map[string]any{"error": map[string]any{
-					"code": ch.Err.Code, "message": vertex.FriendlyErrorMessage(ch.Err), "status": geminiStatusOf(ch.Err),
-				}}))
+				if isSafetyBlock(ch.Err) {
+					_ = sw.write(g.geminiSSE(geminiSafetyChunk(ch.Err)))
+				} else {
+					_ = sw.write(g.geminiSSE(map[string]any{"error": map[string]any{
+						"code": ch.Err.Code, "message": vertex.FriendlyErrorMessage(ch.Err), "status": geminiStatusOf(ch.Err),
+					}}))
+				}
 			}
+			streamErrWritten = true
 			return false
 		}
 		gotChunk = true
@@ -148,12 +159,21 @@ func (g *GeminiHandler) handleGeminiStreamGenerate(w http.ResponseWriter, r *htt
 		return sw.write(g.geminiSSE(ch.Data))
 	})
 
+	if streamErrWritten {
+		return
+	}
+
 	if !gotChunk {
-		_ = sw.write(g.geminiSSE(map[string]any{
-			"error": map[string]any{
-				"code": 500, "message": "Upstream returned empty response (no content)", "status": "INTERNAL",
-			},
-		}))
+		ee := vertex.NewEmptyResponseError("Upstream returned empty response (no content)")
+		if !sw.hasWritten() {
+			writeJSON(w, ee.Code, vertexErrorToGemini(ee))
+		} else {
+			_ = sw.write(g.geminiSSE(map[string]any{
+				"error": map[string]any{
+					"code": 500, "message": "Upstream returned empty response (no content)", "status": "INTERNAL",
+				},
+			}))
+		}
 		return
 	}
 	if !hasFinish {
@@ -167,10 +187,18 @@ func (g *GeminiHandler) handleGeminiStreamGenerate(w http.ResponseWriter, r *htt
 	}
 }
 
-func (g *GeminiHandler) geminiFakeStream(ctx context.Context, sw *sseWriter, model string, body map[string]any) {
+func (g *GeminiHandler) geminiFakeStream(ctx context.Context, w http.ResponseWriter, sw *sseWriter, model string, body map[string]any) {
 	resp, vErr := g.vc.CompleteChat(ctx, model, body)
 	if vErr != nil {
 		ve := toVertexError(vErr)
+		if !sw.hasWritten() {
+			if isSafetyBlock(ve) {
+				writeJSON(w, http.StatusOK, geminiSafetyResponse(ve))
+				return
+			}
+			writeJSON(w, ve.Code, vertexErrorToGemini(ve))
+			return
+		}
 		if isSafetyBlock(ve) {
 			_ = sw.write(g.geminiSSE(geminiSafetyChunk(ve)))
 			return
@@ -194,7 +222,6 @@ func (g *GeminiHandler) geminiFakeStream(ctx context.Context, sw *sseWriter, mod
 		}
 	}
 }
-
 func (g *GeminiHandler) handleCountTokens(w http.ResponseWriter, r *http.Request, model string) {
 	actualModel, _ := stripFakePrefix(model, g.cfg.FakePrefixes())
 	body, ok := g.readGeminiBody(w, r)
