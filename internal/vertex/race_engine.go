@@ -94,13 +94,34 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 		}
 	}()
 
-	resCh := make(chan raceResult[T], min(len(cands)+20, 30))
+	resCh := make(chan raceResult[T], len(cands))
 	var active int32
 	activeKeys := make(map[string]bool)
 	var mu sync.Mutex
 
 	cancels := make(map[string]context.CancelFunc)
 	var cancelsMu sync.Mutex
+
+	recordResult := func(res raceResult[T]) {
+		if res.err == nil {
+			stickyPool.Add(res.uri)
+			return
+		}
+
+		if errors.Is(res.err, context.Canceled) {
+			return
+		}
+
+		ve := asVertexError(res.err)
+		if ve != nil && ve.Kind == "ratelimit" {
+			nodes.RecordRateLimit(res.uri, 30)
+			stickyPool.Evict(res.uri)
+			return
+		}
+
+		nodes.RecordTest(res.uri, false, 0, res.err.Error())
+		stickyPool.Evict(res.uri)
+	}
 
 	launchNode := func(uri string) {
 		mu.Lock()
@@ -119,10 +140,7 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 		atomic.AddInt32(&active, 1)
 		go func(u string) {
 			v, err := run(candCtx, u)
-			select {
-			case resCh <- raceResult[T]{u, v, err}:
-			case <-candCtx.Done():
-			}
+			resCh <- raceResult[T]{u, v, err}
 		}(uri)
 	}
 
@@ -168,25 +186,36 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 
 				returnedOnWinPath = true
 
-				cancelsMu.Lock()
-				for u, cancelFn := range cancels {
-					if u != res.uri {
-						cancelFn()
+				if !rc.noCancelOnSuccess {
+					cancelsMu.Lock()
+					for u, cancelFn := range cancels {
+						if u != res.uri {
+							cancelFn()
+						}
 					}
+					cancelsMu.Unlock()
 				}
-				cancelsMu.Unlock()
+
 				collectTimeout := time.Duration(min(30, 5+cfg.ParallelPoolSize())) * time.Second
 				go func() {
 					collectCtx, collectCancel := context.WithTimeout(context.Background(), collectTimeout)
 					defer collectCancel()
+					if atomic.LoadInt32(&active) == 0 {
+						if !rc.noCancelOnSuccess {
+							cancel()
+						}
+						return
+					}
 					for {
 						select {
 						case bgRes := <-resCh:
 							atomic.AddInt32(&active, -1)
-							if bgRes.err == nil {
-								stickyPool.Add(bgRes.uri)
-							} else {
-								stickyPool.Evict(bgRes.uri)
+							recordResult(bgRes)
+							if atomic.LoadInt32(&active) == 0 {
+								if !rc.noCancelOnSuccess {
+									cancel()
+								}
+								return
 							}
 						case <-collectCtx.Done():
 							if !rc.noCancelOnSuccess {
@@ -200,7 +229,7 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 				return res.val, nil
 			}
 
-			if res.err != context.Canceled && !errors.Is(res.err, context.Canceled) {
+			if !errors.Is(res.err, context.Canceled) {
 				if cfg.DebugMode() {
 					log.Printf("[Racing] 节点 %s 失败: %s", name, res.err.Error())
 				}
