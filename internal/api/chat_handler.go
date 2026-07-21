@@ -3,7 +3,6 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -145,23 +144,7 @@ func (c *ChatHandler) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 func (c *ChatHandler) streamChatCompletions(ctx context.Context, w http.ResponseWriter, model string, geminiPayload map[string]any) {
 	requestID := reqID24()
 
-	flusher, canFlush := w.(http.Flusher)
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-
-	write := func(line string) bool {
-		if _, err := io.WriteString(w, line); err != nil {
-			log.Printf("[Server] [Stream] 请求ID=%s 客户端已主动断开连接", requestID)
-			return false
-		}
-		if canFlush {
-			flusher.Flush()
-		}
-		return true
-	}
+	sw := newSSEWriter(w, "text/event-stream")
 
 	isFirst := true
 	hasFinish := false
@@ -175,7 +158,17 @@ func (c *ChatHandler) streamChatCompletions(ctx context.Context, w http.Response
 			cli.UpdateReqState(requestID, "💬 流式打字", "\033[36m", "正在输出...")
 		}
 		if ch.Err != nil {
-			c.writeStreamError(write, ch.Err, requestID, model)
+			if !sw.hasWritten() {
+				ve := toVertexError(ch.Err)
+				if isSafetyBlock(ve) {
+					log.Printf("[Vertex] 请求被 Google 安全审查拦截, 请求ID=%s, 原因: %s", vertex.RequestIDFromContext(ctx), ve.Status)
+					writeJSON(w, http.StatusOK, oaiSafetyResponse(model))
+				} else {
+					writeJSON(w, ve.Code, vertexErrorToOAI(ve))
+				}
+			} else {
+				c.writeStreamError(sw.write, ch.Err, requestID, model)
+			}
 			streamErrWritten = true
 			return false
 		}
@@ -188,37 +181,32 @@ func (c *ChatHandler) streamChatCompletions(ctx context.Context, w http.Response
 			if strings.Contains(ev, `"content":`) || strings.Contains(ev, `"tool_calls":`) || strings.Contains(ev, `"reasoning_content":`) {
 				gotContent = true
 			}
-			if !write(ev) {
+			if !sw.write(ev) {
+				log.Printf("[Server] [Stream] 请求ID=%s 客户端已主动断开连接", requestID)
 				return false
 			}
 		}
 		return true
 	})
 
-	writeSilent := func(line string) bool {
-		if _, err := io.WriteString(w, line); err != nil {
-			return false
-		}
-		if canFlush {
-			flusher.Flush()
-		}
-		return true
-	}
-
 	if streamErrWritten {
 		return
 	}
 	if !gotContent {
 		ee := vertex.NewEmptyResponseError("Upstream returned empty response (no content)")
-		c.writeStreamError(write, ee, requestID, model)
+		if !sw.hasWritten() {
+			writeJSON(w, ee.Code, vertexErrorToOAI(ee))
+		} else {
+			c.writeStreamError(sw.write, ee, requestID, model)
+		}
 		return
 	}
 	if !hasFinish {
 		base := streamChunkBase(model, requestID)
 		base["choices"] = []any{map[string]any{"index": 0, "delta": map[string]any{}, "finish_reason": "length"}}
-		writeSilent(sseEvent(base))
+		sw.write(sseEvent(base))
 	}
-	writeSilent("data: [DONE]\n\n")
+	sw.write("data: [DONE]\n\n")
 }
 
 func (c *ChatHandler) writeStreamError(write func(string) bool, e *vertex.VertexError, requestID, model string) {
@@ -239,6 +227,15 @@ func (c *ChatHandler) oaiFakeStream(ctx context.Context, w http.ResponseWriter, 
 	resp, vErr := c.vc.CompleteChat(ctx, model, geminiPayload)
 	if vErr != nil {
 		ve := toVertexError(vErr)
+		if !sw.hasWritten() {
+			if isSafetyBlock(ve) {
+				log.Printf("[Vertex] 请求被 Google 安全审查拦截, 请求ID=%s, 原因: %s", vertex.RequestIDFromContext(ctx), ve.Status)
+				writeJSON(w, http.StatusOK, oaiSafetyResponse(model))
+				return
+			}
+			writeJSON(w, ve.Code, vertexErrorToOAI(ve))
+			return
+		}
 		c.writeStreamError(sw.write, ve, requestID, model)
 		return
 	}
@@ -276,10 +273,18 @@ func (c *ChatHandler) oaiAggregateStream(ctx context.Context, w http.ResponseWri
 	resp, vErr := c.vc.CompleteChat(ctx, model, geminiPayload)
 	if vErr != nil {
 		ve := toVertexError(vErr)
+		if !sw.hasWritten() {
+			if isSafetyBlock(ve) {
+				log.Printf("[Vertex] 请求被 Google 安全审查拦截, 请求ID=%s, 原因: %s", vertex.RequestIDFromContext(ctx), ve.Status)
+				writeJSON(w, http.StatusOK, oaiSafetyResponse(model))
+				return
+			}
+			writeJSON(w, ve.Code, vertexErrorToOAI(ve))
+			return
+		}
 		c.writeStreamError(sw.write, ve, requestID, model)
 		return
 	}
-
 	oai := c.respConv.ToOAI(resp, model)
 	contentText := firstChoiceContent(oai)
 
