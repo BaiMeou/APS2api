@@ -99,6 +99,9 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 	activeKeys := make(map[string]bool)
 	var mu sync.Mutex
 
+	cancels := make(map[string]context.CancelFunc)
+	var cancelsMu sync.Mutex
+
 	launchNode := func(uri string) {
 		mu.Lock()
 		if activeKeys[uri] {
@@ -108,12 +111,17 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 		activeKeys[uri] = true
 		mu.Unlock()
 
+		candCtx, candCancel := context.WithCancel(ctxRace)
+		cancelsMu.Lock()
+		cancels[uri] = candCancel
+		cancelsMu.Unlock()
+
 		atomic.AddInt32(&active, 1)
 		go func(u string) {
-			v, err := run(ctxRace, u)
+			v, err := run(candCtx, u)
 			select {
 			case resCh <- raceResult[T]{u, v, err}:
-			case <-ctxRace.Done():
+			case <-candCtx.Done():
 			}
 		}(uri)
 	}
@@ -160,6 +168,13 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 
 				returnedOnWinPath = true
 
+				cancelsMu.Lock()
+				for u, cancelFn := range cancels {
+					if u != res.uri {
+						cancelFn()
+					}
+				}
+				cancelsMu.Unlock()
 				collectTimeout := time.Duration(min(30, 5+cfg.ParallelPoolSize())) * time.Second
 				go func() {
 					collectCtx, collectCancel := context.WithTimeout(context.Background(), collectTimeout)

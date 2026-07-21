@@ -305,7 +305,10 @@ func normalizeContents(contents any) any {
 						if lastRole == "function" || lastRole == "tool" {
 							lastParts, _ := last["parts"].([]any)
 							currentParts, _ := m["parts"].([]any)
-							last["parts"] = append(lastParts, currentParts...)
+							mergedParts := make([]any, len(lastParts)+len(currentParts))
+							copy(mergedParts, lastParts)
+							copy(mergedParts[len(lastParts):], currentParts)
+							last["parts"] = mergedParts
 							continue
 						}
 					}

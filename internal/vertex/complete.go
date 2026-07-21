@@ -24,7 +24,8 @@ func (c *VertexAIClient) CompleteChat(ctx context.Context, model string, geminiP
 			proxy = c.cfg.ProxyURL()
 		}
 		log.Printf("[Vertex] [CompleteChat] 降级为单节点运行: %s", nodes.GetNodeName(proxy))
-		return c.runSingleCandidate(ctx, model, geminiPayload, proxy)
+		copiedPayload := deepCopyAny(geminiPayload).(map[string]any)
+		return c.runSingleCandidate(ctx, model, copiedPayload, proxy)
 	}
 
 	if c.cfg.DebugMode() {
