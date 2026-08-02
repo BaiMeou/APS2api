@@ -1,12 +1,10 @@
 const SETTINGS_FIELDS = [
   // 🚀 Group: pool (并发与 Token 池管理)
   { k: 'parallel_pool_enabled', label: '并发请求池', type: 'bool', group: 'pool', desc: '同时请求多个健康节点，首包到达即采纳，降低延迟' },
-  { k: 'parallel_pool_retry_enabled', label: '单节点重试', type: 'bool', group: 'pool', desc: '开启：重试全部由节点内部完成（429/认证/5xx 原地重打），并禁用竞速接力换节点；关闭：单节点只打一次，由竞速池接力换节点完成重试' },
+  { k: 'parallel_pool_retry_enabled', label: '单节点重试', type: 'bool', group: 'pool', desc: '开启：重试全部由节点内部完成（429/认证/5xx 原地重打），竞速层不换节点；关闭：每轮节点只打一次，全部失败后换一批新节点重试（总轮数 = 重试次数 + 1）' },
   { k: 'sticky_node_priority', label: '粘性节点优先轮询', type: 'bool', group: 'pool', desc: '启用后优先从粘性池中逐个尝试成功节点，失败即换下一个。粘性池本身始终在工作，此开关只影响优先级的分配。' },
-  { k: 'parallel_pool_size', label: '并发数', type: 'number', max: 20, min: 1, group: 'pool', desc: '并发抢跑的节点数 (默认 15，最大 20)' },
-  { k: 'parallel_pool_delay_dynamic', label: '动态对冲延迟', type: 'bool', group: 'pool', desc: '根据节点平均响应时间动态调整并发启动间隔，平衡延迟与流量消耗' },
-  { k: 'parallel_pool_delay_ms', label: '固定对冲延迟时间 (毫秒)', type: 'number', group: 'pool', desc: '当禁用动态延迟时，以此固定间隔对冲触发后续备份通道 (默认 500ms)' },
-  { k: 'race_timeout', label: '单节点竞速超时 (秒)', type: 'number', max: 1800, min: 0, group: 'pool', desc: '单个节点在该时间内未返回首包即淘汰并切换下一个候选，防止慢/卡死节点拖累整轮重试 (0 = 不限制)' },
+  { k: 'parallel_pool_size', label: '并发数', type: 'number', max: 20, min: 1, group: 'pool', desc: '每轮并发抢跑的节点数 (默认 15，最大 20)' },
+  { k: 'race_timeout', label: '单节点竞速超时 (秒)', type: 'number', max: 1800, min: 0, group: 'pool', desc: '单个节点在该时间内未返回首包即单独淘汰，避免卡死节点拖住整轮竞速 (0 = 不限制)' },
 
   // 🛠 Group: core (核心控制与基础参数)
   { k: 'max_retries', label: '上游重试次数', type: 'number', group: 'core', desc: '上游请求失败时的重试次数；总尝试 = 此值 + 1' },
