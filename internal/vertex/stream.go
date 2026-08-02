@@ -69,13 +69,11 @@ func (c *VertexAIClient) StreamChat(ctx context.Context, model string, geminiPay
 func (c *VertexAIClient) executeStreamingWithRetries(ctx context.Context, model string, geminiPayload map[string]any, proxyURI string, yield func(StreamChunk) bool) {
 	cfg := c.cfg
 	maxRetries := cfg.MaxRetries()
-	poolRetryNote := ""
 	if cfg.ParallelPoolEnabled() && !cfg.ParallelPoolRetryEnabled() {
 		maxRetries = 0
-		poolRetryNote = " (池级竞速重试，单节点仅此一次)"
 	}
-	// 0/0 日志容易误读为“没在重试”，分母归一为 1 并附带池级重试说明。
-	attemptDenom := maxRetries
+	// 日志分母永远显示用户在配置里填的真实重试数（即使被并发池策略压到 0 次，也照实显示配置值）
+	attemptDenom := cfg.MaxRetries()
 	if attemptDenom == 0 {
 		attemptDenom = 1
 	}
@@ -96,7 +94,7 @@ func (c *VertexAIClient) executeStreamingWithRetries(ctx context.Context, model 
 
 retryLoop:
 	for attempt <= maxRetries {
-		log.Printf("[Vertex] [StreamChat] 开始尝试 (Attempt %d/%d)%s, 模型=%s, 请求ID=%s, 代理=%s", attempt, attemptDenom, poolRetryNote, model, reqID, nodes.GetNodeName(proxyURI))
+		log.Printf("[Vertex] [StreamChat] 开始尝试 (Attempt %d/%d), 模型=%s, 请求ID=%s, 代理=%s", attempt, attemptDenom, model, reqID, nodes.GetNodeName(proxyURI))
 		if recaptchaToken == "" {
 			tok, _ := c.pool.GetTokenWithProxy(proxyURI)
 			recaptchaToken = tok
