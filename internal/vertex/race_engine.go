@@ -123,6 +123,8 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 		stickyPool.Evict(res.uri)
 	}
 
+	raceTimeout := cfg.RaceTimeout()
+
 	launchNode := func(uri string) {
 		mu.Lock()
 		if activeKeys[uri] {
@@ -132,7 +134,17 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 		activeKeys[uri] = true
 		mu.Unlock()
 
-		candCtx, candCancel := context.WithCancel(ctxRace)
+		// 单节点独立超时（RaceTimeout > 0 时生效）：某节点 x 秒未返回首包即单独淘汰，
+		// 走失败分支触发对冲接力换下一个候选，不影响其他节点继续竞速，
+		// 也不会让 active 永不归零而卡死整轮（429 全失败后无法进入下一次重试）。
+		// 已胜出节点不受影响（胜出即 return，其余 goroutine 随 ctxRace 释放）。
+		var candCtx context.Context
+		var candCancel context.CancelFunc
+		if raceTimeout > 0 {
+			candCtx, candCancel = context.WithTimeout(ctxRace, time.Duration(raceTimeout)*time.Second)
+		} else {
+			candCtx, candCancel = context.WithCancel(ctxRace)
+		}
 		cancelsMu.Lock()
 		cancels[uri] = candCancel
 		cancelsMu.Unlock()
@@ -140,6 +152,9 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 		atomic.AddInt32(&active, 1)
 		go func(u string) {
 			v, err := run(candCtx, u)
+			if err != nil && errors.Is(err, context.DeadlineExceeded) && raceTimeout > 0 {
+				err = NewUnavailableError(fmt.Sprintf("节点 %s 竞速超时（%d 秒），已淘汰", nodes.GetNodeName(u), raceTimeout))
+			}
 			resCh <- raceResult[T]{u, v, err}
 		}(uri)
 	}
@@ -154,16 +169,6 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 
-	// 竞速阶段最大超时（RaceTimeout > 0 时生效）：只覆盖"等待首个成功响应"阶段，
-	// 任一节点胜出后本函数立即返回，timer 随 defer 停止——已进入流式的节点绝不受影响。
-	var raceTimeoutCh <-chan time.Time
-	raceTimeout := cfg.RaceTimeout()
-	if raceTimeout > 0 {
-		raceT := time.NewTimer(time.Duration(raceTimeout) * time.Second)
-		defer raceT.Stop()
-		raceTimeoutCh = raceT.C
-	}
-
 	nextIdx := 1
 	var zero T
 
@@ -172,10 +177,6 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 		case <-ctx.Done():
 			cancel()
 			return zero, ctx.Err()
-
-		case <-raceTimeoutCh:
-			cancel()
-			return zero, NewInternalError(fmt.Sprintf("并发竞速超时（%d 秒），全部节点请求已终止", raceTimeout))
 
 		case <-timer.C:
 			if nextIdx < len(cands) {
