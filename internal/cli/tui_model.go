@@ -214,7 +214,7 @@ func (m TuiModel) buildContent(bw int) string {
 		sb.WriteString(yellowStyle.Render("│") + " " + padOrTrunc(line1, biw) + " " + yellowStyle.Render("│") + "\n")
 		sb.WriteString(yellowStyle.Render("│") + " " + padOrTrunc(m.buildInfo, biw) + " " + yellowStyle.Render("│") + "\n")
 
-		warn := "⚠️  本软件完全免费！付费即被骗，请退款。"
+		warn := "⚠  本软件完全免费！付费即被骗，请退款。"
 		sb.WriteString(yellowStyle.Render("│") + " " + redStyle.Render(padOrTrunc(warn, biw)) + " " + yellowStyle.Render("│") + "\n")
 		sb.WriteString(yellowStyle.Render(bottomBorder()) + "\n")
 	}
