@@ -269,7 +269,9 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 					return zero, res.err
 				}
 
-				if nextIdx < len(cands) {
+				if !cfg.ParallelPoolRetryEnabled() && nextIdx < len(cands) {
+					// 单节点重试关闭 → 竞速接力换节点（竞速重试）；
+					// 单节点重试开启 → 禁用竞速接力，重试由节点内 attempt 循环完成，避免双重重试。
 					if cfg.DebugMode() {
 						log.Printf("[Racing] 竞速失败触发极速对冲接力...")
 					}
