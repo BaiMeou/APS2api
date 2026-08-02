@@ -20,6 +20,8 @@ type raceConfig struct {
 	noCancelOnSuccess bool
 }
 
+type raceRoundKey struct{}
+
 func WithNoCancelOnSuccess() RaceOption {
 	return func(cfg *raceConfig) {
 		cfg.noCancelOnSuccess = true
@@ -132,40 +134,41 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 		stickyPool.Evict(res.uri)
 	}
 
-	launchBatch := func(cands []nodes.Node, resCh chan raceResult[T], active *int32) {
-		for _, c := range cands {
-			uri := c.RawURI
-			usedURIs[uri] = true
-
-			// 单节点独立超时（RaceTimeout > 0 时生效）：某节点 x 秒未返回即单独淘汰，
-			// 不影响其他节点继续竞速，也不会让 active 永不归零而卡死整轮换批。
-			var candCtx context.Context
-			var candCancel context.CancelFunc
-			if raceTimeout > 0 {
-				candCtx, candCancel = context.WithTimeout(ctxRace, time.Duration(raceTimeout)*time.Second)
-			} else {
-				candCtx, candCancel = context.WithCancel(ctxRace)
-			}
-			cancelsMu.Lock()
-			cancels[uri] = candCancel
-			cancelsMu.Unlock()
-
-			atomic.AddInt32(active, 1)
-			go func(u string) {
-				v, err := run(candCtx, u)
-				if err != nil && errors.Is(err, context.DeadlineExceeded) && raceTimeout > 0 {
-					err = NewUnavailableError(fmt.Sprintf("节点 %s 竞速超时（%d 秒），已淘汰", nodes.GetNodeName(u), raceTimeout))
-				}
-				resCh <- raceResult[T]{u, v, err}
-			}(uri)
-		}
-	}
-
 	var lastErr error
 
-	for {
+	for round := 0; ; round++ {
 		resCh := make(chan raceResult[T], len(cands))
 		var active int32
+
+		launchBatch := func(cands []nodes.Node, resCh chan raceResult[T], active *int32) {
+			for _, c := range cands {
+				uri := c.RawURI
+				usedURIs[uri] = true
+
+				var candCtx context.Context
+				var candCancel context.CancelFunc
+				if raceTimeout > 0 {
+					candCtx, candCancel = context.WithTimeout(ctxRace, time.Duration(raceTimeout)*time.Second)
+				} else {
+					candCtx, candCancel = context.WithCancel(ctxRace)
+				}
+				candCtx = context.WithValue(candCtx, raceRoundKey{}, round)
+
+				cancelsMu.Lock()
+				cancels[uri] = candCancel
+				cancelsMu.Unlock()
+
+				atomic.AddInt32(active, 1)
+				go func(u string) {
+					v, err := run(candCtx, u)
+					if err != nil && errors.Is(err, context.DeadlineExceeded) && raceTimeout > 0 {
+						err = NewUnavailableError(fmt.Sprintf("节点 %s 竞速超时（%d 秒），已淘汰", nodes.GetNodeName(u), raceTimeout))
+					}
+					resCh <- raceResult[T]{u, v, err}
+				}(uri)
+			}
+		}
+
 		launchBatch(cands, resCh, &active)
 
 	InnerLoop:
@@ -267,6 +270,13 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 					// 本轮全部结束且无成功：换一批从未用过的节点再试（关单节点重试模式）。
 					if roundBudget > 0 {
 						next := selectFreshCands()
+						if len(next) == 0 {
+							if cfg.DebugMode() {
+								log.Printf("[Racing] 新鲜节点已耗尽，清空防重过滤，允许节点跨轮次重试复用...")
+							}
+							usedURIs = make(map[string]bool)
+							next = selectFreshCands()
+						}
 						if len(next) == 0 {
 							cancel()
 							if lastErr != nil {

@@ -98,9 +98,14 @@ func (c *VertexAIClient) executeStreamingWithRetries(ctx context.Context, model 
 	isFirstAuth := true
 	attempt := 0
 
+	baseAttempt := 0
+	if val, ok := ctx.Value(raceRoundKey{}).(int); ok && (!cfg.ParallelPoolEnabled() || !cfg.ParallelPoolRetryEnabled()) {
+		baseAttempt = val
+	}
+
 retryLoop:
 	for attempt <= maxRetries {
-		log.Printf("[Vertex] [StreamChat] 开始尝试 (Attempt %d/%d), 模型=%s, 请求ID=%s, 代理=%s", attempt, attemptDenom, model, reqID, nodes.GetNodeName(proxyURI))
+		log.Printf("[Vertex] [StreamChat] 开始尝试 (Attempt %d/%d), 模型=%s, 请求ID=%s, 代理=%s", attempt+baseAttempt, attemptDenom, model, reqID, nodes.GetNodeName(proxyURI))
 		if recaptchaToken == "" {
 			tok, _ := c.pool.GetTokenWithProxy(proxyURI)
 			recaptchaToken = tok
@@ -165,7 +170,7 @@ retryLoop:
 		case ve != nil && ve.Kind == "ratelimit":
 			lastError = ve
 			if contentYielded || attempt >= maxRetries {
-				log.Printf("[Vertex] [StreamChat] (Attempt %d/%d) 节点 %s 触发 429 失败, 请求ID=%s, 代理=%s", attempt, attemptDenom, model, reqID, nodes.GetNodeName(proxyURI))
+				log.Printf("[Vertex] [StreamChat] (Attempt %d/%d) 节点 %s 触发 429 失败, 请求ID=%s, 代理=%s", attempt+baseAttempt, attemptDenom, model, reqID, nodes.GetNodeName(proxyURI))
 				break retryLoop
 			}
 			// 429：销毁旧 session 重建新的，换 token。
@@ -183,7 +188,7 @@ retryLoop:
 			if wait <= 0 {
 				wait = min(10, 1+attempt)
 			}
-			log.Printf("[Vertex] [StreamChat] (Attempt %d/%d) 节点 %s 触发 429 将重试 (延迟 %ds), 请求ID=%s, 代理=%s", attempt, attemptDenom, model, wait, reqID, nodes.GetNodeName(proxyURI))
+			log.Printf("[Vertex] [StreamChat] (Attempt %d/%d) 节点 %s 触发 429 将重试 (延迟 %ds), 请求ID=%s, 代理=%s", attempt+baseAttempt, attemptDenom, model, wait, reqID, nodes.GetNodeName(proxyURI))
 			attempt++
 			if err := sleepCtx(ctx, time.Duration(wait)*time.Second); err != nil {
 				break retryLoop
@@ -193,10 +198,10 @@ retryLoop:
 			lastError = ve
 			// 【关键改动】：如果是网络不通等内部错误，直接熔断并停止重试。
 			if ve.Kind == "internal" || !ve.IsRetryable() || contentYielded || attempt >= maxRetries {
-				log.Printf("[Vertex] [StreamChat] (Attempt %d/%d) 节点 %s 触发异常错误失败: [%s] %s, 请求ID=%s, 代理=%s", attempt, attemptDenom, model, ve.Kind, ve.Message, reqID, nodes.GetNodeName(proxyURI))
+				log.Printf("[Vertex] [StreamChat] (Attempt %d/%d) 节点 %s 触发异常错误失败: [%s] %s, 请求ID=%s, 代理=%s", attempt+baseAttempt, attemptDenom, model, ve.Kind, ve.Message, reqID, nodes.GetNodeName(proxyURI))
 				break retryLoop
 			}
-			log.Printf("[Vertex] [StreamChat] (Attempt %d/%d) 节点 %s 触发异常错误将重试: [%s] %s, 请求ID=%s, 代理=%s", attempt, attemptDenom, model, ve.Kind, ve.Message, reqID, nodes.GetNodeName(proxyURI))
+			log.Printf("[Vertex] [StreamChat] (Attempt %d/%d) 节点 %s 触发异常错误将重试: [%s] %s, 请求ID=%s, 代理=%s", attempt+baseAttempt, attemptDenom, model, ve.Kind, ve.Message, reqID, nodes.GetNodeName(proxyURI))
 			attempt++
 			if err := sleepCtx(ctx, backoff(attempt)); err != nil {
 				break retryLoop
