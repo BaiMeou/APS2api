@@ -8,10 +8,11 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"math/rand"
+	"math/rand/v2"
 	"net/url"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bsfdsagfadg/vertex/internal/nodes"
@@ -24,7 +25,6 @@ const (
 	siteKey       = "6LdCjtspAAAAAMcV4TGdWLJqRTEk1TfpdLqEnKdj"
 	recaptchaCo   = "aHR0cHM6Ly9jb25zb2xlLmNsb3VkLmdvb2dsZS5jb206NDQz"
 	recaptchaHl   = "zh-CN"
-	recaptchaV    = "jdMmXeCQEkPbnFDy9T04NbgJ"
 	recaptchaVh   = "6581054572"
 	randomCharset = "abcdefghijklmnopqrstuvwxyz0123456789"
 )
@@ -34,12 +34,70 @@ var (
 	tokenRe = regexp.MustCompile(`id="recaptcha-token"[^>]*value="([^"]+)"`)
 	// 从 reload 响应抠最终 token。
 	rrespRe = regexp.MustCompile(`rresp","(.*?)"`)
+	// 从 enterprise.js 提取 reCAPTCHA release 版本号（Google 定期滚动，不能硬编码）。
+	versionRe = regexp.MustCompile(`releases/([A-Za-z0-9_-]{20,})`)
+
+	versionMu sync.Mutex //nolint:gochecknoglobals
+	cachedVer string //nolint:gochecknoglobals
 )
+
+// versionUA 拉取 enterprise.js 时使用的浏览器 UA（与 transport 包保持一致）。
+const versionUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
+
+// fetchVersionFromJS 从 enterprise.js 提取当前 reCAPTCHA release 版本号。
+//
+// 版本号 Google 会定期滚动：硬编码旧版本会让 reload 换发的 token 第一次被
+// batchGraphql 评估时失败（"Failed to verify action"），同 token 重试一次才过。
+// 动态拉取当前版本后首帧即可通过（实测）。
+func fetchVersionFromJS(net *transport.NetworkClient, proxyURI string) (string, bool) {
+	sess, err := net.CreateSession(15, proxyURI, "recaptcha-version")
+	if err != nil {
+		return "", false
+	}
+	defer sess.Close()
+
+	h := transport.Header{
+		"user-agent":      {versionUA},
+		"accept":          {"*/*"},
+		"accept-language": {"zh-CN,zh;q=0.9,en;q=0.8"},
+	}
+	_, body, err := sess.DoAndRead(context.Background(), "GET", recaptchaBase+"/recaptcha/enterprise.js", h, nil)
+	if err != nil {
+		return "", false
+	}
+	m := versionRe.FindSubmatch(body)
+	if m == nil {
+		return "", false
+	}
+	return string(m[1]), true
+}
+
+// currentVersion 返回缓存的 reCAPTCHA 版本号，未缓存则现场拉取。
+func currentVersion(net *transport.NetworkClient, proxyURI string) (string, bool) {
+	versionMu.Lock()
+	defer versionMu.Unlock()
+	if cachedVer != "" {
+		return cachedVer, true
+	}
+	v, ok := fetchVersionFromJS(net, proxyURI)
+	if ok {
+		cachedVer = v
+	}
+	return v, ok
+}
+
+// invalidateVersion 清除版本缓存：token 获取失败时调用，强制下一次重新拉取版本
+// （旧版本号过期是 token 失败的首要原因）。
+func invalidateVersion() {
+	versionMu.Lock()
+	cachedVer = ""
+	versionMu.Unlock()
+}
 
 func randomString(n int) string {
 	b := make([]byte, n)
 	for i := range b {
-		b[i] = randomCharset[rand.Intn(len(randomCharset))]
+		b[i] = randomCharset[rand.IntN(len(randomCharset))]
 	}
 	return string(b)
 }
@@ -62,13 +120,23 @@ func FetchRecaptchaToken(net *transport.NetworkClient, proxyURI string, debugMod
 		if debugMode {
 			log.Printf("[Recaptcha] [节点: %s] 开始获取 reCAPTCHA token (尝试 %d/3)", nodeName, retry+1)
 		}
-		if token, ok := fetchOnce(net, proxyURI); ok {
+		version, ok := currentVersion(net, proxyURI)
+		if !ok {
+			invalidateVersion()
+			if debugMode {
+				log.Printf("[Recaptcha] [节点: %s] 拉取 reCAPTCHA 版本号失败 (尝试 %d/3)", nodeName, retry+1)
+			}
+			continue
+		}
+		if token, ok := fetchOnce(net, proxyURI, version); ok {
 			elapsed := time.Since(start)
 			if debugMode {
 				log.Printf("[Recaptcha] [节点: %s] 成功获取 reCAPTCHA token, 耗时: %d ms", nodeName, elapsed.Milliseconds())
 			}
 			return token, nil
 		}
+		// token 获取失败：大概率版本号已过期，清缓存强制重新拉取。
+		invalidateVersion()
 	}
 	elapsed := time.Since(start)
 	if debugMode {
@@ -77,7 +145,7 @@ func FetchRecaptchaToken(net *transport.NetworkClient, proxyURI string, debugMod
 	return "", nil
 }
 
-func fetchOnce(net *transport.NetworkClient, proxyURI string) (string, bool) {
+func fetchOnce(net *transport.NetworkClient, proxyURI string, version string) (string, bool) {
 	sess, err := net.CreateSession(15, proxyURI, "recaptcha")
 	if err != nil {
 		return "", false
@@ -87,7 +155,7 @@ func fetchOnce(net *transport.NetworkClient, proxyURI string) (string, bool) {
 	cb := randomString(10)
 	anchorURL := fmt.Sprintf(
 		"%s/recaptcha/enterprise/anchor?ar=1&k=%s&co=%s&hl=%s&v=%s&size=invisible&anchor-ms=20000&execute-ms=15000&cb=%s",
-		recaptchaBase, siteKey, recaptchaCo, recaptchaHl, recaptchaV, cb,
+		recaptchaBase, siteKey, recaptchaCo, recaptchaHl, version, cb,
 	)
 
 	// token 预取与具体请求无关（后台细流），故用 context.Background()，不随某个请求取消。
@@ -107,7 +175,7 @@ func fetchOnce(net *transport.NetworkClient, proxyURI string) (string, bool) {
 	baseToken := string(m[1])
 
 	form := url.Values{
-		"v":      {recaptchaV},
+		"v":      {version},
 		"reason": {"q"},
 		"k":      {siteKey},
 		"c":      {baseToken},
