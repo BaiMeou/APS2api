@@ -8,8 +8,9 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
 	"charm.land/bubbletea/v2"
-	"github.com/mattn/go-runewidth"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/rivo/uniseg"
 )
 
@@ -145,12 +146,14 @@ func (logInterceptor) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// stringWidth 使用 Bubble Tea 渲染引擎同源的 x/ansi 宽度计算（EastAsianWidth=false），
+// 与 TUI 实际渲染布局保持一致，避免 box-drawing/emoji 宽度歧义导致边框错位。
 func stringWidth(s string) int {
-	return runewidth.StringWidth(s)
+	return ansi.StringWidth(s)
 }
 
 func padOrTrunc(s string, maxCol int) string {
-	w := runewidth.StringWidth(s)
+	w := ansi.StringWidth(s)
 	if w <= maxCol {
 		return s + strings.Repeat(" ", maxCol-w)
 	}
@@ -161,7 +164,7 @@ func padOrTrunc(s string, maxCol int) string {
 	cur := 0
 	g := uniseg.NewGraphemes(s)
 	for g.Next() {
-		gw := runewidth.StringWidth(g.Str())
+		gw := ansi.StringWidth(g.Str())
 		if cur+gw > maxCol-2 {
 			break
 		}
@@ -180,9 +183,9 @@ func wordWrap(text string, maxCol int) []string {
 	if maxCol <= 0 {
 		return []string{text}
 	}
-	w := runewidth.StringWidth(text)
+	w := ansi.StringWidth(text)
 	if w <= maxCol {
-		return []string{runewidth.FillRight(text, maxCol)}
+		return []string{text + strings.Repeat(" ", maxCol-w)}
 	}
 
 	g := uniseg.NewGraphemes(text)
@@ -194,7 +197,7 @@ func wordWrap(text string, maxCol int) []string {
 	for g.Next() {
 		items = append(items, graphemeItem{
 			str:   g.Str(),
-			width: runewidth.StringWidth(g.Str()),
+			width: ansi.StringWidth(g.Str()),
 		})
 	}
 
