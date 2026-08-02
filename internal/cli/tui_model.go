@@ -64,9 +64,15 @@ func (m TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if text == "" {
 			return m, nil
 		}
-		m.logBuffer = append(m.logBuffer, text)
+		for _, ln := range strings.Split(text, "\n") {
+			ln = strings.TrimSpace(ln)
+			if ln == "" {
+				continue
+			}
+			m.logBuffer = append(m.logBuffer, ln)
+		}
 		if len(m.logBuffer) > maxLogs*3 {
-			m.logBuffer = m.logBuffer[1:]
+			m.logBuffer = m.logBuffer[len(m.logBuffer)-maxLogs*3:]
 		}
 		return m, nil
 
