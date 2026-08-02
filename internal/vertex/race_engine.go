@@ -154,6 +154,16 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 
+	// 竞速阶段最大超时（RaceTimeout > 0 时生效）：只覆盖"等待首个成功响应"阶段，
+	// 任一节点胜出后本函数立即返回，timer 随 defer 停止——已进入流式的节点绝不受影响。
+	var raceTimeoutCh <-chan time.Time
+	raceTimeout := cfg.RaceTimeout()
+	if raceTimeout > 0 {
+		raceT := time.NewTimer(time.Duration(raceTimeout) * time.Second)
+		defer raceT.Stop()
+		raceTimeoutCh = raceT.C
+	}
+
 	nextIdx := 1
 	var zero T
 
@@ -162,6 +172,10 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 		case <-ctx.Done():
 			cancel()
 			return zero, ctx.Err()
+
+		case <-raceTimeoutCh:
+			cancel()
+			return zero, NewInternalError(fmt.Sprintf("并发竞速超时（%d 秒），全部节点请求已终止", raceTimeout))
 
 		case <-timer.C:
 			if nextIdx < len(cands) {

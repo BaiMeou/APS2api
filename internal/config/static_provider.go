@@ -13,11 +13,13 @@ func (s staticConfig) ProxyURL() string                  { return s.c.ProxyURL }
 func (s staticConfig) DebugPprof() bool                  { return s.c.DebugPprof }
 func (s staticConfig) DebugMode() bool                   { return s.c.DebugMode }
 func (s staticConfig) DropMaxTokens() bool               { return s.c.DropMaxTokens }
-func (s staticConfig) AggregateStream() bool               { return s.c.AggregateStream }
+func (s staticConfig) AggregateStream() bool             { return s.c.AggregateStream }
 func (s staticConfig) MaxN() int                         { return s.c.MaxN }
 func (s staticConfig) MaxRequestMB() int                 { return s.c.MaxRequestMB }
 func (s staticConfig) MaxSpillMB() int                   { return s.c.MaxSpillMB }
 func (s staticConfig) RequestTimeout() int               { return s.c.RequestTimeout }
+func (s staticConfig) RaceTimeout() int                  { return s.c.RaceTimeout }
+func (s staticConfig) ModelTurnGuardEnabled() bool       { return s.c.ModelTurnGuardEnabled }
 func (s staticConfig) VertexAPIKey() string              { return s.c.VertexAPIKey }
 func (s staticConfig) CountTokensQuerySignature() string { return s.c.CountTokensQuerySignature }
 func (s staticConfig) SafetySettings() map[string]string { return s.c.SafetySettings }

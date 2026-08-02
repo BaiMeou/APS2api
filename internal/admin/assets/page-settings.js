@@ -6,6 +6,7 @@ const SETTINGS_FIELDS = [
   { k: 'parallel_pool_size', label: '并发数', type: 'number', max: 20, min: 1, group: 'pool', desc: '并发抢跑的节点数 (默认 15，最大 20)' },
   { k: 'parallel_pool_delay_dynamic', label: '动态对冲延迟', type: 'bool', group: 'pool', desc: '根据节点平均响应时间动态调整并发启动间隔，平衡延迟与流量消耗' },
   { k: 'parallel_pool_delay_ms', label: '固定对冲延迟时间 (毫秒)', type: 'number', group: 'pool', desc: '当禁用动态延迟时，以此固定间隔对冲触发后续备份通道 (默认 500ms)' },
+  { k: 'race_timeout', label: '并发竞速最大超时 (秒)', type: 'number', max: 1800, min: 0, group: 'pool', desc: '并发抢跑阶段整体超时上限：所有节点在该时间内未返回首个包则全部终止，防止慢节点拖垮整体速度 (0 = 不限制)' },
 
   // 🛠 Group: core (核心控制与基础参数)
   { k: 'max_retries', label: '上游重试次数', type: 'number', group: 'core', desc: '上游请求失败时的重试次数；总尝试 = 此值 + 1' },
@@ -13,6 +14,7 @@ const SETTINGS_FIELDS = [
   { k: 'max_spill_mb', label: '最大内存缓冲 (MB)', type: 'number', group: 'core', desc: '上传大文件时，超过此大小将写入磁盘，防爆内存 (默认 2048)' },
   { k: 'request_timeout', label: '请求超时', type: 'number', max: 1800, min: 1, group: 'core', desc: '单次请求的最大连接时间 (默认 180 秒，最大 1800 秒)' },
   { k: 'aggregate_stream', label: '聚合流式', type: 'bool', group: 'core', desc: '拦截流式请求，改为一次性返回完整结果的单块流（解决部分客户端单字流式卡顿问题）' },
+  { k: 'model_turn_guard_enabled', label: '新模型轮次补齐', type: 'bool', group: 'core', desc: '对 gemini-3.6flash / 3.5-flash-lite 等新模型，自动在消息末尾追加空用户消息，修复“末尾不能是 model”校验报错' },
   { k: 'debug_mode', label: 'Debug 日志', type: 'bool', group: 'core', desc: '开启更详细的错误与负载调试日志' },
 
   // 🛡 Group: security (安全增强与模型策略)

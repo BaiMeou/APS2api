@@ -88,21 +88,30 @@ func loadModelsFile() *modelsFile {
 		if errUnm := json.Unmarshal(data, &parsed); errUnm != nil { //nolint:govet
 			log.Printf("[Config] 解析 models.json 失败: %v", err)
 		} else if len(parsed.Models) > 0 {
-			hasNewModel := false
-			for _, m := range parsed.Models {
-				if m == "gemini-3.6-flash" {
-					hasNewModel = true
-					break
-				}
-			}
-
 			if parsed.AliasMap != nil {
 				mf.AliasMap = parsed.AliasMap
 			}
 
-			if !hasNewModel {
-				log.Printf("[Config] 检测到 models.json 缺少 gemini-3.6-flash，正使用内置最新模型列表进行升级覆盖")
-				mf.Models = defaultModels
+			// 合并升级：内置 defaultModels 里新增的模型（如 gemini-3.6-flash）
+			// 自动补齐，保留用户已有自定义列表，不做整体覆盖（避免丢失用户裁剪的模型）。
+			merged := append([]string{}, parsed.Models...)
+			added := 0
+			for _, dm := range defaultModels {
+				found := false
+				for _, pm := range merged {
+					if pm == dm {
+						found = true
+						break
+					}
+				}
+				if !found {
+					merged = append(merged, dm)
+					added++
+				}
+			}
+			if added > 0 {
+				log.Printf("[Config] 检测到 models.json 缺少 %d 个新模型，已自动补充", added)
+				mf.Models = merged
 				if errWrite := writeJSONFile(modelsPath(), *mf); errWrite != nil {
 					log.Printf("[Config] 自动升级 models.json 失败: %v", errWrite)
 				}

@@ -29,6 +29,8 @@ type AppConfig struct { //nolint:govet
 	MaxSpillMB                int               `json:"max_spill_mb"`
 	MaxRequestMB              int               `json:"max_request_mb"`
 	RequestTimeout            int               `json:"request_timeout"`
+	RaceTimeout               int               `json:"race_timeout"`
+	ModelTurnGuardEnabled     bool              `json:"model_turn_guard_enabled"`
 
 	// 并发池与节点锁定配置
 	ActiveNodeURI            string `json:"active_node_uri"`
@@ -64,6 +66,8 @@ func DefaultConfig() AppConfig {
 		MaxN:                      8,
 		MaxSpillMB:                2048,
 		RequestTimeout:            180,
+		RaceTimeout:               0,
+		ModelTurnGuardEnabled:     true,
 		ParallelPoolEnabled:       true,
 		StickyNodePriority:        false,
 		ParallelPoolSize:          15, // 默认为 15 并发
@@ -164,6 +168,10 @@ func Load() AppConfig {
 			} else if cfg.RequestTimeout > 1800 {
 				log.Printf("[Config] 警告: 请求超时配置过高 (%d)，已限制为上限 1800", cfg.RequestTimeout)
 				cfg.RequestTimeout = 1800
+				needsSave = true
+			}
+			if cfg.RaceTimeout < 0 {
+				cfg.RaceTimeout = 0
 				needsSave = true
 			}
 			// 拦截在文件读取配置时过高的并发数限制为 20

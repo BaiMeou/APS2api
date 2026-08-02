@@ -15,6 +15,8 @@ type ConfigProvider interface {
 	MaxRequestMB() int
 	MaxSpillMB() int
 	RequestTimeout() int
+	RaceTimeout() int
+	ModelTurnGuardEnabled() bool
 
 	VertexAPIKey() string
 	CountTokensQuerySignature() string
@@ -65,11 +67,13 @@ func (d dynamicConfig) ProxyURL() string                  { return Load().ProxyU
 func (d dynamicConfig) DebugPprof() bool                  { return Load().DebugPprof }
 func (d dynamicConfig) DebugMode() bool                   { return Load().DebugMode }
 func (d dynamicConfig) DropMaxTokens() bool               { return Load().DropMaxTokens }
-func (d dynamicConfig) AggregateStream() bool               { return Load().AggregateStream }
+func (d dynamicConfig) AggregateStream() bool             { return Load().AggregateStream }
 func (d dynamicConfig) MaxN() int                         { return Load().MaxN }
 func (d dynamicConfig) MaxRequestMB() int                 { return Load().MaxRequestMB }
 func (d dynamicConfig) MaxSpillMB() int                   { return Load().MaxSpillMB }
 func (d dynamicConfig) RequestTimeout() int               { return Load().RequestTimeout }
+func (d dynamicConfig) RaceTimeout() int                  { return Load().RaceTimeout }
+func (d dynamicConfig) ModelTurnGuardEnabled() bool       { return Load().ModelTurnGuardEnabled }
 func (d dynamicConfig) VertexAPIKey() string              { return Load().VertexAPIKey }
 func (d dynamicConfig) CountTokensQuerySignature() string { return Load().CountTokensQuerySignature }
 func (d dynamicConfig) SafetySettings() map[string]string {
