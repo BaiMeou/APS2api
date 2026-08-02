@@ -11,6 +11,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bsfdsagfadg/vertex/internal/nodes"
@@ -224,6 +225,18 @@ retryLoop:
 		yield(StreamChunk{Err: lastError})
 	}
 }
+type idleTouchingReader struct {
+	r     io.Reader
+	touch func()
+}
+
+func (ir *idleTouchingReader) Read(p []byte) (int, error) {
+	n, err := ir.r.Read(p)
+	if n > 0 {
+		ir.touch()
+	}
+	return n, err
+}
 
 // executeStreamingAttempt 执行单次流式请求：发请求 → 增量扫描 JSON → 提取 chunk → 过滤 finishReason。
 //
@@ -251,9 +264,73 @@ func (c *VertexAIClient) executeStreamingAttempt(ctx context.Context, sess *tran
 		"https://console.cloud.google.com", "https://console.cloud.google.com/", "cross-site",
 	)
 
-	sr, err := sess.DoStream(ctx, "POST", c.getBatchGraphqlURL(), header, reader)
+	streamReqCtx, cancelStreamReq := context.WithCancel(ctx)
+	defer cancelStreamReq()
+
+	preTimeout := time.Duration(max(cfg.StreamIdleTimeoutSeconds()*2, 40)) * time.Second
+	postTimeout := time.Duration(cfg.StreamIdleTimeoutSeconds()) * time.Second
+
+	var (
+		srRef              atomic.Pointer[transport.StreamResponse]
+		lastActiveUnixNano atomic.Int64
+		hasReceivedFirst   atomic.Bool
+		idleTriggered      atomic.Bool
+	)
+	lastActiveUnixNano.Store(time.Now().UnixNano())
+
+	touchActivity := func() {
+		lastActiveUnixNano.Store(time.Now().UnixNano())
+		hasReceivedFirst.CompareAndSwap(false, true)
+	}
+
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				last := time.Unix(0, lastActiveUnixNano.Load())
+				elapsed := time.Since(last)
+				timeout := preTimeout
+				if hasReceivedFirst.Load() {
+					timeout = postTimeout
+				}
+				if elapsed > timeout {
+					if idleTriggered.CompareAndSwap(false, true) {
+						log.Printf("[Vertex] [Stream] 触发流包间空闲超时 (已静默 %v > 阈值 %v), 切断连接, 请求ID=%s", elapsed.Round(time.Millisecond), timeout, reqID)
+						cancelStreamReq()
+						if sr := srRef.Load(); sr != nil && sr.Body != nil {
+							_ = sr.Body.Close()
+						}
+					}
+					return
+				}
+			case <-ctx.Done():
+				cancelStreamReq()
+				if sr := srRef.Load(); sr != nil && sr.Body != nil {
+					_ = sr.Body.Close()
+				}
+				return
+			}
+		}
+	}()
+
+	sr, err := sess.DoStream(streamReqCtx, "POST", c.getBatchGraphqlURL(), header, reader)
 	if err != nil {
+		if idleTriggered.Load() {
+			return NewUnavailableError("stream idle timeout before first byte")
+		}
 		return NewInternalError("upstream request: " + err.Error())
+	}
+	
+	srRef.Store(sr)
+	if idleTriggered.Load() {
+		sr.Close()
+		return NewUnavailableError("stream idle timeout before first byte")
 	}
 	defer sr.Close() // 排干 → close，防串流。
 
@@ -285,10 +362,14 @@ func (c *VertexAIClient) executeStreamingAttempt(ctx context.Context, sess *tran
 	}
 
 	// 增量扫描上游流，逐个完整 JSON 对象提取 chunk。
-	scanErr := scanStream(sr.Body, func(obj map[string]any) (stop bool, err error) {
+	scanErr := scanStream(&idleTouchingReader{r: sr.Body, touch: touchActivity}, func(obj map[string]any) (stop bool, err error) {
 		// 从单个上游对象提取（可能多个）chunk，逐个 emit；命中真实 finishReason 即结束。
 		return processStreamingObject(obj, emit)
 	})
+
+	if idleTriggered.Load() {
+		return NewUnavailableError("stream chunk idle timeout")
+	}
 
 	if scanErr != nil && cfg.DebugMode() && !errors.Is(scanErr, context.Canceled) {
 		debugReq, _ := json.Marshal(newBody)

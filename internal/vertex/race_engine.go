@@ -14,17 +14,44 @@ import (
 	"github.com/bsfdsagfadg/vertex/internal/nodes"
 )
 
-type RaceOption func(*raceConfig)
-
-type raceConfig struct {
+// raceConfig 是 RunRace 的可配置策略。
+type raceConfig[T any] struct {
 	noCancelOnSuccess bool
+	// isWinningResult 决定某个成功结果是否可"立即胜出"。
+	// nil 表示首个无错误结果立即胜出（流式默认）。
+	// 非 nil：返回 true 即时胜出，false 表示结果被收集（CompleteChat 的非 STOP 结果）。
+	isWinningResult func(val T) bool
+	// collectedResults 累积 isWinningResult 返回 false 的成功结果。
+	collectedResults []raceResult[T]
+	// finalizeCollected 在收集多个非胜出结果后调用，选出最佳结果。
+	// nil 时直接返回收集到的第一个结果。
+	finalizeCollected func([]raceResult[T]) (T, error)
 }
+
+type RaceOption[T any] func(*raceConfig[T])
 
 type raceRoundKey struct{}
 
-func WithNoCancelOnSuccess() RaceOption {
-	return func(cfg *raceConfig) {
+// WithNoCancelOnSuccess 使胜出路径上不 cancel 主竞速 ctx（流式胜出后保留主 ctx 让数据流继续传完）。
+func WithNoCancelOnSuccess[T any]() RaceOption[T] {
+	return func(cfg *raceConfig[T]) {
 		cfg.noCancelOnSuccess = true
+	}
+}
+
+// WithWinningCheck 注入成功判定：fn 返回 true 时该结果立即胜出；
+// fn 返回 false 时结果被收集，所有候选结束后通过 WithCollectedFinalizer 选最佳结果。
+func WithWinningCheck[T any](fn func(T) bool) RaceOption[T] {
+	return func(cfg *raceConfig[T]) {
+		cfg.isWinningResult = fn
+	}
+}
+
+// WithCollectedFinalizer 注入最终结果选择函数，在收集多个非胜出结果后调用。
+// 默认行为：返回收集到的第一个结果。
+func WithCollectedFinalizer[T any](fn func([]raceResult[T]) (T, error)) RaceOption[T] {
+	return func(cfg *raceConfig[T]) {
+		cfg.finalizeCollected = fn
 	}
 }
 
@@ -32,6 +59,40 @@ type raceResult[T any] struct {
 	uri string
 	val T
 	err error
+}
+
+// errorPriority 返回错误的优先级数值（越小优先级越高）。
+// 核心原则：可重试错误优先级高于不可重试错误。
+// 当任意节点返回可重试错误时，客户端可据此判断应重试，
+// 而不是被不可重试错误直接中断。
+func errorPriority(err error) int {
+	var ve *VertexError
+	if errors.As(err, &ve) {
+		if ve.IsRetryable() {
+			if ve.Kind == "ratelimit" || ve.Code == 429 {
+				return 1
+			}
+			return 2
+		}
+		return 3
+	}
+	return 4
+}
+
+// pickBestError 从多个错误中挑选优先级最高（数值最小）的一个返回。
+func pickBestError(errs []error) error {
+	if len(errs) == 0 {
+		return fmt.Errorf("all nodes failed")
+	}
+	best := errs[0]
+	bestPrio := errorPriority(best)
+	for _, e := range errs[1:] {
+		if p := errorPriority(e); p < bestPrio {
+			best = e
+			bestPrio = p
+		}
+	}
+	return best
 }
 
 // RunRace runs a standard concurrent race across candidate nodes.
@@ -53,9 +114,9 @@ type raceResult[T any] struct {
 //   - context.Canceled 不视为失败。
 func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 	run func(ctx context.Context, proxyURI string) (T, error),
-	opts ...RaceOption,
+	opts ...RaceOption[T],
 ) (T, error) {
-	var rc raceConfig
+	var rc raceConfig[T]
 	for _, o := range opts {
 		o(&rc)
 	}
@@ -134,7 +195,7 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 		stickyPool.Evict(res.uri)
 	}
 
-	var lastErr error
+	var failedErrors []error
 
 	for round := 0; ; round++ {
 		resCh := make(chan raceResult[T], len(cands))
@@ -160,6 +221,8 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 
 				atomic.AddInt32(active, 1)
 				go func(u string) {
+					nodes.IncInFlight(u)
+					defer nodes.DecInFlight(u)
 					v, err := run(candCtx, u)
 					if err != nil && errors.Is(err, context.DeadlineExceeded) && raceTimeout > 0 {
 						err = NewUnavailableError(fmt.Sprintf("节点 %s 竞速超时（%d 秒），已淘汰", nodes.GetNodeName(u), raceTimeout))
@@ -183,91 +246,108 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 				name := nodes.GetNodeName(res.uri)
 
 				if res.err == nil {
-					log.Printf("[Racing] 竞速胜出节点: %s", name)
-					cli.UpdateReqWinner(RequestIDFromContext(ctx), name)
-					cli.UpdateReqState(RequestIDFromContext(ctx), "🟢 数据传输", "\033[32m", "已建立连接")
-					nodes.RecordTest(res.uri, true, 50, "")
-					stickyPool.Add(res.uri)
+					// 判定是否可立即胜出。
+					if rc.isWinningResult == nil || rc.isWinningResult(res.val) {
+						log.Printf("[Racing] 竞速胜出节点: %s", name)
+						cli.UpdateReqWinner(RequestIDFromContext(ctx), name)
+						cli.UpdateReqState(RequestIDFromContext(ctx), "🟢 数据传输", "\033[32m", "已建立连接")
+						nodes.RecordTest(res.uri, true, 50, "")
+						stickyPool.Add(res.uri)
 
-					returnedOnWinPath = true
+						returnedOnWinPath = true
 
-					if !rc.noCancelOnSuccess {
-						cancelsMu.Lock()
-						for u, cancelFn := range cancels {
-							if u != res.uri {
-								cancelFn()
-							}
-						}
-						cancelsMu.Unlock()
-					}
-
-					collectTimeout := time.Duration(min(30, 5+cfg.ParallelPoolSize())) * time.Second
-					go func() {
-						collectCtx, collectCancel := context.WithTimeout(context.Background(), collectTimeout)
-						defer collectCancel()
-						if atomic.LoadInt32(&active) == 0 {
-							if !rc.noCancelOnSuccess {
-								cancel()
-							}
-							return
-						}
-						for {
-							select {
-							case bgRes := <-resCh:
-								atomic.AddInt32(&active, -1)
-								recordResult(bgRes)
-								if atomic.LoadInt32(&active) == 0 {
-									if !rc.noCancelOnSuccess {
-										cancel()
-									}
-									return
+						if !rc.noCancelOnSuccess {
+							cancelsMu.Lock()
+							for u, cancelFn := range cancels {
+								if u != res.uri {
+									cancelFn()
 								}
-							case <-collectCtx.Done():
+							}
+							cancelsMu.Unlock()
+						}
+
+						collectTimeout := time.Duration(min(30, 5+cfg.ParallelPoolSize())) * time.Second
+						go func() {
+							collectCtx, collectCancel := context.WithTimeout(context.Background(), collectTimeout)
+							defer collectCancel()
+							if atomic.LoadInt32(&active) == 0 {
 								if !rc.noCancelOnSuccess {
 									cancel()
 								}
 								return
 							}
-						}
-					}()
+							for {
+								select {
+								case bgRes := <-resCh:
+									atomic.AddInt32(&active, -1)
+									recordResult(bgRes)
+									if atomic.LoadInt32(&active) == 0 {
+										if !rc.noCancelOnSuccess {
+											cancel()
+										}
+										return
+									}
+								case <-collectCtx.Done():
+									if !rc.noCancelOnSuccess {
+										cancel()
+									}
+									return
+								}
+							}
+						}()
 
-					return res.val, nil
-				}
-
-				if !errors.Is(res.err, context.Canceled) {
-					if cfg.DebugMode() {
-						log.Printf("[Racing] 节点 %s 失败: %s", name, res.err.Error())
+						return res.val, nil
 					}
 
-					ve := asVertexError(res.err)
-					if ve != nil && ve.Kind == "ratelimit" {
-						if cfg.DebugMode() {
-							log.Printf("[Racing] 节点 %s 触发 429 API 限制，进入 30 秒短时歇息", name)
-						}
-						nodes.RecordRateLimit(res.uri, 30)
-						stickyPool.Evict(res.uri)
-					} else {
-						nodes.RecordTest(res.uri, false, 0, res.err.Error())
-						stickyPool.Evict(res.uri)
-					}
-
-					if ve != nil && !ve.IsRetryable() {
-						if cfg.DebugMode() {
-							log.Printf("[Racing] 节点 %s 触发不可重试的硬性错误，终止竞速", name)
-						}
-						cancel()
-						return zero, res.err
-					}
+					// 非胜出成功结果：收集（CompleteChat 非 STOP 结果），继续等其余候选。
+					rc.collectedResults = append(rc.collectedResults, res)
+					nodes.RecordTest(res.uri, true, 50, "")
+					stickyPool.Add(res.uri)
 				} else {
-					if cfg.DebugMode() {
-						log.Printf("[Racing] 节点 %s 拨号取消", name)
+					if !errors.Is(res.err, context.Canceled) {
+						if cfg.DebugMode() {
+							log.Printf("[Racing] 节点 %s 失败: %s", name, res.err.Error())
+						}
+
+						failedErrors = append(failedErrors, res.err)
+
+						ve := asVertexError(res.err)
+						if ve != nil && ve.Kind == "ratelimit" {
+							if cfg.DebugMode() {
+								log.Printf("[Racing] 节点 %s 触发 429 API 限制，进入 30 秒短时歇息", name)
+							}
+							nodes.RecordRateLimit(res.uri, 30)
+							stickyPool.Evict(res.uri)
+						} else {
+							nodes.RecordTest(res.uri, false, 0, res.err.Error())
+							stickyPool.Evict(res.uri)
+						}
+
+						if ve != nil && !ve.IsRetryable() {
+							if cfg.DebugMode() {
+								log.Printf("[Racing] 节点 %s 触发不可重试的硬性错误，终止竞速", name)
+							}
+							cancel()
+							return zero, res.err
+						}
+					} else {
+						if cfg.DebugMode() {
+							log.Printf("[Racing] 节点 %s 拨号取消", name)
+						}
 					}
 				}
-
-				lastErr = res.err
 
 				if atomic.LoadInt32(&active) == 0 {
-					// 本轮全部结束且无成功：换一批从未用过的节点再试（关单节点重试模式）。
+					// 本轮全部结束：优先收敛收集到的非胜出成功结果。
+					if len(rc.collectedResults) > 0 {
+						cancel()
+						if rc.finalizeCollected != nil {
+							return rc.finalizeCollected(rc.collectedResults)
+						}
+						return rc.collectedResults[0].val, nil
+					}
+
+					// 本轮全部失败且无成功：换一批从未用过的节点再试（关单节点重试模式）。
 					if roundBudget > 0 {
 						next := selectFreshCands()
 						if len(next) == 0 {
@@ -279,8 +359,8 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 						}
 						if len(next) == 0 {
 							cancel()
-							if lastErr != nil {
-								return zero, lastErr
+							if len(failedErrors) > 0 {
+								return zero, pickBestError(failedErrors)
 							}
 							return zero, fmt.Errorf("all nodes failed")
 						}
@@ -292,8 +372,8 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 						break InnerLoop // 进入下一轮
 					}
 					cancel()
-					if lastErr != nil {
-						return zero, lastErr
+					if len(failedErrors) > 0 {
+						return zero, pickBestError(failedErrors)
 					}
 					return zero, fmt.Errorf("all nodes failed")
 				}

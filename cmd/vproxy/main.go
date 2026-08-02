@@ -160,6 +160,7 @@ func main() {
 	// ---- 同意通过之后，干净地启动 TUI 看板，坚决不影响前面的交互输入 ───
 	cli.InitTracker(dailyLogger)
 	cli.SetAppInfo(version, buildCommit, buildTime, runtime.GOOS, runtime.GOARCH)
+	defer cli.StopTUI()
 
 	cfg := config.GetProvider()
 	if err := db.InitDB(filepath.Join(config.ConfigDir(), "data.db")); err != nil {

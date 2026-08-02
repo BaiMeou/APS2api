@@ -8,10 +8,6 @@ import (
 	"github.com/bsfdsagfadg/vertex/internal/nodes"
 )
 
-func RunParallel[T any](ctx context.Context, cfg config.ConfigProvider, run func(context.Context, string) (T, error)) (T, error) {
-	return RunRace(ctx, cfg, run)
-}
-
 func StreamParallel(ctx context.Context, cfg config.ConfigProvider,
 	op func(context.Context, string) <-chan StreamChunk,
 	yield func(StreamChunk) bool,
@@ -50,7 +46,7 @@ func StreamParallel(ctx context.Context, cfg config.ConfigProvider,
 		return rest, nil
 	}
 
-	winnerCh, err := RunRace(streamCtx, cfg, wrappedOp, WithNoCancelOnSuccess())
+	winnerCh, err := RunRace(streamCtx, cfg, wrappedOp, WithNoCancelOnSuccess[<-chan StreamChunk]())
 	if err != nil {
 		vertexErr, ok := err.(*VertexError)
 		if ok {

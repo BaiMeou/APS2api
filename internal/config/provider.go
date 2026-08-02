@@ -16,6 +16,7 @@ type ConfigProvider interface {
 	MaxSpillMB() int
 	RequestTimeout() int
 	RaceTimeout() int
+	StreamIdleTimeoutSeconds() int
 	ModelTurnGuardEnabled() bool
 
 	VertexAPIKey() string
@@ -73,6 +74,7 @@ func (d dynamicConfig) MaxRequestMB() int                 { return Load().MaxReq
 func (d dynamicConfig) MaxSpillMB() int                   { return Load().MaxSpillMB }
 func (d dynamicConfig) RequestTimeout() int               { return Load().RequestTimeout }
 func (d dynamicConfig) RaceTimeout() int                  { return Load().RaceTimeout }
+func (d dynamicConfig) StreamIdleTimeoutSeconds() int     { return Load().StreamIdleTimeoutSeconds }
 func (d dynamicConfig) ModelTurnGuardEnabled() bool       { return Load().ModelTurnGuardEnabled }
 func (d dynamicConfig) VertexAPIKey() string              { return Load().VertexAPIKey }
 func (d dynamicConfig) CountTokensQuerySignature() string { return Load().CountTokensQuerySignature }

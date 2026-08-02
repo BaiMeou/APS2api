@@ -30,6 +30,7 @@ type AppConfig struct { //nolint:govet
 	MaxRequestMB              int               `json:"max_request_mb"`
 	RequestTimeout            int               `json:"request_timeout"`
 	RaceTimeout               int               `json:"race_timeout"`
+	StreamIdleTimeoutSeconds  int               `json:"stream_idle_timeout_seconds"` // 流式包间空闲超时（秒），防呆连接假死
 	ModelTurnGuardEnabled     bool              `json:"model_turn_guard_enabled"`
 
 	// 并发池与节点锁定配置
@@ -67,6 +68,7 @@ func DefaultConfig() AppConfig {
 		MaxSpillMB:                2048,
 		RequestTimeout:            180,
 		RaceTimeout:               0,
+		StreamIdleTimeoutSeconds:  30,
 		ModelTurnGuardEnabled:     true,
 		ParallelPoolEnabled:       true,
 		StickyNodePriority:        false,
@@ -172,6 +174,10 @@ func Load() AppConfig {
 			}
 			if cfg.RaceTimeout < 0 {
 				cfg.RaceTimeout = 0
+				needsSave = true
+			}
+			if cfg.StreamIdleTimeoutSeconds <= 0 {
+				cfg.StreamIdleTimeoutSeconds = 30
 				needsSave = true
 			}
 			// 拦截在文件读取配置时过高的并发数限制为 20
