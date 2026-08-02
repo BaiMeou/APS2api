@@ -68,18 +68,13 @@ func (c *VertexAIClient) StreamChat(ctx context.Context, model string, geminiPay
 
 func (c *VertexAIClient) executeStreamingWithRetries(ctx context.Context, model string, geminiPayload map[string]any, proxyURI string, yield func(StreamChunk) bool) {
 	cfg := c.cfg
+	// 配置的重试次数永远生效（节点内原地重打），不受并发池/单节点重试开关影响。
 	maxRetries := cfg.MaxRetries()
-	// 竞速重试模式：并发池开着且未开单节点重试 → 单节点只打一次，
-	// 重试由竞速池接力换节点完成。
-	raceMode := cfg.ParallelPoolEnabled() && !cfg.ParallelPoolRetryEnabled()
-	if raceMode {
-		maxRetries = 0
-	}
 	// 日志显示智能判断：
-	//  - 单节点重试开启（或并发池关闭）：显示节点重试次数 = MaxRetries（Attempt 0/2 → 2/2）
-	//  - 未开单节点重试（竞速接力负责重试）：显示总尝试次数 = MaxRetries + 1（总尝试 = 重试 + 1）
+	//  - 单节点重试开启：显示节点重试次数 = MaxRetries（Attempt 0/2 → 2/2）
+	//  - 单节点重试关闭（竞速接力补充重试）：显示总尝试次数 = MaxRetries + 1（总尝试 = 重试 + 1）
 	attemptDenom := cfg.MaxRetries()
-	if raceMode {
+	if !cfg.ParallelPoolRetryEnabled() {
 		attemptDenom = cfg.MaxRetries() + 1
 	}
 	if attemptDenom < 1 {
