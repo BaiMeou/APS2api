@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -108,7 +109,12 @@ func (m TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		switch {
 		case msg.Mod == tea.ModCtrl && msg.Code == 'c':
-			return m, tea.Quit
+			// 拦截 Ctrl+C 转换为系统信号，触发 main.go 的平滑退出流程。
+			// 保持 TUI 显示，直到 main.go 彻底处理完才通过 StopTUI 退出界面。
+			if p, err := os.FindProcess(os.Getpid()); err == nil {
+				_ = p.Signal(os.Interrupt)
+			}
+			return m, nil
 		case msg.Code == tea.KeyUp:
 			if m.scrollOffset > 0 {
 				m.scrollOffset--
