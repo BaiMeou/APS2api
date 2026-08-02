@@ -256,15 +256,13 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 
 						returnedOnWinPath = true
 
-						if !rc.noCancelOnSuccess {
-							cancelsMu.Lock()
-							for u, cancelFn := range cancels {
-								if u != res.uri {
-									cancelFn()
-								}
+						cancelsMu.Lock()
+						for u, cancelFn := range cancels {
+							if u != res.uri {
+								cancelFn()
 							}
-							cancelsMu.Unlock()
 						}
+						cancelsMu.Unlock()
 
 						collectTimeout := time.Duration(min(30, 5+cfg.ParallelPoolSize())) * time.Second
 						go func() {

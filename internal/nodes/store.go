@@ -152,7 +152,15 @@ func initHealthQueue() {
 		batch := make(map[string]NodeHealth)
 
 		flush := func() {
-			if len(batch) == 0 || db.GlobalDB == nil {
+			if len(batch) == 0 {
+				return
+			}
+			if db.GlobalDB == nil {
+				if len(batch) > 1000 {
+					for k := range batch {
+						delete(batch, k)
+					}
+				}
 				return
 			}
 			tx, err := db.GlobalDB.Begin()
