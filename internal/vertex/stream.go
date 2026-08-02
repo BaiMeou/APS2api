@@ -206,7 +206,12 @@ retryLoop:
 	}
 
 	// 所有重试耗尽且没发出过任何内容 → yield 一个 error chunk（末尾 yield error dict）。
+	// 竞速超时（RaceTimeout 到点，ctx deadline）优先映射为 503 unavailable：可重试且语义准确，
+	// 避免被内层包装成 500 internal 后丢失“是超时淘汰”这一信息。
 	if !contentYielded && lastError != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			lastError = NewUnavailableError(fmt.Sprintf("节点竞速超时（%d 秒），已淘汰", cfg.RaceTimeout()))
+		}
 		yield(StreamChunk{Err: lastError})
 	}
 }
