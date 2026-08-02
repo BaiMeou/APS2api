@@ -3,6 +3,8 @@ package vertex
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,7 +25,6 @@ func raceTestConfig(raceTimeout int) config.ConfigProvider {
 		ParallelPoolEnabled: true,
 		ParallelPoolSize:    3,
 		ParallelNodeTopK:    80,
-		ParallelPoolDelayMs: 5,
 		StickyNodePriority:  false,
 		RaceTimeout:         raceTimeout,
 	})
@@ -110,5 +111,65 @@ func TestRunRace_NoTimeoutKeepsLegacyBehavior(t *testing.T) {
 	}
 	if elapsed > 2*time.Second {
 		t.Fatalf("应随 ctx 在 ~300ms 退出, 实际 %v", elapsed)
+	}
+}
+
+// TestRunRace_RoundRelaySwitchesToFreshNodes 验证关单节点重试时的轮次换批：
+// 并发 2、重试 1（roundBudget=1）：第一轮 2 个节点失败后，换一批从未用过的 2 个节点再试，
+// 且每个节点最多被尝试一次（不重复使用节点）。
+func TestRunRace_RoundRelaySwitchesToFreshNodes(t *testing.T) {
+	nodes.MergeNodes([]nodes.Node{
+		{Type: "http", Name: "n1", RawURI: "http://node1:8080"},
+		{Type: "http", Name: "n2", RawURI: "http://node2:8080"},
+		{Type: "http", Name: "n3", RawURI: "http://node3:8080"},
+		{Type: "http", Name: "n4", RawURI: "http://node4:8080"},
+	})
+	t.Cleanup(func() {
+		for i := 1; i <= 4; i++ {
+			nodes.DeleteNode(fmt.Sprintf("http://node%d:8080", i))
+		}
+	})
+
+	cfg := config.StaticProvider(config.AppConfig{ //nolint:exhaustruct
+		ParallelPoolEnabled:      true,
+		ParallelPoolSize:         2,
+		ParallelNodeTopK:         80,
+		StickyNodePriority:       false,
+		ParallelPoolRetryEnabled: false, // 关单节点重试 → 竞速轮次换批
+		MaxRetries:               1,     // 换 1 批新节点
+	})
+
+	var mu sync.Mutex
+	attempted := map[string]int{}
+	run := func(_ context.Context, uri string) (string, error) {
+		mu.Lock()
+		attempted[uri]++
+		total := len(attempted)
+		count := attempted[uri]
+		mu.Unlock()
+		if count > 1 {
+			return "", errors.New("node reused") // 同一节点不应被再次尝试
+		}
+		// 前两个尝试的节点（即第一轮）全部失败；后续轮次成功。
+		// 这不依赖于节点随机选择的顺序。
+		if total <= 2 {
+			return "", NewRateLimitError("quota", 0)
+		}
+		return "ok", nil
+	}
+
+	val, err := RunRace(context.Background(), cfg, run)
+	if err != nil || val != "ok" {
+		t.Fatalf("第二轮应胜出, val=%v err=%v", val, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(attempted) < 3 {
+		t.Fatalf("应至少尝试 3 个不同节点(跨两批), got %v", attempted)
+	}
+	for uri, c := range attempted {
+		if c != 1 {
+			t.Fatalf("节点 %s 被尝试 %d 次, 应只 1 次", uri, c)
+		}
 	}
 }
