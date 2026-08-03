@@ -3,9 +3,12 @@ package nodes
 import (
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/bsfdsagfadg/vertex/internal/config"
+	"github.com/bsfdsagfadg/vertex/internal/db"
 )
 
 func resetState() {
@@ -13,10 +16,30 @@ func resetState() {
 	defer mu.Unlock()
 	nodeList = nil
 	healthMap = make(map[string]*NodeHealth)
+	globalStickyPool = NewStickyNodePool()
 	loaded = false
 	// 彻底清除物理磁盘缓存，防止测试间的数据污染
 	_ = os.Remove(filepath.Join(config.ConfigDir(), "nodes.json"))
 	_ = os.Remove(filepath.Join(config.ConfigDir(), "node_health.json"))
+}
+
+func TestBatchTestProgressRejectsDuplicateAndKeepsTermination(t *testing.T) {
+	FinishTestProgress()
+	if !StartTestProgress(10) {
+		t.Fatal("首次批量测试应成功占用状态")
+	}
+	if StartTestProgress(20) {
+		t.Fatal("运行中应拒绝重复批量测试")
+	}
+	if !IsTestRunning() {
+		t.Fatal("批量测试应处于运行状态")
+	}
+	TerminateTestProgress()
+	FinishTestProgress()
+	progress := GetTestProgress()
+	if progress.Running || !progress.Terminated || progress.CurrentNode != "已终止" {
+		t.Fatalf("终止状态未保留: %+v", progress)
+	}
 }
 
 func TestNodesLifecycle(t *testing.T) {
@@ -183,6 +206,40 @@ func TestUpdateNodeTestResult(t *testing.T) {
 	}
 }
 
+func TestRecordTestTransportFailureDoesNotDisableNodeInDB(t *testing.T) {
+	db.CloseDB()
+	resetState()
+	if err := db.InitDB(filepath.Join(t.TempDir(), "data.db")); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		resetState()
+		db.CloseDB()
+	})
+
+	MergeNodes([]Node{{RawURI: "uri1", Name: "node1"}})
+	RecordTest("uri1", false, 0, "dial tcp: i/o timeout")
+
+	nodes := LoadNodes()
+	if len(nodes) != 1 || nodes[0].Disabled {
+		t.Fatalf("临时网络错误不应禁用内存节点: %+v", nodes)
+	}
+	var disabled bool
+	if err := db.GlobalDB.QueryRow("SELECT disabled FROM nodes WHERE raw_uri = ?", "uri1").Scan(&disabled); err != nil {
+		t.Fatal(err)
+	}
+	if disabled {
+		t.Fatal("临时网络错误不应将数据库节点标记为 disabled")
+	}
+
+	// 模拟进程重启后从数据库重新加载。
+	resetState()
+	nodes = LoadNodes()
+	if len(nodes) != 1 || nodes[0].Disabled {
+		t.Fatalf("重载后节点应保持启用: %+v", nodes)
+	}
+}
+
 func TestMergeNodesPrunesHealthMap(t *testing.T) {
 	resetState()
 	defer resetState()
@@ -273,7 +330,7 @@ func TestDedupNodesSemantic(t *testing.T) {
 	}
 }
 
-func TestSelectForParallelCooldownFallback(t *testing.T) {
+func TestSelectForParallelSkipsActiveCooldown(t *testing.T) {
 	resetState()
 	defer resetState()
 
@@ -286,9 +343,115 @@ func TestSelectForParallelCooldownFallback(t *testing.T) {
 	RecordTest("uri1", false, 0, "timeout")
 	RecordTest("uri2", false, 0, "timeout")
 
-	// Request 3 nodes, should get n3 + fallback from cooldown
+	// Request 3 nodes, active cooldown nodes must not be reused immediately.
 	selected := SelectForParallel(3, 80, false, false)
-	if len(selected) != 3 {
-		t.Errorf("Expected 3 selected (1 normal + 2 cooldown), got %d", len(selected))
+	if len(selected) != 1 || selected[0].RawURI != "uri3" {
+		t.Errorf("Expected only healthy uri3 while others cool down, got %+v", selected)
+	}
+}
+
+func TestCooldownAndSubHealthyStateSurvivesReload(t *testing.T) {
+	db.CloseDB()
+	resetState()
+	if err := db.InitDB(filepath.Join(t.TempDir(), "data.db")); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		resetState()
+		db.CloseDB()
+	})
+
+	MergeNodes([]Node{
+		{RawURI: "limited", Name: "limited"},
+		{RawURI: "healthy", Name: "healthy"},
+	})
+	RecordRateLimit("limited", 60)
+
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		var cooldownUntil, last429At, lastSubHealthyAt int64
+		var rateLimitCount int
+		err := db.GlobalDB.QueryRow(`SELECT cooldown_until, last_429_at, rate_limit_count, last_sub_healthy_at FROM node_health WHERE raw_uri = ?`, "limited").
+			Scan(&cooldownUntil, &last429At, &rateLimitCount, &lastSubHealthyAt)
+		if err == nil && cooldownUntil > time.Now().Unix() && last429At > 0 && rateLimitCount == 1 && lastSubHealthyAt > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("健康状态未及时持久化: err=%v cooldown=%d last429=%d rate=%d sub=%d", err, cooldownUntil, last429At, rateLimitCount, lastSubHealthyAt)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	resetState()
+	health := LoadHealth()
+	h := health["limited"]
+	if h == nil || h.CooldownUntil <= time.Now().Unix() || h.LastSubHealthyAt == 0 || h.Last429At == 0 || h.RateLimitCount != 1 {
+		t.Fatalf("重载后的冷却/亚健康状态错误: %+v", h)
+	}
+	selected := SelectForParallel(2, 80, false, false)
+	if len(selected) != 1 || selected[0].RawURI != "healthy" {
+		t.Fatalf("重载后活动冷却节点不应进入候选: %+v", selected)
+	}
+
+	mu.Lock()
+	h.CooldownUntil = time.Now().Unix() - 1
+	mu.Unlock()
+	selected = SelectForParallel(2, 80, false, false)
+	if len(selected) != 2 {
+		t.Fatalf("冷却到期后亚健康节点应作为 Tier 2 候选: %+v", selected)
+	}
+	if tier := getNodeTier(Node{RawURI: "limited"}, h); tier != 2 {
+		t.Fatalf("冷却到期不应自动恢复为健康 Tier 1, got Tier %d", tier)
+	}
+}
+
+func TestSelectForParallelHonorsTopK(t *testing.T) {
+	resetState()
+	defer resetState()
+	MergeNodes([]Node{
+		{RawURI: "a", Name: "a"},
+		{RawURI: "b", Name: "b"},
+		{RawURI: "c", Name: "c"},
+	})
+	mu.Lock()
+	healthMap["a"] = &NodeHealth{LastSelectedAt: 0}
+	healthMap["b"] = &NodeHealth{LastSelectedAt: 10}
+	healthMap["c"] = &NodeHealth{LastSelectedAt: 20}
+	mu.Unlock()
+	atomic.StoreUint64(&atomicRoundRobinIndex, 0)
+
+	selected := SelectForParallel(1, 1, false, false)
+	if len(selected) != 1 || selected[0].RawURI != "a" {
+		t.Fatalf("topK=1 应只在排序第一的候选中选择: %+v", selected)
+	}
+
+	mu.Lock()
+	healthMap["a"].LastSelectedAt = 0
+	healthMap["b"].LastSelectedAt = 10
+	healthMap["c"].LastSelectedAt = 20
+	mu.Unlock()
+	atomic.StoreUint64(&atomicRoundRobinIndex, 0)
+	selected = SelectForParallel(1, 3, false, false)
+	if len(selected) != 1 || selected[0].RawURI != "b" {
+		t.Fatalf("topK=3 应在三个候选间轮询，本轮预期 b: %+v", selected)
+	}
+}
+
+func TestSelectForParallelHonorsStickyPriority(t *testing.T) {
+	resetState()
+	defer resetState()
+	MergeNodes([]Node{
+		{RawURI: "a", Name: "a"},
+		{RawURI: "b", Name: "b"},
+	})
+	globalStickyPool.Add("b")
+
+	selected := SelectForParallel(1, 1, false, false)
+	if len(selected) != 1 || selected[0].RawURI != "a" {
+		t.Fatalf("关闭 sticky 优先时应保持普通排序: %+v", selected)
+	}
+	selected = SelectForParallel(1, 1, false, true)
+	if len(selected) != 1 || selected[0].RawURI != "b" {
+		t.Fatalf("启用 sticky 优先时应优先 sticky 节点: %+v", selected)
 	}
 }

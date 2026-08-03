@@ -172,6 +172,32 @@ func TestGeminiJSONToOAIJSON(t *testing.T) {
 	}
 }
 
+func TestGeminiJSONToOAIJSONPreservesMultipleCandidates(t *testing.T) {
+	response := map[string]any{
+		"candidates": []any{
+			map[string]any{"index": 0, "content": map[string]any{"parts": []any{map[string]any{"text": "first"}}}, "finishReason": "STOP"},
+			map[string]any{"index": 1, "content": map[string]any{"parts": []any{map[string]any{"text": "second"}}}, "finishReason": "MAX_TOKENS"},
+		},
+		"usageMetadata": map[string]any{"totalTokenCount": float64(9)},
+	}
+
+	converted := GeminiJSONToOAIJSON(response, "gemini-test")
+	choices := converted["choices"].([]any)
+	if len(choices) != 2 {
+		t.Fatalf("choices=%#v, want 2", choices)
+	}
+	for index, want := range []string{"first", "second"} {
+		choice := choices[index].(map[string]any)
+		message := choice["message"].(map[string]any)
+		if message["content"] != want || choice["index"] != index {
+			t.Fatalf("choice %d=%#v", index, choice)
+		}
+	}
+	if converted["usage"].(map[string]any)["total_tokens"] != 9 {
+		t.Fatalf("usage=%#v", converted["usage"])
+	}
+}
+
 func TestMapFinishReason(t *testing.T) {
 	cases := []struct {
 		in   string
@@ -481,6 +507,122 @@ func TestBuildVertexVariables(t *testing.T) {
 	}
 }
 
+func TestConvertChatRequestGemini36TurnGuard(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.ModelTurnGuardEnabled = true
+
+	_, payload, err := ConvertChatRequest(map[string]any{
+		"model": "gemini-3.6-flash",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "继续回答"},
+			map[string]any{"role": "assistant", "content": "未完成"},
+		},
+	}, config.StaticProvider(cfg))
+	if err != nil {
+		t.Fatalf("ConvertChatRequest: %v", err)
+	}
+
+	contents, ok := payload["contents"].([]any)
+	if !ok || len(contents) != 2 {
+		t.Fatalf("pre-normalized contents=%#v, want 2 entries", payload["contents"])
+	}
+	vars := BuildVertexVariables("gemini-3.6-flash", payload, config.StaticProvider(cfg))
+	contents, ok = vars["contents"].([]any)
+	if !ok || len(contents) != 3 {
+		t.Fatalf("contents=%#v, want 3 entries", vars["contents"])
+	}
+	last, ok := contents[len(contents)-1].(map[string]any)
+	if !ok || last["role"] != "user" {
+		t.Fatalf("last content=%#v, want appended user turn", contents[len(contents)-1])
+	}
+}
+
+func TestBuildVertexVariablesTurnGuardUsesPartType(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.ModelTurnGuardEnabled = true
+	provider := config.StaticProvider(cfg)
+
+	tests := []struct {
+		name       string
+		model      string
+		last       map[string]any
+		wantAppend bool
+	}{
+		{
+			name:       "function role",
+			model:      "gemini-3.6-flash",
+			last:       map[string]any{"role": "function", "parts": []any{map[string]any{"functionResponse": map[string]any{"name": "f", "response": map[string]any{}}}}},
+			wantAppend: true,
+		},
+		{
+			name:       "user function response",
+			model:      "gemini-3.6-flash",
+			last:       map[string]any{"role": "user", "parts": []any{map[string]any{"functionResponse": map[string]any{"name": "f", "response": map[string]any{}}}}},
+			wantAppend: true,
+		},
+		{
+			name:       "ordinary user text",
+			model:      "gemini-3.6-flash",
+			last:       map[string]any{"role": "user", "parts": []any{map[string]any{"text": "done"}}},
+			wantAppend: false,
+		},
+		{
+			name:       "local model switch off",
+			model:      "gemini-2.5-flash",
+			last:       map[string]any{"role": "model", "parts": []any{map[string]any{"text": "unfinished"}}},
+			wantAppend: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := map[string]any{"contents": []any{
+				map[string]any{"role": "user", "parts": []any{map[string]any{"text": "start"}}},
+				tc.last,
+			}}
+			vars := BuildVertexVariables(tc.model, payload, provider)
+			contents := vars["contents"].([]any)
+			last := contents[len(contents)-1].(map[string]any)
+			gotAppend := last["role"] == "user" && len(contents) == 3
+			if gotAppend != tc.wantAppend {
+				t.Fatalf("contents=%#v, appended=%v want %v", contents, gotAppend, tc.wantAppend)
+			}
+		})
+	}
+}
+
+func TestBuildVertexVariablesTurnGuardNormalizesModelFunctionResponse(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.ModelTurnGuardEnabled = true
+	payload := map[string]any{"contents": []any{
+		map[string]any{"role": "model", "parts": []any{map[string]any{"functionResponse": map[string]any{"name": "f", "response": map[string]any{}}}}},
+	}}
+
+	vars := BuildVertexVariables("gemini-3.6-flash", payload, config.StaticProvider(cfg))
+	contents := vars["contents"].([]any)
+	if len(contents) != 2 {
+		t.Fatalf("contents=%#v, want normalized function turn plus trailing user", contents)
+	}
+	functionTurn := contents[0].(map[string]any)
+	if functionTurn["role"] != "function" {
+		t.Fatalf("functionResponse role=%#v, want function", functionTurn["role"])
+	}
+}
+
+func TestBuildVertexVariablesTurnGuardRespectsGlobalSwitch(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.ModelTurnGuardEnabled = false
+	payload := map[string]any{"contents": []any{
+		map[string]any{"role": "model", "parts": []any{map[string]any{"text": "unfinished"}}},
+	}}
+
+	vars := BuildVertexVariables("gemini-3.6-flash", payload, config.StaticProvider(cfg))
+	contents := vars["contents"].([]any)
+	if len(contents) != 1 {
+		t.Fatalf("global switch off unexpectedly appended content: %#v", contents)
+	}
+}
+
 // TestMarshalRoundTrip 验证 ConvertChatRequest + BuildVertexVariables 的 JSON 可序列化。
 func TestMarshalRoundTrip(t *testing.T) {
 	cfg := config.StaticProvider(config.DefaultConfig())
@@ -583,7 +725,6 @@ func TestToNativeSchema_UnknownTypeFallsBackToSTRING(t *testing.T) {
 		t.Errorf("未知类型 'any' 应兜底为 STRING，实际: %v", native["type"])
 	}
 }
-
 
 // TestConvertToolsFormat_NumericConstraints 端到端验证工具参数数值约束转字符串。
 func TestConvertToolsFormat_NumericConstraints(t *testing.T) {

@@ -2,7 +2,6 @@ package cli
 
 import (
 	"fmt"
-	"os"
 	"regexp"
 	"sort"
 	"strings"
@@ -18,6 +17,7 @@ func stripANSI(s string) string {
 	return ansiRegexp.ReplaceAllString(s, "")
 }
 
+//nolint:gochecknoglobals
 var spinnerFrames = []rune(`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`)
 
 type TuiModel struct {
@@ -115,12 +115,9 @@ func (m TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		switch {
 		case msg.Mod == tea.ModCtrl && msg.Code == 'c':
-			// 拦截 Ctrl+C 转换为系统信号，触发 main.go 的平滑退出流程。
-			// 保持 TUI 显示，直到 main.go 彻底处理完才通过 StopTUI 退出界面。
-			if p, err := os.FindProcess(os.Getpid()); err == nil {
-				_ = p.Signal(os.Interrupt)
-			}
-			return m, nil
+			// Windows 不支持向当前进程发送 os.Interrupt；直接退出 TUI，
+			// 由 main 监听 TUIDone 并执行与系统信号相同的优雅关闭流程。
+			return m, tea.Quit
 		case msg.Code == tea.KeyUp:
 			if m.scrollOffset > 0 {
 				m.scrollOffset--
@@ -156,6 +153,7 @@ func (m TuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+//nolint:gochecknoglobals
 var (
 	cyanStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("6"))
 	yellowStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
@@ -300,12 +298,12 @@ func (m TuiModel) buildContent(bw int) string {
 		}
 
 		// 表头
-		sb.WriteString(fmt.Sprintf("%s %-*s %s %-*s %s %-*s %s %-*s %s %-*s %s\n",
+		fmt.Fprintf(&sb, "%s %-*s %s %-*s %s %-*s %s %-*s %s %-*s %s\n",
 			cyanStyle.Render("│"), idW, "ID", cyanStyle.Render("│"),
 			modelW, "Model", cyanStyle.Render("│"),
 			stateW, "State", cyanStyle.Render("│"),
 			timeW, "Time", cyanStyle.Render("│"),
-			detailW, "Details", cyanStyle.Render("│")))
+			detailW, "Details", cyanStyle.Render("│"))
 
 		sep := fmt.Sprintf("%s%s%s%s%s%s%s%s%s%s%s\n",
 			cyanStyle.Render("├"), dashBar(idW+2), cyanStyle.Render("┼"),
@@ -340,13 +338,13 @@ func (m TuiModel) buildContent(bw int) string {
 			spinnerCh := string(spinnerFrames[m.spinnerIdx])
 			stateRendered := lipgloss.NewStyle().Foreground(ansiToColor(r.Color)).Render(stateCol)
 
-			sb.WriteString(fmt.Sprintf("%s %s %s %s %s %s %s %s %s %s %s %s\n",
+			fmt.Fprintf(&sb, "%s %s %s %s %s %s %s %s %s %s %s %s\n",
 				cyanStyle.Render("│"),
 				cyanStyle.Render(spinnerCh), idCol, cyanStyle.Render("│"),
 				modelCol, cyanStyle.Render("│"),
 				stateRendered, cyanStyle.Render("│"),
 				timeCol, cyanStyle.Render("│"),
-				grayStyle.Render(detailCol), cyanStyle.Render("│")))
+				grayStyle.Render(detailCol), cyanStyle.Render("│"))
 		}
 		sb.WriteString(cyanStyle.Render(bottomBorder()) + "\n")
 	}

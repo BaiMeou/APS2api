@@ -47,7 +47,11 @@ func (c *ChatHandler) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	actualModel, useFake := stripFakePrefix(rawModel, c.cfg.FakePrefixes())
+	actualModel, useFake, modelOK := resolveConfiguredModel(rawModel, c.cfg)
+	if !modelOK {
+		oaiModelNotFound(w, rawModel)
+		return
+	}
 	body["model"] = actualModel
 	cli.UpdateReqModel(vertex.RequestIDFromContext(r.Context()), actualModel)
 
@@ -77,23 +81,8 @@ func (c *ChatHandler) handleChatCompletions(w http.ResponseWriter, r *http.Reque
 
 	log.Printf("[Server] [ChatCompletions] 收到请求: 模型=%s, 真模型=%s, 流式=%v, n=%d", rawModel, actualModel, stream, n)
 
-	transform.ApplyImageConfig(geminiPayload, body)
-	if strings.Contains(strings.ToLower(model), "image") {
-		gc, ok := geminiPayload["generationConfig"].(map[string]any)
-		if !ok {
-			gc = map[string]any{}
-			geminiPayload["generationConfig"] = gc
-		}
-		ic, ok := gc["imageConfig"].(map[string]any)
-		if !ok {
-			ic = map[string]any{}
-			gc["imageConfig"] = ic
-		}
-		if _, has := ic["imageSize"]; !has {
-			ic["imageSize"] = "1K"
-		}
-	}
-
+	transform.ApplyImageConfig(geminiPayload, body, actualModel)
+	transform.ApplyImageDefaults(geminiPayload, actualModel, c.cfg.DefaultImageSize(), c.cfg.DefaultResponseModalities())
 
 	if aggregateStream {
 		c.oaiAggregateStream(r.Context(), w, model, geminiPayload)
@@ -151,6 +140,7 @@ func (c *ChatHandler) streamChatCompletions(ctx context.Context, w http.Response
 	gotContent := false
 	streamErrWritten := false
 	startTime := time.Now()
+	toolCallTracker := transform.NewStreamToolCallTracker()
 
 	c.vc.StreamChat(ctx, model, geminiPayload, func(ch vertex.StreamChunk) bool {
 		if isFirst && ch.Err == nil {
@@ -172,7 +162,7 @@ func (c *ChatHandler) streamChatCompletions(ctx context.Context, w http.Response
 			streamErrWritten = true
 			return false
 		}
-		events := c.respConv.StreamToSSE(ch.Data, model, requestID, isFirst)
+		events := c.respConv.StreamToSSE(ch.Data, model, requestID, isFirst, toolCallTracker)
 		isFirst = false
 		for _, ev := range events {
 			if strings.Contains(ev, `"finish_reason"`) && !strings.Contains(ev, `"finish_reason":null`) {
@@ -291,22 +281,22 @@ func (c *ChatHandler) oaiAggregateStream(ctx context.Context, w http.ResponseWri
 	createdTS := time.Now().Unix()
 	base := streamChunkBase(model, requestID)
 	base["created"] = createdTS
-	
+
 	choice := map[string]any{
-		"index": 0, 
+		"index": 0,
 		"delta": map[string]any{"role": "assistant", "content": contentText},
 	}
 	base["choices"] = []any{choice}
 	if !sw.write(sseEvent(base)) {
 		return
 	}
-	
+
 	// Stream end
 	baseEnd := streamChunkBase(model, requestID)
 	baseEnd["created"] = createdTS
 	choiceEnd := map[string]any{
-		"index": 0, 
-		"delta": map[string]any{},
+		"index":         0,
+		"delta":         map[string]any{},
 		"finish_reason": "stop",
 	}
 	baseEnd["choices"] = []any{choiceEnd}

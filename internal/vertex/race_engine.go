@@ -62,21 +62,25 @@ type raceResult[T any] struct {
 }
 
 // errorPriority 返回错误的优先级数值（越小优先级越高）。
-// 核心原则：可重试错误优先级高于不可重试错误。
-// 当任意节点返回可重试错误时，客户端可据此判断应重试，
-// 而不是被不可重试错误直接中断。
+// 请求级硬错误优先，其次保留可诊断上游错误，再到网络与空响应。
 func errorPriority(err error) int {
 	var ve *VertexError
 	if errors.As(err, &ve) {
-		if ve.IsRetryable() {
-			if ve.Kind == "ratelimit" || ve.Code == 429 {
-				return 1
-			}
-			return 2
+		if ve.IsGlobalHardError() {
+			return 1
 		}
-		return 3
+		switch ve.Kind {
+		case "auth", "permission", "ratelimit", "client", "server", "unavailable":
+			return 2
+		case "network":
+			return 3
+		case "empty":
+			return 4
+		default:
+			return 5
+		}
 	}
-	return 4
+	return 6
 }
 
 // pickBestError 从多个错误中挑选优先级最高（数值最小）的一个返回。
@@ -95,9 +99,10 @@ func pickBestError(errs []error) error {
 	return best
 }
 
-// RunRace runs a standard concurrent race across candidate nodes.
+// RunRace runs a hedged race across candidate nodes.
 //
-// 模型：标准并发竞速（无对冲延迟）——每轮候选节点全部立即并发启动，谁先成功谁赢。
+// 模型：每轮先启动首个候选，其余候选按固定或动态延迟接力；当前已启动候选
+// 全部提前失败时立即启动下一个候选，不额外等待计时器。
 //
 // 轮次换批（重试）：
 //   - 单节点重试关闭（ParallelPoolRetryEnabled=false）：每轮节点全部失败后，
@@ -109,7 +114,7 @@ func pickBestError(errs []error) error {
 //   - 单节点独立超时（RaceTimeout>0）：某节点超时即单独淘汰，不影响其他节点与整轮推进。
 //   - sticky pool 优先/降级单节点（并发池关闭或无候选）。
 //   - 429 → RecordRateLimit(30s) + Evict；其他失败 → RecordTest(false) + Evict。
-//   - 不可重试硬错误立即终止整个竞速。
+//   - 单个候选的不可重试错误只记录，全部候选结束后按错误优先级收敛。
 //   - 胜出后其余节点在后台收集（30s 上限），不影响已胜出节点的数据流。
 //   - context.Canceled 不视为失败。
 func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
@@ -155,7 +160,7 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 	}
 
 	if cfg.DebugMode() {
-		log.Printf("[Vertex] [RunParallel] 标准并发竞速, %d 个节点参与", len(cands))
+		log.Printf("[Vertex] [RunParallel] 开启对冲延迟竞速, %d 个节点参与", len(cands))
 		for _, c := range cands {
 			log.Printf("[Vertex] [RunParallel] 参与节点: %s", c.Name)
 		}
@@ -173,6 +178,14 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 
 	cancels := make(map[string]context.CancelFunc)
 	var cancelsMu sync.Mutex
+	cancelCandidate := func(uri string) {
+		cancelsMu.Lock()
+		cancelFn := cancels[uri]
+		cancelsMu.Unlock()
+		if cancelFn != nil {
+			cancelFn()
+		}
+	}
 
 	recordResult := func(res raceResult[T]) {
 		if res.err == nil {
@@ -185,6 +198,9 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 		}
 
 		ve := asVertexError(res.err)
+		if ve != nil && ve.IsGlobalHardError() {
+			return
+		}
 		if ve != nil && ve.Kind == "ratelimit" {
 			nodes.RecordRateLimit(res.uri, 30)
 			stickyPool.Evict(res.uri)
@@ -201,53 +217,147 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 		resCh := make(chan raceResult[T], len(cands))
 		var active int32
 
-		launchBatch := func(cands []nodes.Node, resCh chan raceResult[T], active *int32) {
-			for _, c := range cands {
-				uri := c.RawURI
-				usedURIs[uri] = true
+		launchCandidate := func(c nodes.Node) {
+			uri := c.RawURI
+			usedURIs[uri] = true
 
-				var candCtx context.Context
-				var candCancel context.CancelFunc
-				if raceTimeout > 0 {
-					candCtx, candCancel = context.WithTimeout(ctxRace, time.Duration(raceTimeout)*time.Second)
-				} else {
-					candCtx, candCancel = context.WithCancel(ctxRace)
-				}
-				candCtx = context.WithValue(candCtx, raceRoundKey{}, round)
+			// candCtx 只表达候选生命周期，不携带 race_timeout deadline。
+			// race_timeout 由下方独立计时器约束“run 返回首个可判定结果”的等待阶段；
+			// 流式候选首包胜出后继续沿用 candCtx，不会在固定总时长后被截断。
+			candCtx, candCancel := context.WithCancel(ctxRace)
+			candCtx = context.WithValue(candCtx, raceRoundKey{}, round)
 
-				cancelsMu.Lock()
-				cancels[uri] = candCancel
-				cancelsMu.Unlock()
+			cancelsMu.Lock()
+			cancels[uri] = candCancel
+			cancelsMu.Unlock()
 
-				atomic.AddInt32(active, 1)
-				go func(u string) {
-					nodes.IncInFlight(u)
-					defer nodes.DecInFlight(u)
-					v, err := run(candCtx, u)
-					if err != nil && errors.Is(err, context.DeadlineExceeded) && raceTimeout > 0 {
-						err = NewUnavailableError(fmt.Sprintf("节点 %s 竞速超时（%d 秒），已淘汰", nodes.GetNodeName(u), raceTimeout))
+			atomic.AddInt32(&active, 1)
+			go func(u string, candidateCtx context.Context, candidateCancel context.CancelFunc) {
+				nodes.IncInFlight(u)
+				defer nodes.DecInFlight(u)
+
+				resultReady := make(chan raceResult[T], 1)
+				go func() {
+					result := raceResult[T]{uri: u}
+					func() {
+						defer func() {
+							if recovered := recover(); recovered != nil {
+								result.err = NewInternalError(fmt.Sprintf("节点 %s 候选执行 panic: %v", nodes.GetNodeName(u), recovered))
+							}
+						}()
+						result.val, result.err = run(candidateCtx, u)
+					}()
+					resultReady <- result
+				}()
+
+				if raceTimeout <= 0 {
+					select {
+					case result := <-resultReady:
+						resCh <- result
+					case <-candidateCtx.Done():
+						select {
+						case result := <-resultReady:
+							resCh <- result
+						default:
+							resCh <- raceResult[T]{uri: u, err: candidateCtx.Err()}
+						}
 					}
-					resCh <- raceResult[T]{u, v, err}
-				}(uri)
-			}
+					return
+				}
+
+				timer := time.NewTimer(time.Duration(raceTimeout) * time.Second)
+				defer timer.Stop()
+				select {
+				case result := <-resultReady:
+					resCh <- result
+				case <-timer.C:
+					candidateCancel()
+					resCh <- raceResult[T]{
+						uri: u,
+						err: NewUnavailableError(fmt.Sprintf("节点 %s 竞速超时（%d 秒），已淘汰", nodes.GetNodeName(u), raceTimeout)),
+					}
+				case <-candidateCtx.Done():
+					select {
+					case result := <-resultReady:
+						resCh <- result
+					default:
+						resCh <- raceResult[T]{uri: u, err: candidateCtx.Err()}
+					}
+				}
+			}(uri, candCtx, candCancel)
 		}
 
-		launchBatch(cands, resCh, &active)
+		delay := time.Duration(cfg.ParallelPoolDelayMs()) * time.Millisecond
+		if cfg.ParallelPoolDelayDynamic() {
+			delay = time.Duration(nodes.GetAverageLatency()) * time.Millisecond
+		}
+		if delay < 0 {
+			delay = 0
+		}
+
+		nextIdx := 0
+		launchNext := func() bool {
+			if nextIdx >= len(cands) {
+				return false
+			}
+			candidate := cands[nextIdx]
+			nextIdx++
+			launchCandidate(candidate)
+			return true
+		}
+		launchNext()
+
+		timer := time.NewTimer(delay)
+		if nextIdx >= len(cands) {
+			if !timer.Stop() {
+				<-timer.C
+			}
+		}
+		resetTimer := func() {
+			if nextIdx >= len(cands) {
+				return
+			}
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			timer.Reset(delay)
+		}
 
 	InnerLoop:
 		for {
 			select {
 			case <-ctx.Done():
+				timer.Stop()
 				cancel()
 				return zero, ctx.Err()
 
+			case <-timer.C:
+				if nextIdx < len(cands) {
+					if cfg.DebugMode() {
+						log.Printf("[Racing] 对冲延迟唤醒，启动备份节点: %s", cands[nextIdx].Name)
+					}
+					launchNext()
+					resetTimer()
+				}
+
 			case res := <-resCh:
 				atomic.AddInt32(&active, -1)
+				// 父请求取消拥有最高归属优先级。即使候选取消结果与 ctx.Done
+				// 同时就绪，也不能把客户端断开误报成节点失败或 all nodes failed。
+				if parentErr := ctx.Err(); parentErr != nil {
+					timer.Stop()
+					cancel()
+					return zero, parentErr
+				}
 				name := nodes.GetNodeName(res.uri)
 
 				if res.err == nil {
 					// 判定是否可立即胜出。
 					if rc.isWinningResult == nil || rc.isWinningResult(res.val) {
+						timer.Stop()
 						log.Printf("[Racing] 竞速胜出节点: %s", name)
 						cli.UpdateReqWinner(RequestIDFromContext(ctx), name)
 						cli.UpdateReqState(RequestIDFromContext(ctx), "🟢 数据传输", "\033[32m", "已建立连接")
@@ -298,10 +408,12 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 					}
 
 					// 非胜出成功结果：收集（CompleteChat 非 STOP 结果），继续等其余候选。
+					cancelCandidate(res.uri)
 					rc.collectedResults = append(rc.collectedResults, res)
 					nodes.RecordTest(res.uri, true, 50, "")
 					stickyPool.Add(res.uri)
 				} else {
+					cancelCandidate(res.uri)
 					if !errors.Is(res.err, context.Canceled) {
 						if cfg.DebugMode() {
 							log.Printf("[Racing] 节点 %s 失败: %s", name, res.err.Error())
@@ -310,6 +422,13 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 						failedErrors = append(failedErrors, res.err)
 
 						ve := asVertexError(res.err)
+						if ve != nil && ve.IsGlobalHardError() {
+							if cfg.DebugMode() {
+								log.Printf("[Racing] 节点 %s 返回请求级错误(%s)，终止竞速: %s", name, ve.Kind, ve.Message)
+							}
+							cancel()
+							return zero, res.err
+						}
 						if ve != nil && ve.Kind == "ratelimit" {
 							if cfg.DebugMode() {
 								log.Printf("[Racing] 节点 %s 触发 429 API 限制，进入 30 秒短时歇息", name)
@@ -321,13 +440,6 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 							stickyPool.Evict(res.uri)
 						}
 
-						if ve != nil && !ve.IsRetryable() {
-							if cfg.DebugMode() {
-								log.Printf("[Racing] 节点 %s 触发不可重试的硬性错误，终止竞速", name)
-							}
-							cancel()
-							return zero, res.err
-						}
 					} else {
 						if cfg.DebugMode() {
 							log.Printf("[Racing] 节点 %s 拨号取消", name)
@@ -335,7 +447,21 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 					}
 				}
 
-				if atomic.LoadInt32(&active) == 0 {
+				if atomic.LoadInt32(&active) == 0 && nextIdx < len(cands) {
+					if cfg.DebugMode() {
+						log.Printf("[Racing] 已启动候选全部结束，立即接力节点: %s", cands[nextIdx].Name)
+					}
+					launchNext()
+					resetTimer()
+					continue
+				}
+
+				if atomic.LoadInt32(&active) == 0 && nextIdx >= len(cands) {
+					timer.Stop()
+					if parentErr := ctx.Err(); parentErr != nil {
+						cancel()
+						return zero, parentErr
+					}
 					// 本轮全部结束：优先收敛收集到的非胜出成功结果。
 					if len(rc.collectedResults) > 0 {
 						cancel()

@@ -1,17 +1,21 @@
 package recaptcha
 
 import (
+	"context"
+
 	"github.com/bsfdsagfadg/vertex/internal/transport"
 )
 
 type TokenPool struct {
-	fetch        func(proxyURI string) (string, error)
-	defaultProxy string
+	fetch        func(context.Context, string) (string, error)
+	defaultProxy func() string
 }
 
-func NewTokenPool(net *transport.NetworkClient, defaultProxy string, debugMode bool) *TokenPool {
+func NewTokenPool(net *transport.NetworkClient, defaultProxy func() string, debugMode bool) *TokenPool {
 	return &TokenPool{
-		fetch:        func(proxyURI string) (string, error) { return FetchRecaptchaToken(net, proxyURI, debugMode) },
+		fetch: func(ctx context.Context, proxyURI string) (string, error) {
+			return FetchRecaptchaToken(ctx, net, proxyURI, debugMode)
+		},
 		defaultProxy: defaultProxy,
 	}
 }
@@ -19,6 +23,11 @@ func NewTokenPool(net *transport.NetworkClient, defaultProxy string, debugMode b
 // NewTokenPoolCustom creates a token pool with a custom fetch function.
 // Used for testing; will be replaced by DI in phase 3/4.
 func NewTokenPoolCustom(fetch func(proxyURI string) (string, error)) *TokenPool {
+	return &TokenPool{fetch: func(_ context.Context, proxyURI string) (string, error) { return fetch(proxyURI) }}
+}
+
+// NewTokenPoolCustomContext 创建可观察请求取消的测试 TokenPool。
+func NewTokenPoolCustomContext(fetch func(context.Context, string) (string, error)) *TokenPool {
 	return &TokenPool{fetch: fetch}
 }
 
@@ -36,12 +45,23 @@ func (p *TokenPool) Stats() (size, fill int) {
 }
 
 func (p *TokenPool) GetToken() (string, error) {
-	return p.fetch(p.defaultProxy)
+	return p.GetTokenContext(context.Background())
 }
 
 func (p *TokenPool) GetTokenWithProxy(proxyURI string) (string, error) {
-	if proxyURI == "" {
-		return p.GetToken()
+	return p.GetTokenWithProxyContext(context.Background(), proxyURI)
+}
+
+func (p *TokenPool) GetTokenContext(ctx context.Context) (string, error) {
+	proxyURI := ""
+	if p.defaultProxy != nil {
+		proxyURI = p.defaultProxy()
 	}
-	return p.fetch(proxyURI)
+	return p.fetch(ctx, proxyURI)
+}
+
+func (p *TokenPool) GetTokenWithProxyContext(ctx context.Context, proxyURI string) (string, error) {
+	// 该方法的 proxyURI 是调用方已经决定好的实际出口；空值明确表示直连，
+	// 不能回退到启动时或当前全局代理，否则 token 与业务请求可能使用不同出口 IP。
+	return p.fetch(ctx, proxyURI)
 }

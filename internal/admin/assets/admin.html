@@ -103,19 +103,29 @@
         <section id="page-models" class="hidden">
           <div class="page-head">
             <div>
-              <h2>模型</h2>
-              <div class="hint">对外暴露的模型清单（每行一个）+ 别名映射</div>
+              <h2>模型管理</h2>
+              <div class="hint">统一管理模型启用、假流式、尾部修复和任意数量别名</div>
             </div>
-            <button class="btn" onclick="saveModels()">保存</button>
+            <div class="toolbar m-0">
+              <button class="btn ghost" onclick="addModelRow()">新增模型</button>
+              <button class="btn ghost" onclick="openModelImport('models')">导入模型列表</button>
+              <button class="btn ghost" onclick="openModelImport('aliases')">导入别名列表</button>
+              <button class="btn" onclick="saveModels()">保存设置</button>
+            </div>
           </div>
-          <div class="grid grid-2">
-            <div class="card glass">
-              <div class="field m-0"><label for="modelsList">模型清单（每行一个）</label><textarea id="modelsList" rows="13"
-                  class="font-mono"></textarea></div>
-            </div>
-            <div class="card glass">
-              <div class="field m-0"><label for="aliasMap">别名映射（每行 别名=真名）</label><textarea id="aliasMap" rows="13"
-                  class="font-mono"></textarea></div>
+          <div class="card glass model-registry-card">
+            <div class="model-global-hints"><span id="modelFakeGlobalHint"></span><span id="modelTrailingGlobalHint"></span></div>
+            <div class="table-scroll">
+              <table class="model-registry-table">
+                <thead><tr>
+                  <th class="model-check">启用<br><input style="margin: 4px 0 0;" id="allModelsEnabled" type="checkbox" onchange="setAllModelFlags('enabled',this.checked)"></th>
+                  <th class="model-check">假流式<br><input style="margin: 4px 0 0;" id="allModelsFake" type="checkbox" onchange="setAllModelFlags('fake_stream_enabled',this.checked)"></th>
+                  <th class="model-check">尾部修复<br><input style="margin: 4px 0 0;" id="allModelsTrailing" type="checkbox" onchange="setAllModelFlags('trailing_fix_enabled',this.checked)"></th>
+                  <th>模型 ID</th><th>别名</th>
+                  <th style="width: 80px; text-align: center;">操作</th>
+                </tr></thead>
+                <tbody id="modelsTableBody"></tbody>
+              </table>
             </div>
           </div>
         </section>
@@ -129,10 +139,20 @@
           </div>
           <div class="grid grid-1">
             <div class="card glass">
-              <div class="field"><label for="globalProxy">全局外部代理 (SOCKS5/HTTP)</label>
-                <div class="toolbar m-0"><input id="globalProxy" placeholder="socks5://127.0.0.1:1080"><button
-                    class="btn" onclick="saveGlobalProxy()">保存</button></div>
-                <div class="desc">配置后默认走该代理；如果未启用并发池且无锁定节点，将使用此代理。</div>
+              <div class="field"><label for="globalProxy">全局入口代理</label>
+                <div class="toolbar m-0"><input id="globalProxy" placeholder="socks5://127.0.0.1:1080 或 vless://..."><button
+                    class="btn" onclick="importProxyNode()">导入候选</button></div>
+                <div class="desc">启用后作为业务节点的第一跳；未使用业务节点时仅经过该入口。订阅仍先直连，失败后才用当前入口重试一次。</div>
+              </div>
+              <div class="divider"></div>
+              <div class="field m-0">
+                <div class="field-heading">入口代理候选</div>
+                <div class="table-wrap">
+                  <table id="proxyCandidatesTable">
+                    <thead><tr><th>名称</th><th>类型</th><th>测试状态</th><th>操作</th></tr></thead>
+                    <tbody id="proxyNodesBody"></tbody>
+                  </table>
+                </div>
               </div>
             </div>
             <div class="card glass">
@@ -199,7 +219,7 @@
                   onclick="selectAllNodesAcrossPages()">全选所有页共 <span id="crossPageSelectTotal">0</span> 个节点</button>
               </div>
               <div class="table-wrap">
-                <table>
+                <table id="nodesTable">
                   <thead>
                     <tr>
                       <th class="th-center"><label for="selectAllNodesCheckbox" class="sr-only">全选</label><input
@@ -411,6 +431,19 @@
   </div>
 
   <div class="toast glass" id="toast"></div>
+
+  <div id="modelImportModal" class="hidden modal-overlay">
+    <div class="modal-card model-import-card">
+      <h3 id="modelImportTitle">导入模型列表</h3>
+      <div id="modelImportHint" class="hint"></div>
+      <textarea id="modelImportText" class="font-mono" rows="12" oninput="previewModelImport()" placeholder="在此粘贴内容"></textarea>
+      <div id="modelImportPreview" class="model-import-preview">粘贴内容后显示预览</div>
+      <div class="toolbar justify-end">
+        <button class="btn ghost" onclick="closeModelImport()">取消</button>
+        <button class="btn" onclick="applyModelImport()">合并导入</button>
+      </div>
+    </div>
+  </div>
 
   <div id="confirmModal" class="hidden"
     style="position:fixed;inset:0;display:grid;place-items:center;z-index:9999;background:rgba(0,0,0,0.5);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);transition:opacity .3s var(--ease);">

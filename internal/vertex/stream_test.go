@@ -1,6 +1,7 @@
 package vertex
 
 import (
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -110,6 +111,35 @@ func TestScanStream_SplitAcrossReads(t *testing.T) {
 	}
 	if got := firstPartText(emitted[0]); got != "split me" {
 		t.Errorf("text=%q", got)
+	}
+}
+
+func TestScanStream_PropagatesReadErrorAfterCompleteChunk(t *testing.T) {
+	wantErr := errors.New("connection reset")
+	raw := wrap(`{"candidates":[{"content":{"parts":[{"text":"partial answer"}],"role":"model"},"finishReason":"FINISH_REASON_UNSPECIFIED"}]}`)
+	emitted := 0
+	err := scanStream(&terminalErrorReader{data: []byte(raw), err: wantErr}, func(obj map[string]any) (bool, error) {
+		return processStreamingObject(obj, func(map[string]any) bool {
+			emitted++
+			return true
+		})
+	})
+	if emitted != 1 {
+		t.Fatalf("emitted=%d, want 1", emitted)
+	}
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("异常断流应向上传播，got %v", err)
+	}
+}
+
+func TestScanStream_PropagatesReadErrorWithIncompleteObject(t *testing.T) {
+	wantErr := io.ErrUnexpectedEOF
+	err := scanStream(&terminalErrorReader{data: []byte(`{"results":[{"data":`), err: wantErr}, func(map[string]any) (bool, error) {
+		t.Fatal("不完整对象不应触发回调")
+		return false, nil
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("不完整对象后的异常断流应向上传播，got %v", err)
 	}
 }
 
@@ -375,6 +405,53 @@ func TestEmitAndCheckFinish(t *testing.T) {
 	}
 }
 
+func TestStreamCompletionStateWaitsForEveryCandidateAndUsage(t *testing.T) {
+	state := newStreamCompletionState()
+	emit := func(map[string]any) bool { return true }
+
+	_, done := emitAndCheckFinish(map[string]any{"candidates": []any{
+		map[string]any{"index": 0, "finishReason": "STOP"},
+		map[string]any{"index": 1, "finishReason": finishReasonUnspecified},
+	}}, emit, state)
+	if done {
+		t.Fatal("stream stopped before all candidates finished and usage arrived")
+	}
+	_, done = emitAndCheckFinish(map[string]any{"usageMetadata": map[string]any{"totalTokenCount": float64(5)}}, emit, state)
+	if done {
+		t.Fatal("stream stopped while candidate 1 was unfinished")
+	}
+	_, done = emitAndCheckFinish(map[string]any{"candidates": []any{
+		map[string]any{"index": 1, "finishReason": "MAX_TOKENS"},
+	}}, emit, state)
+	if !done {
+		t.Fatal("stream did not stop after all candidates finished and usage was observed")
+	}
+}
+
+func TestProcessStreamingObjectDoesNotStopInsideParallelCandidateList(t *testing.T) {
+	state := newStreamCompletionState()
+	emitted := 0
+	emit := func(map[string]any) bool {
+		emitted++
+		return true
+	}
+	obj := map[string]any{"results": []any{map[string]any{"data": map[string]any{
+		"usageMetadata": map[string]any{"totalTokenCount": float64(5)},
+		"ui": map[string]any{"streamGenerateContentAnonymous": []any{
+			map[string]any{"candidates": []any{map[string]any{"index": 0, "finishReason": "STOP"}}},
+			map[string]any{"candidates": []any{map[string]any{"index": 1, "finishReason": finishReasonUnspecified}}},
+		}},
+	}}}}
+
+	stop, err := processStreamingObject(obj, emit, state)
+	if err != nil || stop {
+		t.Fatalf("processStreamingObject stop=%v err=%v", stop, err)
+	}
+	if emitted != 2 {
+		t.Fatalf("emitted=%d, want both parallel candidates", emitted)
+	}
+}
+
 // ---- 测试小工具 ----
 
 func firstPartText(chunk map[string]any) string {
@@ -400,6 +477,20 @@ type splitReader struct {
 	data  []byte
 	chunk int
 	pos   int
+}
+
+type terminalErrorReader struct {
+	data []byte
+	err  error
+	done bool
+}
+
+func (r *terminalErrorReader) Read(p []byte) (int, error) {
+	if r.done {
+		return 0, r.err
+	}
+	r.done = true
+	return copy(p, r.data), r.err
 }
 
 func (r *splitReader) Read(p []byte) (int, error) {

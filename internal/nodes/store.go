@@ -38,7 +38,7 @@ type NodeHealth struct { //nolint:govet
 	RecentUseCount      int     `json:"recent_use_count"`
 	LastSelectedAt      int64   `json:"last_selected_at"`
 	LastSubHealthyAt    int64   `json:"last_sub_healthy_at"` // 记录上一次处于亚健康状态的时间
-	InFlight            int32   `json:"-"` // 当前并发连接数，不持久化
+	InFlight            int32   `json:"-"`                   // 当前并发连接数，不持久化
 }
 
 var (
@@ -76,7 +76,7 @@ func ensureLoaded() {
 	}
 
 	// Load health
-	hRows, err := db.GlobalDB.Query("SELECT raw_uri, success_count, fail_count, consecutive_failures, last_test_ms, last_test_error, last_success_at, last_fail_at, cooldown_until FROM node_health")
+	hRows, err := db.GlobalDB.Query("SELECT raw_uri, success_count, fail_count, consecutive_failures, last_test_ms, last_test_error, last_success_at, last_fail_at, cooldown_until, last_429_at, rate_limit_count, last_sub_healthy_at FROM node_health")
 	if err == nil {
 		defer func() {
 			_ = hRows.Close()
@@ -84,7 +84,7 @@ func ensureLoaded() {
 		for hRows.Next() {
 			var uri string
 			h := &NodeHealth{} //nolint:exhaustruct
-			if err := hRows.Scan(&uri, &h.SuccessCount, &h.FailCount, &h.ConsecutiveFailures, &h.LastTestMs, &h.LastTestError, &h.LastSuccessAt, &h.LastFailAt, &h.CooldownUntil); err == nil {
+			if err := hRows.Scan(&uri, &h.SuccessCount, &h.FailCount, &h.ConsecutiveFailures, &h.LastTestMs, &h.LastTestError, &h.LastSuccessAt, &h.LastFailAt, &h.CooldownUntil, &h.Last429At, &h.RateLimitCount, &h.LastSubHealthyAt); err == nil {
 				healthMap[uri] = h
 			}
 		}
@@ -173,9 +173,9 @@ func initHealthQueue() {
 				}
 				return
 			}
-			stmt, err := tx.Prepare(`INSERT OR REPLACE INTO node_health 
-				(raw_uri, success_count, fail_count, consecutive_failures, last_test_ms, last_test_error, last_success_at, last_fail_at, cooldown_until) 
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+			stmt, err := tx.Prepare(`INSERT OR REPLACE INTO node_health
+				(raw_uri, success_count, fail_count, consecutive_failures, last_test_ms, last_test_error, last_success_at, last_fail_at, cooldown_until, last_429_at, rate_limit_count, last_sub_healthy_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 			if err != nil {
 				_ = tx.Rollback()
 				log.Printf("[ERROR] Failed to prepare health save statement: %v", err)
@@ -189,7 +189,7 @@ func initHealthQueue() {
 			defer stmt.Close()
 
 			for uri, h := range batch {
-				_, _ = stmt.Exec(uri, h.SuccessCount, h.FailCount, h.ConsecutiveFailures, h.LastTestMs, h.LastTestError, h.LastSuccessAt, h.LastFailAt, h.CooldownUntil)
+				_, _ = stmt.Exec(uri, h.SuccessCount, h.FailCount, h.ConsecutiveFailures, h.LastTestMs, h.LastTestError, h.LastSuccessAt, h.LastFailAt, h.CooldownUntil, h.Last429At, h.RateLimitCount, h.LastSubHealthyAt)
 			}
 			_ = tx.Commit()
 			for k := range batch {
@@ -280,9 +280,18 @@ func GetTestProgress() TestProgress {
 	return globalProgress
 }
 
-func StartTestProgress(total int) {
+func IsTestRunning() bool {
+	progressMu.RLock()
+	defer progressMu.RUnlock()
+	return globalProgress.Running
+}
+
+func StartTestProgress(total int) bool {
 	progressMu.Lock()
 	defer progressMu.Unlock()
+	if globalProgress.Running {
+		return false
+	}
 	globalProgress = TestProgress{
 		Running:     true,
 		Paused:      false,
@@ -293,6 +302,7 @@ func StartTestProgress(total int) {
 		FailCount:   0,
 		CurrentNode: "准备中...",
 	}
+	return true
 }
 
 func UpdateTestProgress(nodeName string, ok bool) {
@@ -315,7 +325,11 @@ func FinishTestProgress() {
 	defer progressMu.Unlock()
 	globalProgress.Running = false
 	globalProgress.Paused = false
-	globalProgress.CurrentNode = "测试完成"
+	if globalProgress.Terminated {
+		globalProgress.CurrentNode = "已终止"
+	} else {
+		globalProgress.CurrentNode = "测试完成"
+	}
 	testControlCond.Broadcast()
 }
 
@@ -772,19 +786,14 @@ func RecordTest(uri string, ok bool, ms float64, errStr string) {
 	} else {
 		h.FailCount++
 		h.ConsecutiveFailures++
-		h.LastFailAt = time.Now().Unix()
+		now := time.Now().Unix()
+		h.LastFailAt = now
 		failures := maxInt(1, h.ConsecutiveFailures)
 		cooldown := minInt(1800, 30*(1<<minInt(failures-1, 6)))
-		h.CooldownUntil = time.Now().Unix() + int64(cooldown)
-		
-		errLower := strings.ToLower(errStr)
-		if strings.Contains(errLower, "dial") || strings.Contains(errLower, "refused") ||
-			strings.Contains(errLower, "i/o timeout") || strings.Contains(errLower, "deadline exceeded") ||
-			strings.Contains(errLower, "connection") {
-			updateSingleNodeDisabledUnsafe(uri, true)
-		} else {
-			h.LastSubHealthyAt = time.Now().Unix()
-		}
+		h.CooldownUntil = now + int64(cooldown)
+		// 运行时网络失败只影响健康层级和冷却。Disabled 仅由管理页显式操作，
+		// 避免一次临时拨号错误在数据库中留下永久禁用状态。
+		h.LastSubHealthyAt = now
 	}
 	updateSingleNodeHealthUnsafe(uri, h)
 }
@@ -812,13 +821,15 @@ func RecordRateLimit(uri string, cooldownSec int) {
 	h.LastFailAt = now
 	updateSingleNodeHealthUnsafe(uri, h)
 }
+
+//nolint:gochecknoglobals
 var atomicRoundRobinIndex uint64
 
 func getNodeTier(n Node, h *NodeHealth) int {
 	if n.Disabled {
 		return 3
 	}
-	if h != nil && h.LastSubHealthyAt > 0 {
+	if h != nil && (h.LastSubHealthyAt > 0 || h.CooldownUntil > time.Now().Unix()) {
 		return 2
 	}
 	return 1
@@ -827,6 +838,7 @@ func getNodeTier(n Node, h *NodeHealth) int {
 type tierCandidate struct {
 	node     Node
 	inFlight int32
+	sticky   bool
 }
 
 func SelectForParallel(k int, topK int, debugMode bool, stickyBonusEnabled bool) []Node {
@@ -837,56 +849,83 @@ func SelectForParallel(k int, topK int, debugMode bool, stickyBonusEnabled bool)
 
 	var tier1 []tierCandidate
 	var tier2 []tierCandidate
-	var tier2Cooldown []tierCandidate
+	cooldownCount := 0
 
 	for _, n := range nodeList {
 		if n.Disabled {
 			continue
 		}
 		h := healthMap[n.RawURI]
+		if h != nil && h.CooldownUntil > now {
+			cooldownCount++
+			continue
+		}
 		tier := getNodeTier(n, h)
 		inFlight := int32(0)
 		if h != nil {
 			inFlight = h.InFlight
 		}
+		sticky := stickyBonusEnabled && globalStickyPool.IsSticky(n.RawURI)
 		switch tier {
 		case 1:
-			tier1 = append(tier1, tierCandidate{n, inFlight})
+			tier1 = append(tier1, tierCandidate{node: n, inFlight: inFlight, sticky: sticky})
 		case 2:
-			if h != nil && h.CooldownUntil > now {
-				tier2Cooldown = append(tier2Cooldown, tierCandidate{n, inFlight})
-			} else {
-				tier2 = append(tier2, tierCandidate{n, inFlight})
-			}
+			tier2 = append(tier2, tierCandidate{node: n, inFlight: inFlight, sticky: sticky})
 		}
 	}
 
-	sort.Slice(tier1, func(i, j int) bool {
-		if tier1[i].inFlight != tier1[j].inFlight {
-			return tier1[i].inFlight < tier1[j].inFlight
+	sortTier := func(candidates []tierCandidate) {
+		sort.Slice(candidates, func(i, j int) bool {
+			if candidates[i].inFlight != candidates[j].inFlight {
+				return candidates[i].inFlight < candidates[j].inFlight
+			}
+			if candidates[i].sticky != candidates[j].sticky {
+				return candidates[i].sticky
+			}
+			hi := healthMap[candidates[i].node.RawURI]
+			hj := healthMap[candidates[j].node.RawURI]
+			ti := int64(0)
+			if hi != nil {
+				ti = hi.LastSelectedAt
+			}
+			tj := int64(0)
+			if hj != nil {
+				tj = hj.LastSelectedAt
+			}
+			if ti != tj {
+				return ti < tj
+			}
+			return candidates[i].node.RawURI < candidates[j].node.RawURI
+		})
+	}
+	sortTier(tier1)
+	sortTier(tier2)
+
+	if topK <= 0 {
+		topK = 80
+	}
+	// topK 限制每轮可参与轮询的候选池；不能小于本轮实际需求，
+	// 否则配置较小时会无故减少并发候选数量。
+	candidateLimit := maxInt(k, topK)
+	if len(tier1) > candidateLimit {
+		tier1 = tier1[:candidateLimit]
+		tier2 = nil
+	} else {
+		remaining := candidateLimit - len(tier1)
+		if len(tier2) > remaining {
+			tier2 = tier2[:remaining]
 		}
-		hi := healthMap[tier1[i].node.RawURI]
-		hj := healthMap[tier1[j].node.RawURI]
-		ti := int64(0)
-		if hi != nil {
-			ti = hi.LastSelectedAt
-		}
-		tj := int64(0)
-		if hj != nil {
-			tj = hj.LastSelectedAt
-		}
-		if ti != tj {
-			return ti < tj
-		}
-		return tier1[i].node.RawURI < tier1[j].node.RawURI
-	})
+	}
+
+	samePriorityGroup := func(a, b tierCandidate) bool {
+		return a.inFlight == b.inFlight && a.sticky == b.sticky
+	}
 
 	var selected []Node
 	i := 0
 	for i < len(tier1) && len(selected) < k {
-		curInFlight := tier1[i].inFlight
 		j := i
-		for j < len(tier1) && tier1[j].inFlight == curInFlight {
+		for j < len(tier1) && samePriorityGroup(tier1[i], tier1[j]) {
 			j++
 		}
 		group := tier1[i:j]
@@ -899,31 +938,10 @@ func SelectForParallel(k int, topK int, debugMode bool, stickyBonusEnabled bool)
 	}
 
 	if len(selected) < k {
-		sort.Slice(tier2, func(i, j int) bool {
-			if tier2[i].inFlight != tier2[j].inFlight {
-				return tier2[i].inFlight < tier2[j].inFlight
-			}
-			hi := healthMap[tier2[i].node.RawURI]
-			hj := healthMap[tier2[j].node.RawURI]
-			si := int64(0)
-			if hi != nil {
-				si = hi.LastSelectedAt
-			}
-			sj := int64(0)
-			if hj != nil {
-				sj = hj.LastSelectedAt
-			}
-			if si != sj {
-				return si < sj
-			}
-			return tier2[i].node.RawURI < tier2[j].node.RawURI
-		})
-		
 		i := 0
 		for i < len(tier2) && len(selected) < k {
-			curInFlight := tier2[i].inFlight
 			j := i
-			for j < len(tier2) && tier2[j].inFlight == curInFlight {
+			for j < len(tier2) && samePriorityGroup(tier2[i], tier2[j]) {
 				j++
 			}
 			group := tier2[i:j]
@@ -935,37 +953,6 @@ func SelectForParallel(k int, topK int, debugMode bool, stickyBonusEnabled bool)
 			i = j
 		}
 	}
-	
-	// 健康节点不足时，用冷却中的节点兜底（按 Last429At 最早优先）。
-	if len(selected) < k && len(tier2Cooldown) > 0 {
-		sort.Slice(tier2Cooldown, func(i, j int) bool {
-			hi := healthMap[tier2Cooldown[i].node.RawURI]
-			hj := healthMap[tier2Cooldown[j].node.RawURI]
-			li := int64(0)
-			lj := int64(0)
-			if hi != nil {
-				li = hi.Last429At
-			}
-			if hj != nil {
-				lj = hj.Last429At
-			}
-			if li != lj {
-				return li < lj
-			}
-			return tier2Cooldown[i].inFlight < tier2Cooldown[j].inFlight
-		})
-
-		needed := k - len(selected)
-		if needed > len(tier2Cooldown) {
-			needed = len(tier2Cooldown)
-		}
-		for i := range needed {
-			selected = append(selected, tier2Cooldown[i].node)
-		}
-		if debugMode {
-			log.Printf("[Nodes] 健康节点不足，冷却节点兜底补充 %d 个", needed)
-		}
-	}
 
 	for _, s := range selected {
 		if h := healthMap[s.RawURI]; h != nil {
@@ -975,7 +962,7 @@ func SelectForParallel(k int, topK int, debugMode bool, stickyBonusEnabled bool)
 	}
 
 	if debugMode {
-		log.Printf("[Nodes] 选择并行节点 (需求: %d, 实际: %d)", k, len(selected))
+		log.Printf("[Nodes] 选择并行节点 (需求: %d, 实际: %d, 冷却跳过: %d)", k, len(selected), cooldownCount)
 	}
 	return selected
 }

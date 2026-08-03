@@ -1,13 +1,70 @@
 package api
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/bsfdsagfadg/vertex/internal/config"
+	"github.com/bsfdsagfadg/vertex/internal/nodes"
 	"github.com/bsfdsagfadg/vertex/internal/transport"
+	"github.com/metacubex/mihomo/adapter"
+	"github.com/metacubex/mihomo/constant/features"
 )
+
+func TestBatchTestTimeoutAndDuplicateRejection(t *testing.T) {
+	if got := batchTestTimeout(1); got != 5*time.Minute {
+		t.Fatalf("小批量总超时=%v, want 5m", got)
+	}
+	if got := batchTestTimeout(1000); got <= 5*time.Minute {
+		t.Fatalf("大批量应按轮次增加总超时: %v", got)
+	}
+
+	nodes.FinishTestProgress()
+	if !nodes.StartTestProgress(1) {
+		t.Fatal("测试状态初始化失败")
+	}
+	t.Cleanup(func() {
+		nodes.TerminateTestProgress()
+		nodes.FinishTestProgress()
+	})
+	adm := &AdminHandler{}
+	recorder := httptest.NewRecorder()
+	adm.adminTestAll(recorder, httptest.NewRequest("POST", "/api/admin/nodes/test-all", nil))
+	if recorder.Code != 409 {
+		t.Fatalf("重复批量测试 status=%d body=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestResolveBatchNodeTestRecordsSingleNodeTimeout(t *testing.T) {
+	parentCtx := context.Background()
+	nodeCtx, cancelNode := context.WithCancel(parentCtx)
+	cancelNode()
+
+	err, abort := resolveBatchNodeTest(parentCtx, nodeCtx, nil)
+	if abort {
+		t.Fatal("单节点超时不应中止该节点的结果记账")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("单节点 context 错误应成为测试失败，got %v", err)
+	}
+
+	parentCanceled, cancelParent := context.WithCancel(context.Background())
+	cancelParent()
+	childCtx, cancelChild := context.WithCancel(parentCanceled)
+	defer cancelChild()
+	_, abort = resolveBatchNodeTest(parentCanceled, childCtx, errors.New("node failed"))
+	if !abort {
+		t.Fatal("父批量任务取消后应停止结果记账")
+	}
+}
 
 func TestParseInlineYamlAttrsKeepsNestedObjects(t *testing.T) {
 	attrs := parseInlineYamlAttrs("name: demo, type: vless, ws-opts: { path: /ws, headers: { Host: edge.example.com } }, reality-opts: { public-key: pubkey, short-id: abcd }")
@@ -131,6 +188,103 @@ proxies:
 	imported := parseClashYAMLToNodes(yamlText)
 	if len(imported) != 0 {
 		t.Fatalf("expected invalid proxy objects to be skipped, got %#v", imported)
+	}
+}
+
+func TestParseClashYAMLToNodesBuildsTUICWithMihomo(t *testing.T) {
+	yamlText := `
+proxies:
+  - name: tuic-demo
+    type: tuic
+    server: tuic.example.com
+    port: 443
+    token: secret
+    sni: tuic.example.com
+    alpn: [h3]
+    skip-cert-verify: true
+    congestion-controller: bbr
+    udp-relay-mode: native
+`
+
+	assertClashNodeBuildsWithMihomo(t, yamlText, "tuic")
+}
+
+func TestParseClashYAMLToNodesBuildsWireGuardWithMihomo(t *testing.T) {
+	privateKey := base64.StdEncoding.EncodeToString(make([]byte, 32))
+	publicKeyBytes := make([]byte, 32)
+	for i := range publicKeyBytes {
+		publicKeyBytes[i] = 1
+	}
+	publicKey := base64.StdEncoding.EncodeToString(publicKeyBytes)
+	yamlText := fmt.Sprintf(`
+proxies:
+  - name: wg-demo
+    type: wireguard
+    server: 198.51.100.10
+    port: 51820
+    ip: 10.0.0.2/32
+    private-key: %s
+    public-key: %s
+    udp: true
+`, privateKey, publicKey)
+
+	assertClashNodeBuildsWithMihomo(t, yamlText, "wireguard")
+}
+
+func TestParseClashYAMLToNodesRejectsIncompleteTUICAndWireGuard(t *testing.T) {
+	yamlText := `
+proxies:
+  - { name: tuic-missing-auth, type: tuic, server: example.com, port: 443 }
+  - { name: wg-missing-local-address, type: wireguard, server: 198.51.100.10, port: 51820, private-key: private, public-key: public }
+  - { name: wg-missing-public-key, type: wireguard, server: 198.51.100.10, port: 51820, ip: 10.0.0.2/32, private-key: private }
+`
+
+	if imported := parseClashYAMLToNodes(yamlText); len(imported) != 0 {
+		t.Fatalf("expected incomplete TUIC/WireGuard maps to be skipped, got %#v", imported)
+	}
+}
+
+func TestSubscriptionFallbackProxyIgnoresActiveNode(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.ActiveNodeURI = "clash://active-node"
+	cfg.ProxyURL = "  http://127.0.0.1:7897  "
+
+	got := subscriptionFallbackProxy(config.StaticProvider(cfg))
+	if got != "http://127.0.0.1:7897" {
+		t.Fatalf("expected global proxy_url, got %q", got)
+	}
+}
+
+func assertClashNodeBuildsWithMihomo(t *testing.T, yamlText string, wantType string) {
+	t.Helper()
+	imported := parseClashYAMLToNodes(yamlText)
+	if len(imported) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(imported))
+	}
+	out, err := transport.ParseURI(imported[0].RawURI)
+	if err != nil {
+		t.Fatalf("ParseURI returned error: %v", err)
+	}
+	if out["type"] != wantType {
+		t.Fatalf("expected type %q, got %#v", wantType, out["type"])
+	}
+	proxy, err := adapter.ParseProxy(out)
+	if wantType == "wireguard" && !features.WithGVisor {
+		if err == nil {
+			t.Fatal("expected a default build without with_gvisor to reject WireGuard construction")
+		}
+		if !strings.Contains(err.Error(), "gVisor is not included") {
+			t.Fatalf("expected missing gVisor error, got %v", err)
+		}
+		return
+	}
+	if err != nil {
+		t.Fatalf("mihomo rejected imported %s map: %v", wantType, err)
+	}
+	if closer, ok := proxy.(interface{ Close() error }); ok {
+		if err := closer.Close(); err != nil {
+			t.Fatalf("close imported %s proxy: %v", wantType, err)
+		}
 	}
 }
 

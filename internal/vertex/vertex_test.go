@@ -1,6 +1,8 @@
 package vertex
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/bsfdsagfadg/vertex/internal/config"
@@ -19,6 +21,63 @@ func TestParseErrorResponse(t *testing.T) {
 	}})
 	if e2 == nil {
 		t.Error("errors 数组未解析")
+	}
+}
+
+func TestVertexErrorPreservesCauseAndClassifiesNetwork(t *testing.T) {
+	ctxErr := NewContextError(context.DeadlineExceeded)
+	if !errors.Is(ctxErr, context.DeadlineExceeded) {
+		t.Fatal("context cause 应可通过 errors.Is 穿透")
+	}
+	if ctxErr.IsRetryable() {
+		t.Fatal("调用方 context 超时不应重试")
+	}
+
+	networkCause := errors.New("connection reset")
+	networkErr := NewNetworkError(networkCause)
+	if !networkErr.IsRetryable() || !errors.Is(networkErr, networkCause) {
+		t.Fatal("网络错误应可重试并保留底层 cause")
+	}
+}
+
+func TestParseErrorResponseSafetyAndNonJSON(t *testing.T) {
+	safety := parseErrorResponse(map[string]any{"promptFeedback": map[string]any{"blockReason": "SAFETY"}})
+	if safety == nil || safety.Kind != "safety" || !safety.IsGlobalHardError() {
+		t.Fatalf("安全拦截分类错误: %+v", safety)
+	}
+	nonJSON := parseErrorResponse("<html>bad gateway</html>")
+	if nonJSON == nil || nonJSON.Code != 502 || nonJSON.UpstreamResponse == "" {
+		t.Fatalf("非 JSON 上游错误未保留: %+v", nonJSON)
+	}
+}
+
+func TestClassifyUpstreamHTTPErrorKeepsStatusForPlainText(t *testing.T) {
+	err := classifyUpstreamHTTPError(400, "plain invalid argument")
+	if err.Code != 400 || err.Kind != "invalid" {
+		t.Fatalf("纯文本 HTTP 错误应保留状态码: %+v", err)
+	}
+}
+
+func TestClassifyUpstreamHTTPErrorDistinguishesPermissionAndRecaptcha(t *testing.T) {
+	permissionBody := `{"error":{"code":403,"status":"PERMISSION_DENIED","message":"project access denied"}}`
+	permission := classifyUpstreamHTTPError(403, permissionBody)
+	if permission.Code != 403 || permission.Kind != "permission" || permission.Status != StatusPermissionDenied {
+		t.Fatalf("结构化权限错误应保持 permission/403: %+v", permission)
+	}
+
+	plainPermission := classifyUpstreamHTTPError(403, "access denied")
+	if plainPermission.Code != 403 || plainPermission.Kind != "permission" {
+		t.Fatalf("无认证特征的普通 403 应保持 permission: %+v", plainPermission)
+	}
+
+	verifyFail := classifyUpstreamHTTPError(403, `{"error":{"code":403,"message":"Failed to verify action"}}`)
+	if verifyFail.Code != 502 || verifyFail.Kind != "auth" {
+		t.Fatalf("明确的 reCAPTCHA verify-fail 应保持可重试 auth/502: %+v", verifyFail)
+	}
+
+	unauthorized := classifyUpstreamHTTPError(401, "unauthorized")
+	if unauthorized.Code != 502 || unauthorized.Kind != "auth" {
+		t.Fatalf("401 应保持可重试 auth/502: %+v", unauthorized)
 	}
 }
 
@@ -77,5 +136,46 @@ func TestBuildCompleteResponse_Empty(t *testing.T) {
 	}
 	if ve := asVertexError(err); ve == nil || ve.Kind != "empty" {
 		t.Errorf("err=%v, want empty", err)
+	}
+}
+
+func TestCollectChunksToParseResultPreservesMultipleCandidates(t *testing.T) {
+	chunks := []map[string]any{
+		{"candidates": []any{
+			map[string]any{"index": 0, "content": map[string]any{"parts": []any{map[string]any{"text": "zero-a"}}}},
+			map[string]any{"index": 1, "content": map[string]any{"parts": []any{map[string]any{"text": "one-a"}}}},
+		}},
+		{"candidates": []any{
+			map[string]any{"index": 0, "content": map[string]any{"parts": []any{map[string]any{"text": "-zero-b"}}}, "finishReason": "STOP"},
+			map[string]any{"index": 1, "content": map[string]any{"parts": []any{map[string]any{"text": "-one-b"}}}, "finishReason": "MAX_TOKENS"},
+		}, "usageMetadata": map[string]any{"totalTokenCount": float64(10)}},
+	}
+
+	result := collectChunksToParseResult(chunks)
+	if len(result.Candidates) != 2 {
+		t.Fatalf("candidates=%#v, want 2", result.Candidates)
+	}
+	for index, wantText := range []string{"zero-a-zero-b", "one-a-one-b"} {
+		candidate := result.Candidates[index]
+		content := candidate["content"].(map[string]any)
+		parts := content["parts"].([]any)
+		if got := parts[0].(map[string]any)["text"]; got != wantText {
+			t.Fatalf("candidate %d text=%#v, want %q", index, got, wantText)
+		}
+	}
+	if result.Parts[0]["text"] != "zero-a-zero-b" {
+		t.Fatalf("first-candidate compatibility fields=%#v", result.Parts)
+	}
+	if result.UsageMetadata["totalTokenCount"] != float64(10) {
+		t.Fatalf("usage metadata=%#v", result.UsageMetadata)
+	}
+
+	client := &VertexAIClient{}
+	response, err := client.buildCompleteResponse(result)
+	if err != nil {
+		t.Fatalf("buildCompleteResponse: %v", err)
+	}
+	if candidates := response["candidates"].([]any); len(candidates) != 2 {
+		t.Fatalf("response candidates=%#v, want 2", candidates)
 	}
 }

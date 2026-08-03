@@ -1,6 +1,8 @@
 package recaptcha
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"testing"
@@ -9,10 +11,10 @@ import (
 // TestTokenPoolRealtime 验证每次 GetToken 都实时获取，且 Start/Stop 不阻塞、Stats 返回 0,0。
 func TestTokenPoolRealtime(t *testing.T) {
 	var calls int32
-	p := &TokenPool{fetch: func(_ string) (string, error) {
+	p := NewTokenPoolCustom(func(_ string) (string, error) {
 		n := atomic.AddInt32(&calls, 1)
 		return fmt.Sprintf("tok-%d", n), nil
-	}}
+	})
 
 	p.Start()
 	if size, fill := p.Stats(); size != 0 || fill != 0 {
@@ -30,4 +32,51 @@ func TestTokenPoolRealtime(t *testing.T) {
 	}
 
 	p.Stop() // 不应阻塞
+}
+
+func TestTokenPoolContextCancellation(t *testing.T) {
+	p := NewTokenPoolCustomContext(func(ctx context.Context, _ string) (string, error) {
+		<-ctx.Done()
+		return "", ctx.Err()
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := p.GetTokenWithProxyContext(ctx, "test-proxy")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("取消应传播到 token 获取函数: %v", err)
+	}
+}
+
+func TestTokenPoolUsesDynamicDefaultButExplicitEmptyMeansDirect(t *testing.T) {
+	currentProxy := "http://proxy-a.example:7890"
+	var gotProxy string
+	p := &TokenPool{
+		fetch: func(_ context.Context, proxyURI string) (string, error) {
+			gotProxy = proxyURI
+			return "token", nil
+		},
+		defaultProxy: func() string { return currentProxy },
+	}
+
+	if _, err := p.GetTokenContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if gotProxy != currentProxy {
+		t.Fatalf("默认 token 获取应读取当前代理，got %q", gotProxy)
+	}
+
+	currentProxy = "http://proxy-b.example:7890"
+	if _, err := p.GetTokenContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if gotProxy != currentProxy {
+		t.Fatalf("代理热切换后应读取新值，got %q", gotProxy)
+	}
+
+	if _, err := p.GetTokenWithProxyContext(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if gotProxy != "" {
+		t.Fatalf("显式空代理应直连，不能回退当前全局代理，got %q", gotProxy)
+	}
 }

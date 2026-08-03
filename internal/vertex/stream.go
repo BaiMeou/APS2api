@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -108,13 +109,22 @@ retryLoop:
 	for attempt <= maxRetries {
 		log.Printf("[Vertex] [StreamChat] 开始尝试 (Attempt %d/%d), 模型=%s, 请求ID=%s, 代理=%s", attempt+baseAttempt, attemptDenom, model, reqID, nodes.GetNodeName(proxyURI))
 		if recaptchaToken == "" {
-			tok, _ := c.pool.GetTokenWithProxy(proxyURI)
+			tok, tokenErr := c.pool.GetTokenWithProxyContext(ctx, proxyURI)
+			if tokenErr != nil && ctx.Err() != nil {
+				lastError = NewContextError(ctx.Err())
+				break retryLoop
+			}
+			if tokenErr != nil {
+				lastError = NewAuthenticationError("Could not fetch recaptcha token: "+tokenErr.Error(), tokenErr)
+			}
 			recaptchaToken = tok
 			isFirstAuth = true
 		}
 		if recaptchaToken == "" {
 			if attempt == maxRetries {
-				lastError = NewAuthenticationError("Could not fetch recaptcha token.")
+				if lastError == nil {
+					lastError = NewAuthenticationError("Could not fetch recaptcha token.")
+				}
 				break retryLoop
 			}
 			attempt++
@@ -197,9 +207,13 @@ retryLoop:
 
 		case ve != nil:
 			lastError = ve
-			// 【关键改动】：如果是网络不通等内部错误，直接熔断并停止重试。
+			// 内部实现错误直接停止；明确分类的临时网络/上游错误按策略重试。
 			if ve.Kind == "internal" || !ve.IsRetryable() || contentYielded || attempt >= maxRetries {
-				log.Printf("[Vertex] [StreamChat] (Attempt %d/%d) 节点 %s 触发异常错误失败: [%s] %s, 请求ID=%s, 代理=%s", attempt+baseAttempt, attemptDenom, model, ve.Kind, ve.Message, reqID, nodes.GetNodeName(proxyURI))
+				if errors.Is(ve, context.Canceled) {
+					log.Printf("[Vertex] [StreamChat] (Attempt %d/%d) 节点 %s 取消/断开: [%s] %s, 请求ID=%s, 代理=%s", attempt+baseAttempt, attemptDenom, model, ve.Kind, ve.Message, reqID, nodes.GetNodeName(proxyURI))
+				} else {
+					log.Printf("[Vertex] [StreamChat] (Attempt %d/%d) 节点 %s 触发异常错误失败: [%s] %s, 请求ID=%s, 代理=%s", attempt+baseAttempt, attemptDenom, model, ve.Kind, ve.Message, reqID, nodes.GetNodeName(proxyURI))
+				}
 				break retryLoop
 			}
 			log.Printf("[Vertex] [StreamChat] (Attempt %d/%d) 节点 %s 触发异常错误将重试: [%s] %s, 请求ID=%s, 代理=%s", attempt+baseAttempt, attemptDenom, model, ve.Kind, ve.Message, reqID, nodes.GetNodeName(proxyURI))
@@ -216,15 +230,14 @@ retryLoop:
 	}
 
 	// 所有重试耗尽且没发出过任何内容 → yield 一个 error chunk（末尾 yield error dict）。
-	// 竞速超时（RaceTimeout 到点，ctx deadline）优先映射为 503 unavailable：可重试且语义准确，
-	// 避免被内层包装成 500 internal 后丢失“是超时淘汰”这一信息。
 	if !contentYielded && lastError != nil {
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			lastError = NewUnavailableError(fmt.Sprintf("节点竞速超时（%d 秒），已淘汰", cfg.RaceTimeout()))
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			lastError = NewContextError(ctxErr)
 		}
 		yield(StreamChunk{Err: lastError})
 	}
 }
+
 type idleTouchingReader struct {
 	r     io.Reader
 	touch func()
@@ -324,9 +337,12 @@ func (c *VertexAIClient) executeStreamingAttempt(ctx context.Context, sess *tran
 		if idleTriggered.Load() {
 			return NewUnavailableError("stream idle timeout before first byte")
 		}
-		return NewInternalError("upstream request: " + err.Error())
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return NewContextError(ctxErr)
+		}
+		return NewNetworkError(fmt.Errorf("upstream request: %w", err))
 	}
-	
+
 	srRef.Store(sr)
 	if idleTriggered.Load() {
 		sr.Close()
@@ -349,25 +365,19 @@ func (c *VertexAIClient) executeStreamingAttempt(ctx context.Context, sess *tran
 			log.Printf("[Vertex] [Stream] 收到 400 Bad Request, Variables Payload: %s", string(debugBody))
 		}
 
-		if sr.StatusCode == 401 || sr.StatusCode == 403 ||
-			strings.Contains(errText, "Failed to verify action") ||
-			strings.Contains(errText, "The caller does not have permission") {
-			return NewAuthenticationError("Authentication/Recaptcha failed: " + errText)
-		}
-		if parsed := parseErrorResponse(errText); parsed != nil {
-			parsed.UpstreamResponse = errText
-			return parsed
-		}
-		return raiseForStatus(sr.StatusCode, "", "Upstream Error: "+errText, nil, errText)
+		return classifyUpstreamHTTPError(sr.StatusCode, errText)
 	}
 
 	// 增量扫描上游流，逐个完整 JSON 对象提取 chunk。
+	completionState := newStreamCompletionState()
 	scanErr := scanStream(&idleTouchingReader{r: sr.Body, touch: touchActivity}, func(obj map[string]any) (stop bool, err error) {
-		// 从单个上游对象提取（可能多个）chunk，逐个 emit；命中真实 finishReason 即结束。
-		return processStreamingObject(obj, emit)
+		return processStreamingObject(obj, emit, completionState)
 	})
 
 	if idleTriggered.Load() {
+		if completionState.allFinished() {
+			return nil
+		}
 		return NewUnavailableError("stream chunk idle timeout")
 	}
 
@@ -377,11 +387,34 @@ func (c *VertexAIClient) executeStreamingAttempt(ctx context.Context, sess *tran
 		log.Printf("[DEBUG] [StreamChat] 完整请求体: %s", string(debugReq))
 	}
 
-	if errors.Is(scanErr, context.Canceled) {
+	if errors.Is(scanErr, context.Canceled) || errors.Is(scanErr, context.DeadlineExceeded) {
 		return scanErr
 	}
+	if scanErr != nil {
+		var ve *VertexError
+		if errors.As(scanErr, &ve) {
+			return scanErr
+		}
+		return NewNetworkError(fmt.Errorf("upstream stream: %w", scanErr))
+	}
+	return nil
+}
 
-	return scanErr
+func classifyUpstreamHTTPError(statusCode int, body string) *VertexError {
+	if strings.Contains(body, "Failed to verify action") ||
+		strings.Contains(body, "The caller does not have permission") {
+		return NewAuthenticationError("Authentication/Recaptcha failed: " + body)
+	}
+	if json.Valid([]byte(body)) {
+		if parsed := parseErrorResponse(body); parsed != nil {
+			parsed.UpstreamResponse = body
+			return parsed
+		}
+	}
+	if statusCode == http.StatusUnauthorized {
+		return NewAuthenticationError("Authentication failed: " + body)
+	}
+	return raiseForStatus(statusCode, "", "Upstream Error: "+body, nil, body)
 }
 
 // scanStream 跨 chunk 增量扫描花括号配对，逐个完整 JSON 对象回调 onObject（O(n)）。
@@ -499,8 +532,11 @@ func scanStream(body io.Reader, onObject func(map[string]any) (bool, error)) err
 				return fmt.Errorf("error: %w", readErr)
 
 			}
-			// EOF 或读错误：流结束（正常 EOF 直接返回 nil，上层会按 got_content 判定空响应）。
-			return nil
+			if errors.Is(readErr, io.EOF) {
+				// 只有明确 EOF 才表示上游正常关闭；空响应由上层按 got_content 判定。
+				return nil
+			}
+			return fmt.Errorf("read upstream stream: %w", readErr)
 		}
 	}
 }
@@ -519,7 +555,11 @@ func parseJSONObject(b []byte) map[string]any {
 // 先识别 results 内的错误（"Failed to verify action" → AuthenticationError 触发重试），
 // 再 unwrap data.ui.streamGenerateContentAnonymous，最后 _extract_chunk 清洗后 emit。
 // 返回 (stop, err)：emit 出真实 finishReason 或客户端断开即 stop=true（结束扫描）；上游错误即 err 非 nil。
-func processStreamingObject(obj map[string]any, emit func(map[string]any) bool) (bool, error) {
+func processStreamingObject(obj map[string]any, emit func(map[string]any) bool, states ...*streamCompletionState) (bool, error) {
+	var state *streamCompletionState
+	if len(states) > 0 {
+		state = states[0]
+	}
 	results, _ := obj["results"].([]any)
 	for _, rRaw := range results {
 		result, ok := rRaw.(map[string]any)
@@ -562,7 +602,8 @@ func processStreamingObject(obj map[string]any, emit func(map[string]any) bool) 
 							outerMeta[key] = v
 						}
 					}
-					// 极少数情况 inner 是 list：逐项 extract+emit，本 result 处理完跳过下方。
+					legacyDone := false
+					// inner list 的各项是同一批平级候选；必须全部 emit 后再判断完成。
 					for _, itemRaw := range inner {
 						if item, ok := itemRaw.(map[string]any); ok {
 							for k, v := range outerMeta {
@@ -571,11 +612,20 @@ func processStreamingObject(obj map[string]any, emit func(map[string]any) bool) 
 								}
 							}
 							if chunk := extractChunk(item); chunk != nil {
-								if _, done := emitAndCheckFinish(chunk, emit); done {
+								stopByClient, done := emitAndCheckFinish(chunk, emit, state)
+								if stopByClient {
 									return true, nil
 								}
+								legacyDone = legacyDone || done
 							}
 						}
+					}
+					if state != nil {
+						if state.sawUsage && state.allFinished() {
+							return true, nil
+						}
+					} else if legacyDone {
+						return true, nil
 					}
 					continue
 				default:
@@ -585,7 +635,7 @@ func processStreamingObject(obj map[string]any, emit func(map[string]any) bool) 
 		}
 
 		if chunk := extractChunk(data); chunk != nil {
-			if _, done := emitAndCheckFinish(chunk, emit); done {
+			if _, done := emitAndCheckFinish(chunk, emit, state); done {
 				return true, nil
 			}
 		}
@@ -595,14 +645,19 @@ func processStreamingObject(obj map[string]any, emit func(map[string]any) bool) 
 
 // emitAndCheckFinish emit 一个 chunk 并判定是否应结束流。
 //
-// finishReason 过滤（红线⑤）：emit 后取 chunk 的 candidates[0].finishReason，
-// **仅当非空且 != FINISH_REASON_UNSPECIFIED 才主动结束流**。
+// 无状态调用保留旧语义；带状态调用会等待所有已见 candidate 完成且收到 usageMetadata，
+// 避免首候选先结束时截断其他候选或丢失延迟 usage 包。
 // 返回 (stopByClient, done)：done=true 表示应停止扫描；stopByClient 区分是客户端断开还是正常 finish。
-func emitAndCheckFinish(chunk map[string]any, emit func(map[string]any) bool) (stopByClient bool, done bool) {
+func emitAndCheckFinish(chunk map[string]any, emit func(map[string]any) bool, states ...*streamCompletionState) (stopByClient bool, done bool) {
 	if !emit(chunk) {
 		// 客户端断开 / 上层要求停止。
 		log.Printf("[Stream] 客户端主动断开，导致流结束")
 		return true, true
+	}
+	if len(states) > 0 && states[0] != nil {
+		state := states[0]
+		state.observe(chunk)
+		return false, state.sawUsage && state.allFinished()
 	}
 	fr := chunkFinishReason(chunk)
 	if fr != "" && fr != finishReasonUnspecified {
@@ -610,6 +665,49 @@ func emitAndCheckFinish(chunk map[string]any, emit func(map[string]any) bool) (s
 		return false, true
 	}
 	return false, false
+}
+
+type streamCompletionState struct {
+	seen     map[int]struct{}
+	finished map[int]struct{}
+	sawUsage bool
+}
+
+func newStreamCompletionState() *streamCompletionState {
+	return &streamCompletionState{
+		seen:     map[int]struct{}{},
+		finished: map[int]struct{}{},
+		sawUsage: false,
+	}
+}
+
+func (s *streamCompletionState) observe(chunk map[string]any) {
+	if s == nil {
+		return
+	}
+	if usage, ok := chunk["usageMetadata"].(map[string]any); ok && len(usage) > 0 {
+		s.sawUsage = true
+	}
+	candidates, _ := chunk["candidates"].([]any)
+	for position, rawCandidate := range candidates {
+		candidate, ok := rawCandidate.(map[string]any)
+		if !ok {
+			continue
+		}
+		index := position
+		if candidate["index"] != nil {
+			index = toInt(candidate["index"], position)
+		}
+		s.seen[index] = struct{}{}
+		finish := toStr(candidate["finishReason"])
+		if finish != "" && finish != finishReasonUnspecified {
+			s.finished[index] = struct{}{}
+		}
+	}
+}
+
+func (s *streamCompletionState) allFinished() bool {
+	return s != nil && len(s.seen) > 0 && len(s.finished) == len(s.seen)
 }
 
 // chunkFinishReason 取 chunk 的 candidates[0].finishReason。
