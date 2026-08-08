@@ -34,7 +34,8 @@
         <button data-page="settings"><span class="ic">⚙️</span> 设置</button>
         <button data-page="keys"><span class="ic">🔑</span> 密钥</button>
         <button data-page="models"><span class="ic">🧩</span> 模型</button>
-        <button data-page="nodes"><span class="ic">🌐</span> 订阅与并发</button>
+        <button data-page="nodes"><span class="ic">🌐</span> 代理</button>
+        <button data-page="subscriptions"><span class="ic">📦</span> 订阅管理</button>
         <button data-page="logs"><span class="ic">📝</span> 运行日志</button>
         <button data-page="appearance"><span class="ic">🎨</span> 外观</button>
       </nav>
@@ -114,16 +115,23 @@
             </div>
           </div>
           <div class="card glass model-registry-card">
-            <div class="model-global-hints"><span id="modelFakeGlobalHint"></span><span id="modelTrailingGlobalHint"></span></div>
+            <div class="model-global-hints"><span id="modelFakeGlobalHint"></span><span
+                id="modelTrailingGlobalHint"></span></div>
             <div class="table-scroll">
               <table class="model-registry-table">
-                <thead><tr>
-                  <th class="model-check">启用<br><input style="margin: 4px 0 0;" id="allModelsEnabled" type="checkbox" onchange="setAllModelFlags('enabled',this.checked)"></th>
-                  <th class="model-check">假流式<br><input style="margin: 4px 0 0;" id="allModelsFake" type="checkbox" onchange="setAllModelFlags('fake_stream_enabled',this.checked)"></th>
-                  <th class="model-check">尾部修复<br><input style="margin: 4px 0 0;" id="allModelsTrailing" type="checkbox" onchange="setAllModelFlags('trailing_fix_enabled',this.checked)"></th>
-                  <th>模型 ID</th><th>别名</th>
-                  <th style="width: 80px; text-align: center;">操作</th>
-                </tr></thead>
+                <thead>
+                  <tr>
+                    <th class="model-check">启用<br><input style="margin: 4px 0 0;" id="allModelsEnabled" type="checkbox"
+                        onchange="setAllModelFlags('enabled',this.checked)"></th>
+                    <th class="model-check">假流式<br><input style="margin: 4px 0 0;" id="allModelsFake" type="checkbox"
+                        onchange="setAllModelFlags('fake_stream_enabled',this.checked)"></th>
+                    <th class="model-check">尾部修复<br><input style="margin: 4px 0 0;" id="allModelsTrailing"
+                        type="checkbox" onchange="setAllModelFlags('trailing_fix_enabled',this.checked)"></th>
+                    <th>模型 ID</th>
+                    <th>别名</th>
+                    <th style="width: 80px; text-align: center;">操作</th>
+                  </tr>
+                </thead>
                 <tbody id="modelsTableBody"></tbody>
               </table>
             </div>
@@ -140,50 +148,63 @@
           <div class="grid grid-1">
             <div class="card glass">
               <div class="field"><label for="globalProxy">全局入口代理</label>
-                <div class="toolbar m-0"><input id="globalProxy" placeholder="socks5://127.0.0.1:1080 或 vless://..."><button
-                    class="btn" onclick="importProxyNode()">导入候选</button></div>
-                <div class="desc">启用后作为业务节点的第一跳；未使用业务节点时仅经过该入口。订阅仍先直连，失败后才用当前入口重试一次。</div>
+                <div class="toolbar m-0"><input id="globalProxy"
+                    placeholder="socks5://127.0.0.1:1080 或 vless://..."><button class="btn"
+                    onclick="importProxyNode()">导入候选</button></div>
+                <div class="desc">启用的入口按顶层请求轮询，同一请求内的并行节点固定使用同一个入口。</div>
               </div>
               <div class="divider"></div>
               <div class="field m-0">
-                <div class="field-heading">入口代理候选</div>
+                <div class="field-heading" style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+                  <span>入口代理候选</span>
+                </div>
+                <div class="actions proxy-actions">
+                  <button class="btn ghost" onclick="batchTestSelectedProxyNodes()">批量测试</button>
+                  <button class="btn ghost" onclick="sortProxyNodesByLatency()">按延迟顺序排序</button>
+                  <button class="btn ghost" onclick="sortProxyNodesByLatencyDesc()">按延迟降序排序</button>
+                  <button class="btn ghost" onclick="toggleSelectAllProxyNodes()">全选/反选</button>
+                  <button class="btn ghost btn-green" onclick="batchEnableSelectedProxyNodes()">批量启用</button>
+                  <button class="btn ghost btn-red" onclick="batchDisableSelectedProxyNodes()">批量禁用</button>
+                  <button class="btn danger" onclick="batchDeleteSelectedProxyNodes()">批量删除</button>
+                  <button class="btn danger" onclick="deleteDisabledProxyNodes()">删除禁用入口</button>
+                </div>
+                <div id="proxyTestProgress" class="test-progress">
+                  <div id="proxyTestProgressText" class="test-progress-text">准备测试...</div>
+                  <div class="progress-track"><div id="proxyTestProgressFill" class="progress-fill"></div></div>
+                  <div id="proxyTestProgressDetail" class="test-progress-detail"></div>
+                </div>
                 <div class="table-wrap">
                   <table id="proxyCandidatesTable">
-                    <thead><tr><th>名称</th><th>类型</th><th>测试状态</th><th>操作</th></tr></thead>
+                    <thead>
+                      <tr>
+                        <th class="th-center"><label for="selectAllProxyNodesCheckbox" class="sr-only">全选</label><input
+                            type="checkbox" id="selectAllProxyNodesCheckbox" onclick="toggleSelectAllProxyNodesCheckbox(this)"></th>
+                        <th>名称</th>
+                        <th>类型</th>
+                        <th>状态</th>
+                        <th>测试状态</th>
+                        <th>操作</th>
+                      </tr>
+                    </thead>
                     <tbody id="proxyNodesBody"></tbody>
                   </table>
+                </div>
+                <div id="proxyNodesPaginationBar" class="toolbar m-0 gap-8"
+                  style="margin-top: 12px; justify-content: space-between; align-items: center;">
+                  <div id="proxyNodesPaginationInfo" style="font-size: 13px; color: var(--text-dim);"></div>
+                  <div class="flex-gap-11" style="display: flex; gap: 8px; align-items: center;">
+                    <button class="btn ghost" id="btnProxyPageFirst" onclick="changeProxyPage(1)">首页</button>
+                    <button class="btn ghost" id="btnProxyPagePrev" onclick="changeProxyPage(curProxyPage - 1)">上一页</button>
+                    <span id="proxyNodesPageNumDisplay" style="font-size: 13px; font-weight: 600; padding: 0 6px;">1 / 1</span>
+                    <button class="btn ghost" id="btnProxyPageNext" onclick="changeProxyPage(curProxyPage + 1)">下一页</button>
+                    <button class="btn ghost" id="btnProxyPageLast" onclick="changeProxyPage(totalProxyPages)">末页</button>
+                  </div>
                 </div>
               </div>
             </div>
             <div class="card glass">
-              <div class="field field-mb-20px">
-                <div class="field-heading label-gold">文件优选导入 (V2RayN / Clash / Mihomo 优选节点)</div>
-                <div class="toolbar m-0 gap-8">
-                  <label for="nodeImportFile" class="sr-only">选择节点导入文件</label><input type="file" id="nodeImportFile"
-                    accept=".txt,.yaml,.yml,.json,.conf,.list" class="file-input">
-                  <button class="btn ghost" onclick="importFileNodes(false)">导入追加</button>
-                  <button class="btn danger" onclick="importFileNodes(true)">清空并替换</button>
-                </div>
-                <div class="desc">导入本地导出的节点配置文件 (.txt / .yaml)。支持以追加或覆盖形式批量配置节点。</div>
+              <div class="desc summary-text" id="nodesSummary" style="margin-bottom: 12px; font-weight: bold;">当前共 0 个节点
               </div>
-
-              <div class="field field-mb-20px">
-                <div class="field-heading label-gold">导入旧版 nodes.json</div>
-                <div class="toolbar m-0 gap-8">
-                  <label for="nodeJsonImportFile" class="sr-only">选择 nodes.json 导入文件</label><input type="file"
-                    id="nodeJsonImportFile" accept=".json" class="file-input">
-                  <button class="btn ghost" onclick="importJsonNodes(false)">导入追加</button>
-                  <button class="btn danger" onclick="importJsonNodes(true)">清空并替换</button>
-                </div>
-                <div class="desc">导入旧版 nodes.json。支持以追加或覆盖形式批量配置节点。</div>
-              </div>
-
-              <div class="divider"></div>
-
-              <div class="toolbar"><label for="subUrl" class="sr-only">订阅链接</label><input id="subUrl"
-                  placeholder="订阅链接 (vless/vmess/trojan/ss/ssr...)"><button class="btn"
-                  onclick="addAndFetchSub()">拉取并保存</button></div>
-              <div class="desc summary-text" id="nodesSummary">当前共 0 个节点</div>
               <div class="actions">
                 <button class="btn ghost" onclick="testAllNodes()">批量测试</button>
                 <button class="btn ghost" onclick="sortNodesByLatency()">按延迟顺序排序</button>
@@ -191,6 +212,8 @@
                 <button class="btn ghost" onclick="dedupNodes()">一键去重</button>
                 <button class="btn ghost" onclick="exportNodes()">导出节点</button>
                 <button class="btn danger" onclick="deleteDisabledNodes()">删除禁用节点</button>
+                <button class="btn ghost" onclick="addSelectedNodesToEntryProxies()">将已选节点加入全局入口代理</button>
+                <button class="btn ghost" onclick="removeSelectedNodesFromEntryProxies()">将已选节点移出全局入口代理</button>
                 <span class="flex-1"></span>
                 <button class="btn ghost btn-blue" onclick="toggleSelectAllNodes()">全选/反选</button>
                 <button class="btn ghost btn-green" onclick="batchEnableSelectedNodes()">批量启用</button>
@@ -244,6 +267,82 @@
                   <button class="btn ghost" id="btnPageLast" onclick="changeNodePage(totalNodePages)">末页</button>
                 </div>
               </div>
+            </div>
+          </div>
+        </section>
+
+        <section id="page-subscriptions" class="hidden">
+          <div class="page-head">
+            <div>
+              <h2>订阅管理</h2>
+              <div class="hint">管理订阅链接和自定义 User-Agent</div>
+            </div>
+          </div>
+          <div class="card glass">
+            <div class="field field-mb-20px">
+              <div class="field-heading label-gold">文件优选导入 (V2RayN / Clash / Mihomo 优选节点)</div>
+              <div class="toolbar m-0 gap-8">
+                <label for="nodeImportFile" class="sr-only">选择节点导入文件</label><input type="file" id="nodeImportFile"
+                  accept=".txt,.yaml,.yml,.json,.conf,.list" class="file-input">
+                <button class="btn ghost" onclick="importFileNodes(false)">导入追加</button>
+                <button class="btn danger" onclick="importFileNodes(true)">清空并替换</button>
+              </div>
+              <div class="desc">导入本地导出的节点配置文件 (.txt / .yaml)。支持以追加或覆盖形式批量配置节点。</div>
+            </div>
+
+            <div class="field field-mb-20px">
+              <div class="field-heading label-gold">导入旧版 nodes.json</div>
+              <div class="toolbar m-0 gap-8">
+                <label for="nodeJsonImportFile" class="sr-only">选择 nodes.json 导入文件</label><input type="file"
+                  id="nodeJsonImportFile" accept=".json" class="file-input">
+                <button class="btn ghost" onclick="importJsonNodes(false)">导入追加</button>
+                <button class="btn danger" onclick="importJsonNodes(true)">清空并替换</button>
+              </div>
+              <div class="desc">导入旧版 nodes.json。支持以追加或覆盖形式批量配置节点。</div>
+            </div>
+
+            <div class="divider"></div>
+
+            <div class="field-heading" style="display:flex; justify-content:space-between; align-items:center;">
+              <span>自定义 User-Agent</span>
+              <div class="toolbar m-0">
+                <button class="btn ghost" onclick="showAddUAModal()">添加 UA</button>
+              </div>
+            </div>
+            <div class="table-wrap mb-20">
+              <table>
+                <thead>
+                  <tr>
+                    <th>名称</th>
+                    <th>User-Agent</th>
+                    <th class="subscription-actions-header">操作</th>
+                  </tr>
+                </thead>
+                <tbody id="customUAsBody"></tbody>
+              </table>
+            </div>
+
+            <div class="field-heading mt-20" style="display:flex; justify-content:space-between; align-items:center;">
+              <span>订阅列表</span>
+              <div class="toolbar m-0">
+                <button class="btn ghost" onclick="showAddSubModal()">添加订阅</button>
+                <button class="btn ghost" onclick="updateAllSubs()">一键更新所有订阅</button>
+              </div>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>名称</th>
+                    <th>链接</th>
+                    <th>User-Agent</th>
+                    <th>自动更新(分)</th>
+                    <th>最后更新</th>
+                    <th class="subscription-actions-header">操作</th>
+                  </tr>
+                </thead>
+                <tbody id="subscriptionsBody"></tbody>
+              </table>
             </div>
           </div>
         </section>
@@ -436,7 +535,8 @@
     <div class="modal-card model-import-card">
       <h3 id="modelImportTitle">导入模型列表</h3>
       <div id="modelImportHint" class="hint"></div>
-      <textarea id="modelImportText" class="font-mono" rows="12" oninput="previewModelImport()" placeholder="在此粘贴内容"></textarea>
+      <textarea id="modelImportText" class="font-mono" rows="12" oninput="previewModelImport()"
+        placeholder="在此粘贴内容"></textarea>
       <div id="modelImportPreview" class="model-import-preview">粘贴内容后显示预览</div>
       <div class="toolbar justify-end">
         <button class="btn ghost" onclick="closeModelImport()">取消</button>
@@ -483,6 +583,103 @@
       </div>
     </div>
   </div>
+  <div id="addUAModal" class="hidden"
+    style="position:fixed;inset:0;display:grid;place-items:center;z-index:9999;background:rgba(0,0,0,0.5);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);transition:opacity .3s var(--ease);">
+    <div class="box glass" style="width:360px;padding:32px 24px;text-align:left;animation:pop .4s var(--ease);">
+      <h3 style="margin-bottom:18px;font-size:16px;text-align:center;" id="addUATitle">添加自定义 User-Agent</h3>
+      <input type="hidden" id="uaIdInput">
+      <div class="field" style="margin-bottom:14px;">
+        <label for="uaNameInput">名称</label>
+        <input type="text" id="uaNameInput">
+      </div>
+      <div class="field" style="margin-bottom:20px;">
+        <label for="uaContentInput">User-Agent</label>
+        <input type="text" id="uaContentInput">
+      </div>
+      <div class="err" id="uaErr" style="color:#ff5f56;font-size:12px;margin-bottom:12px;text-align:center;"></div>
+      <div style="display:flex;gap:12px;justify-content:flex-end;">
+        <button class="btn ghost" onclick="closeUAModal()">取消</button>
+        <button class="btn" onclick="submitUA()">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="subDeleteModal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="subDeleteModalTitle"
+    style="position:fixed;inset:0;display:grid;place-items:center;z-index:9999;background:rgba(0,0,0,0.5);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);transition:opacity .3s var(--ease);">
+    <div class="box glass" style="width:400px;padding:32px 24px;text-align:left;animation:pop .4s var(--ease);">
+      <h3 style="margin-bottom:16px;font-size:16px;text-align:center;" id="subDeleteModalTitle">确认删除</h3>
+      <div style="color:var(--text-dim);margin-bottom:12px;font-size:14px;line-height:1.5;" id="subDeleteModalText">
+        确定要删除吗？</div>
+      <label id="subDeleteNodesOption" class="subscription-delete-option hidden">
+        <input type="checkbox" id="delSubNodesCheck" checked>
+        <span class="subscription-option-copy">
+          <strong>同时删除独占节点</strong>
+          <small>取消勾选后，该订阅独占的节点将转为手动管理。</small>
+        </span>
+      </label>
+      <div style="display:flex;gap:12px;justify-content:flex-end;">
+        <button class="btn ghost" id="subDeleteCancelBtn">取消</button>
+        <button class="btn danger" id="subDeleteOkBtn">确认删除</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="nodeDedupModal" class="hidden" role="dialog" aria-modal="true" aria-labelledby="nodeDedupModalTitle"
+    style="position:fixed;inset:0;display:grid;place-items:center;z-index:9999;background:rgba(0,0,0,0.5);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);transition:opacity .3s var(--ease);">
+    <div class="box glass" style="width:400px;padding:32px 24px;text-align:left;animation:pop .4s var(--ease);">
+      <h3 style="margin-bottom:16px;font-size:16px;text-align:center;" id="nodeDedupModalTitle">确认节点去重</h3>
+      <div style="color:var(--text-dim);margin-bottom:24px;font-size:14px;line-height:1.5;" id="nodeDedupModalText">
+      </div>
+      <div style="display:flex;gap:12px;justify-content:flex-end;">
+        <button class="btn ghost" id="nodeDedupCancelBtn">取消</button>
+        <button class="btn danger" id="nodeDedupOkBtn">合并重复节点</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="addSubModal" class="hidden"
+    style="position:fixed;inset:0;display:grid;place-items:center;z-index:9999;background:rgba(0,0,0,0.5);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px);transition:opacity .3s var(--ease);">
+    <div class="box glass" style="width:360px;padding:32px 24px;text-align:left;animation:pop .4s var(--ease);">
+      <h3 style="margin-bottom:18px;font-size:16px;text-align:center;" id="addSubTitle">添加订阅</h3>
+      <input type="hidden" id="subIdInput">
+      <div class="field" style="margin-bottom:14px;">
+        <label for="subNameInput">名称</label>
+        <input type="text" id="subNameInput">
+      </div>
+      <div class="field" style="margin-bottom:14px;">
+        <label for="subUrlInput">订阅链接</label>
+        <input type="text" id="subUrlInput">
+      </div>
+      <div class="field" style="margin-bottom:14px;">
+        <label for="subUaSelect">User-Agent</label>
+        <select id="subUaSelect" class="form-select"
+          style="width: 100%; padding: 8px; border-radius: 4px; background: rgba(255,255,255,0.05); color: var(--text); border: 1px solid var(--glass-border); outline: none;">
+          <option value="Chrome">Chrome (默认)</option>
+          <option value="clash-verge/v2.5.2">clash-verge/v2.5.2</option>
+          <option value="Clash.Meta">Clash.Meta</option>
+          <option value="v2rayNG/1.8.5">v2rayNG/1.8.5</option>
+          <option value="casverge/v2.4.5/Windows/Windows 10 Pro/x86_64">casverge/橘子云</option>
+        </select>
+      </div>
+      <div class="field" style="margin-bottom:20px;">
+        <label for="subIntervalInput">自动更新 (分钟;填 0 禁用自动更新)</label>
+        <input type="number" id="subIntervalInput" placeholder="0 表示不自动更新" value="0">
+      </div>
+      <label class="subscription-adopt-option">
+        <input type="checkbox" id="subAdoptManualCheck">
+        <span class="subscription-option-copy">
+          <strong>接管手动节点</strong>
+          <small>相同 URI 的手动节点将采用订阅元数据，随订阅更新和删除。</small>
+        </span>
+      </label>
+      <div class="err" id="subErr" style="color:#ff5f56;font-size:12px;margin-bottom:12px;text-align:center;"></div>
+      <div style="display:flex;gap:12px;justify-content:flex-end;">
+        <button class="btn ghost" onclick="closeSubModal()">取消</button>
+        <button class="btn" onclick="submitSub()">确定</button>
+      </div>
+    </div>
+  </div>
+
   <script src="utils.js"></script>
   <script src="api.js"></script>
   <script src="page-overview.js"></script>
@@ -490,6 +687,7 @@
   <script src="page-keys.js"></script>
   <script src="page-models.js"></script>
   <script src="page-nodes.js"></script>
+  <script src="page-subscriptions.js"></script>
   <script src="page-appearance.js"></script>
   <script src="page-logs.js"></script>
   <script src="admin.js"></script>

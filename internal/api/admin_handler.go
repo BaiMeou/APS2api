@@ -13,10 +13,12 @@ import (
 
 	"github.com/bsfdsagfadg/vertex/internal/admin"
 	"github.com/bsfdsagfadg/vertex/internal/config"
+	"github.com/bsfdsagfadg/vertex/internal/subscriptions"
 )
 
 type AdminHandler struct {
 	handler
+	subscriptionService *subscriptions.Service
 }
 
 func (adm *AdminHandler) handleAdminAPI(w http.ResponseWriter, r *http.Request) {
@@ -79,7 +81,18 @@ func (adm *AdminHandler) handleAdminAPI(w http.ResponseWriter, r *http.Request) 
 		adm.adminTestTerminate(w, r)
 		return
 	case "/nodes/deduplicate":
-		adm.adminDedupNodes(w, r)
+		if r.Method == http.MethodPost {
+			adm.adminDedupNodes(w, r)
+		} else {
+			adm.adminMethodNotAllowed(w)
+		}
+		return
+	case "/nodes/deduplicate/preview":
+		if r.Method == http.MethodGet {
+			adm.adminPreviewDedupNodes(w, r)
+		} else {
+			adm.adminMethodNotAllowed(w)
+		}
 		return
 	case "/nodes/disabled":
 		adm.adminDeleteDisabledNodes(w, r)
@@ -91,7 +104,53 @@ func (adm *AdminHandler) handleAdminAPI(w http.ResponseWriter, r *http.Request) 
 		adm.adminImportNodesJson(w, r)
 		return
 	case "/subscriptions/fetch":
-		adm.adminFetchSub(w, r)
+		if r.Method == http.MethodPost {
+			adm.adminFetchSub(w, r)
+		} else {
+			adm.adminMethodNotAllowed(w)
+		}
+		return
+	case "/subscriptions/list":
+		if r.Method == http.MethodGet {
+			adm.adminListSubscriptions(w, r)
+		} else {
+			adm.adminMethodNotAllowed(w)
+		}
+		return
+	case "/subscriptions/save":
+		if r.Method == http.MethodPost {
+			adm.adminSaveSubscription(w, r)
+		} else {
+			adm.adminMethodNotAllowed(w)
+		}
+		return
+	case "/subscriptions/delete":
+		if r.Method == http.MethodPost {
+			adm.adminDeleteSubscription(w, r)
+		} else {
+			adm.adminMethodNotAllowed(w)
+		}
+		return
+	case "/subscriptions/update":
+		if r.Method == http.MethodPost {
+			adm.adminUpdateSubscriptions(w, r)
+		} else {
+			adm.adminMethodNotAllowed(w)
+		}
+		return
+	case "/subscriptions/custom_ua/save":
+		if r.Method == http.MethodPost {
+			adm.adminSaveCustomUA(w, r)
+		} else {
+			adm.adminMethodNotAllowed(w)
+		}
+		return
+	case "/subscriptions/custom_ua/delete":
+		if r.Method == http.MethodPost {
+			adm.adminDeleteCustomUA(w, r)
+		} else {
+			adm.adminMethodNotAllowed(w)
+		}
 		return
 	case "/use-node":
 		adm.adminUseNode(w, r)

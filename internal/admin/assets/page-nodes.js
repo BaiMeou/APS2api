@@ -8,20 +8,56 @@ document.getElementById('nodesBody').addEventListener('click', function (e) {
   else if (action === 'delete-node') delNode(uri);
   else if (action === 'test-node') testSingleNode(uri);
   else if (action === 'enable-node') enableNode(uri);
+  else if (action === 'disable-node') disableNode(uri);
+  else if (action === 'add-entry-proxy') addNodeToEntryProxies(uri);
+  else if (action === 'remove-entry-proxy') removeNodeFromEntryProxies(uri);
 });
 
 var curNodePage = 1;
 var nodePageSize = 50;
 var totalNodePages = 1;
 var cachedNodesList = [];
+var curProxyPage = 1;
+var proxyPageSize = 10;
+var totalProxyPages = 1;
+var cachedEntryProxyURIs = new Set();
+var cachedProxyCandidates = [];
 window.selectedNodeURIs = window.selectedNodeURIs || new Set();
+window.selectedProxyURIs = window.selectedProxyURIs || new Set();
+var proxyTestProgressTimer = null;
+var proxySortMode = '';
 var testProgressTimer = null;
+
+function entryProxyIdentity(rawURI) {
+  var value = (rawURI || '').trim();
+  var separator = value.indexOf('://');
+  if (separator < 0) return value.split('#')[0];
+  var scheme = value.slice(0, separator).toLowerCase();
+  var remainder = value.slice(separator + 3).split('#')[0];
+  if (scheme === 'vmess' || scheme === 'clash' || scheme === 'ssr' || scheme === 'shadowsocksr') {
+    return scheme + '://' + remainder;
+  }
+  var pathIndex = remainder.search(/[/?]/);
+  var authority = pathIndex < 0 ? remainder : remainder.slice(0, pathIndex);
+  var suffix = pathIndex < 0 ? '' : remainder.slice(pathIndex);
+  var userInfoEnd = authority.lastIndexOf('@') + 1;
+  var userInfo = authority.slice(0, userInfoEnd);
+  var host = authority.slice(userInfoEnd).toLowerCase();
+  return scheme + '://' + userInfo + host + suffix;
+}
 
 function changeNodePage(p) {
   if (p < 1) p = 1;
   if (p > totalNodePages) p = totalNodePages;
   curNodePage = p;
   loadNodes();
+}
+
+function changeProxyPage(p) {
+  if (p < 1) p = 1;
+  if (p > totalProxyPages) p = totalProxyPages;
+  curProxyPage = p;
+  loadProxyNodes();
 }
 
 function updateSelectHeaderAndBanner() {
@@ -66,6 +102,7 @@ function selectAllNodesAcrossPages() {
 }
 
 async function loadNodes() {
+  var fallbackProxyCandidates = [];
   try {
     const sd = await API.settings.get();
     if (typeof curSettings !== 'undefined') {
@@ -76,7 +113,19 @@ async function loadNodes() {
       gpEl.value = (sd.settings || sd).proxy_url;
     }
     var settings = sd.settings || sd;
-    renderProxyNodes(settings.proxy_url_candidates || [], settings.proxy_url || '');
+    fallbackProxyCandidates = settings.proxy_url_candidates || [];
+    cachedProxyCandidates = fallbackProxyCandidates;
+    cachedEntryProxyURIs = new Set(fallbackProxyCandidates.map(function (candidate) { return entryProxyIdentity(candidate.raw_uri); }));
+  } catch (e) { }
+
+  await loadProxyNodes(fallbackProxyCandidates);
+
+  try {
+    var proxyProgress = await API.proxyNodes.testProgress();
+    if (proxyProgress && proxyProgress.running) {
+      showProxyTestProgress(proxyProgress);
+      startProxyTestProgressPolling();
+    }
   } catch (e) { }
 
   const d = await API.nodes.list();
@@ -230,14 +279,16 @@ async function loadNodes() {
       tr.appendChild(statusTd);
 
       var actionTd = document.createElement('td');
-      actionTd.style.cssText = 'text-align:right;white-space:nowrap;';
+      actionTd.className = 'node-actions-cell';
+      var actionWrap = document.createElement('div');
+      actionWrap.className = 'node-actions';
       var testBtn = document.createElement('button');
       testBtn.className = 'btn ghost';
       testBtn.style.cssText = 'padding:4px 10px;font-size:12px;margin-right:4px;';
       testBtn.dataset.action = 'test-node';
       testBtn.dataset.uri = n.raw_uri;
       testBtn.textContent = '\u6D4B\u8BD5';
-      actionTd.appendChild(testBtn);
+      actionWrap.appendChild(testBtn);
       if (n.disabled) {
         var enableBtn = document.createElement('button');
         enableBtn.className = 'btn ghost';
@@ -245,7 +296,15 @@ async function loadNodes() {
         enableBtn.dataset.action = 'enable-node';
         enableBtn.dataset.uri = n.raw_uri;
         enableBtn.textContent = '\u542F\u7528';
-        actionTd.appendChild(enableBtn);
+        actionWrap.appendChild(enableBtn);
+      } else {
+        var disableBtn = document.createElement('button');
+        disableBtn.className = 'btn ghost';
+        disableBtn.style.cssText = 'padding:4px 10px;font-size:12px;margin-right:4px;color:var(--red);';
+        disableBtn.dataset.action = 'disable-node';
+        disableBtn.dataset.uri = n.raw_uri;
+        disableBtn.textContent = '\u7981\u7528';
+        actionWrap.appendChild(disableBtn);
       }
       if (isLocked) {
         var unuseBtn = document.createElement('button');
@@ -254,7 +313,7 @@ async function loadNodes() {
         unuseBtn.dataset.action = 'unuse-node';
         unuseBtn.dataset.uri = n.raw_uri;
         unuseBtn.textContent = '取消锁定';
-        actionTd.appendChild(unuseBtn);
+        actionWrap.appendChild(unuseBtn);
       } else {
         var useBtn = document.createElement('button');
         useBtn.className = 'btn ghost';
@@ -262,15 +321,24 @@ async function loadNodes() {
         useBtn.dataset.action = 'use-node';
         useBtn.dataset.uri = n.raw_uri;
         useBtn.textContent = '\u9501\u5B9A\u4F7F\u7528';
-        actionTd.appendChild(useBtn);
+        actionWrap.appendChild(useBtn);
       }
+      var entryBtn = document.createElement('button');
+      var alreadyEntry = cachedEntryProxyURIs.has(entryProxyIdentity(n.raw_uri));
+      entryBtn.className = 'btn ghost';
+      entryBtn.style.cssText = 'padding:4px 10px;font-size:12px;margin-right:4px;';
+      entryBtn.dataset.action = alreadyEntry ? 'remove-entry-proxy' : 'add-entry-proxy';
+      entryBtn.dataset.uri = n.raw_uri;
+      entryBtn.textContent = alreadyEntry ? '移出入口池' : '添加至全局入口代理';
+      actionWrap.appendChild(entryBtn);
       var delBtn = document.createElement('button');
       delBtn.className = 'btn danger';
       delBtn.style.cssText = 'padding:4px 10px;font-size:12px;';
       delBtn.dataset.action = 'delete-node';
       delBtn.dataset.uri = n.raw_uri;
       delBtn.textContent = '\u5220\u9664';
-      actionTd.appendChild(delBtn);
+      actionWrap.appendChild(delBtn);
+      actionTd.appendChild(actionWrap);
       tr.appendChild(actionTd);
       frag.appendChild(tr);
     }
@@ -427,7 +495,56 @@ function startTestProgressPolling() {
   }, 1000);
 }
 
-async function dedupNodes() { await API.nodes.dedup(); loadNodes(); toast('去重完成'); }
+function showNodeDedupConfirm(preview) {
+  const modal = document.getElementById('nodeDedupModal');
+  const text = document.getElementById('nodeDedupModalText');
+  const okButton = document.getElementById('nodeDedupOkBtn');
+  const cancelButton = document.getElementById('nodeDedupCancelBtn');
+  if (!modal || !text || !okButton || !cancelButton) return;
+  const previousFocus = document.activeElement;
+
+  text.textContent = `发现 ${preview.groups} 组重复节点，可合并 ${preview.duplicate_count} 个节点。(仅显示名称不同、连接参数完全一致的节点会被合并。)`;
+  modal.classList.remove('hidden');
+  cancelButton.focus();
+  const cleanup = () => {
+    modal.classList.add('hidden');
+    okButton.onclick = null;
+    cancelButton.onclick = null;
+    if (previousFocus && typeof previousFocus.focus === 'function') previousFocus.focus();
+  };
+  cancelButton.onclick = cleanup;
+  okButton.onclick = async () => {
+    cleanup();
+    try {
+      const result = await API.nodes.dedup();
+      await loadNodes();
+      toast(`去重完成，已合并 ${result.removed_count || 0} 个节点`);
+    } catch (error) {
+      toast('去重失败: ' + error, 'err');
+    }
+  };
+}
+
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape') return;
+  const modal = document.getElementById('nodeDedupModal');
+  if (modal && !modal.classList.contains('hidden')) {
+    document.getElementById('nodeDedupCancelBtn').click();
+  }
+});
+
+async function dedupNodes() {
+  try {
+    const preview = await API.nodes.dedupPreview();
+    if (!preview || preview.duplicate_count === 0) {
+      toast('未发现可合并的重复节点');
+      return;
+    }
+    showNodeDedupConfirm(preview);
+  } catch (error) {
+    toast('去重预览失败: ' + error, 'err');
+  }
+}
 async function deleteDisabledNodes() { await API.nodes.deleteDisabled(); loadNodes(); toast('清理完成'); }
 async function sortNodesByLatency() { await API.nodes.sort(false); await loadNodes(); toast('已按延迟顺序重排节点'); }
 async function sortNodesByLatencyDesc() { await API.nodes.sort(true); await loadNodes(); toast('已按延迟降序重排节点'); }
@@ -472,6 +589,12 @@ async function enableNode(uri) {
   await API.nodes.enable(uri);
   await loadNodes();
   toast('已启用该节点');
+}
+
+async function disableNode(uri) {
+  await API.nodes.batchDisable([uri]);
+  await loadNodes();
+  toast('已禁用该节点');
 }
 
 async function useNode(uri) { await API.useNode(uri); loadSettings(); loadNodes(); toast('已锁定使用该节点，并关闭并发池'); }
@@ -538,6 +661,69 @@ async function batchDeleteSelectedNodes() {
     await loadNodes();
     toast('已成功删除 ' + uris.length + ' 个节点');
   } catch (e) { toast('操作失败: ' + e.message); }
+}
+
+async function addNodeToEntryProxies(uri) {
+  try {
+    var result = await API.proxyNodes.importBatch([uri]);
+    var invalid = result.invalid || [];
+    if (invalid.length) {
+      return toast('加入入口代理失败：节点配置无效');
+    }
+    await loadNodes();
+    if ((result.already_present || []).length) {
+      toast('该节点已在全局入口代理池中');
+    } else {
+      toast('已加入全局入口代理池');
+    }
+  } catch (e) {
+    toast('加入入口代理失败：' + e.message);
+  }
+}
+
+async function removeNodeFromEntryProxies(uri) {
+  try {
+    await API.proxyNodes.delete(uri);
+    await loadNodes();
+    toast('已移出全局入口代理池');
+  } catch (e) {
+    toast('移出入口代理失败：' + e.message);
+  }
+}
+
+async function addSelectedNodesToEntryProxies() {
+  var uris = getSelectedNodeURIs();
+  if (!uris.length) return toast('请先勾选需要加入入口代理池的节点');
+  toast('正在加入全局入口代理池...');
+  try {
+    var result = await API.proxyNodes.importBatch(uris);
+    var added = result.added || [];
+    var existing = result.already_present || [];
+    var invalid = result.invalid || [];
+    added.forEach(function (candidate) { window.selectedNodeURIs.delete(candidate.raw_uri); });
+    existing.forEach(function (uri) { window.selectedNodeURIs.delete(uri); });
+    await loadNodes();
+    var message = '已新增 ' + added.length + ' 个，已存在 ' + existing.length + ' 个';
+    if (invalid.length) message += '，失败 ' + invalid.length + ' 个（仍保持选中）';
+    toast(message);
+  } catch (e) {
+    toast('批量加入入口代理失败：' + e.message);
+  }
+}
+
+async function removeSelectedNodesFromEntryProxies() {
+  var uris = getSelectedNodeURIs();
+  if (!uris.length) return toast('请先勾选需要移出入口代理池的节点');
+  if (!confirm('确定要将选中 ' + uris.length + ' 个节点移出全局入口代理池吗？')) return;
+  toast('正在移出全局入口代理池...');
+  try {
+    await API.proxyNodes.deleteBatch(uris);
+    window.selectedNodeURIs.clear();
+    await loadNodes();
+    toast('已移出 ' + uris.length + ' 个节点');
+  } catch (e) {
+    toast('移出入口代理失败：' + e.message);
+  }
 }
 
 function importFileNodes(replace) {
@@ -615,9 +801,9 @@ async function enableProxyNode(uri) {
   }
 }
 
-async function disableProxyNode() {
+async function disableProxyNode(uri) {
   try {
-    await API.proxyNodes.disable();
+    await API.proxyNodes.disable(uri);
     await loadNodes();
     toast('已停用入口代理');
   } catch (e) {
@@ -636,6 +822,19 @@ async function deleteProxyNode(uri) {
   }
 }
 
+async function deleteDisabledProxyNodes() {
+  var disabledCount = cachedProxyCandidates.filter(function (candidate) { return candidate.disabled; }).length;
+  if (!disabledCount) return toast('没有已禁用的入口代理');
+  if (!confirm('确定删除全部 ' + disabledCount + ' 个已禁用入口代理？')) return;
+  try {
+    var result = await API.proxyNodes.deleteDisabled();
+    await loadNodes();
+    toast('已删除 ' + (result.deleted_count || 0) + ' 个禁用入口代理');
+  } catch (e) {
+    toast('删除禁用入口代理失败：' + e.message);
+  }
+}
+
 function proxyActionButton(label, className, handler) {
   var button = document.createElement('button');
   button.className = className;
@@ -645,14 +844,170 @@ function proxyActionButton(label, className, handler) {
   return button;
 }
 
-function renderProxyNodes(candidates, activeURI) {
+function getSelectedProxyURIs() {
+  return Array.from(window.selectedProxyURIs);
+}
+
+function proxyLatencyValue(candidate) {
+  return candidate.last_test_ms > 0 ? candidate.last_test_ms : Number.POSITIVE_INFINITY;
+}
+
+async function sortProxyCandidates(desc) {
+  proxySortMode = desc ? 'desc' : 'asc';
+  cachedProxyCandidates.sort(function (a, b) {
+    if (!!a.disabled !== !!b.disabled) return a.disabled ? 1 : -1;
+    var left = proxyLatencyValue(a);
+    var right = proxyLatencyValue(b);
+    if (left === right) return (a.name || '').localeCompare(b.name || '');
+    return desc ? right - left : left - right;
+  });
+  curProxyPage = 1;
+  await loadProxyNodes(cachedProxyCandidates);
+  toast(desc ? '已按延迟降序重排入口代理' : '已按延迟顺序重排入口代理');
+}
+
+function sortProxyNodesByLatency() { sortProxyCandidates(false); }
+function sortProxyNodesByLatencyDesc() { sortProxyCandidates(true); }
+
+function toggleSelectAllProxyNodes() {
+  if (window.selectedProxyURIs.size === cachedProxyCandidates.length && cachedProxyCandidates.length > 0) {
+    window.selectedProxyURIs.clear();
+  } else {
+    cachedProxyCandidates.forEach(function (candidate) { window.selectedProxyURIs.add(candidate.raw_uri); });
+  }
+  loadProxyNodes(cachedProxyCandidates);
+}
+
+function toggleSelectAllProxyNodesCheckbox(mainCb) {
+  var start = (curProxyPage - 1) * proxyPageSize;
+  var page = cachedProxyCandidates.slice(start, start + proxyPageSize);
+  page.forEach(function (candidate) {
+    if (mainCb.checked) window.selectedProxyURIs.add(candidate.raw_uri);
+    else window.selectedProxyURIs.delete(candidate.raw_uri);
+  });
+  loadProxyNodes(cachedProxyCandidates);
+}
+
+async function batchTestSelectedProxyNodes() {
+  var uris = getSelectedProxyURIs();
+  if (!uris.length) return toast('请先勾选需要批量测试的入口代理');
+  toast('后台批量测速任务已启动...');
+  await API.proxyNodes.testBatch(uris);
+  window.selectedProxyURIs.clear();
+  startProxyTestProgressPolling();
+}
+
+function showProxyTestProgress(progressData) {
+  var progress = document.getElementById('proxyTestProgress');
+  var progressText = document.getElementById('proxyTestProgressText');
+  var progressFill = document.getElementById('proxyTestProgressFill');
+  var progressDetail = document.getElementById('proxyTestProgressDetail');
+  var done = progressData.done || 0;
+  var total = progressData.total || 1;
+  if (progress) progress.style.display = 'block';
+  if (progressText) progressText.textContent = '测试中 ' + done + '/' + total + ' · 通过 ' + (progressData.ok_count || 0) + ' · 失败 ' + (progressData.fail_count || 0);
+  if (progressFill) progressFill.style.width = Math.round(done / total * 100) + '%';
+  if (progressDetail) progressDetail.textContent = progressData.running ? ('当前: ' + (progressData.current_node || '')) : '测试完成';
+}
+
+function startProxyTestProgressPolling() {
+  if (proxyTestProgressTimer) return;
+  proxyTestProgressTimer = setInterval(async function () {
+    try {
+      var progressData = await API.proxyNodes.testProgress();
+      showProxyTestProgress(progressData);
+      if (!progressData.running) {
+        clearInterval(proxyTestProgressTimer);
+        proxyTestProgressTimer = null;
+        await loadNodes();
+        toast('入口代理批量测试完成');
+      }
+    } catch (e) {
+      clearInterval(proxyTestProgressTimer);
+      proxyTestProgressTimer = null;
+    }
+  }, 800);
+}
+
+async function batchEnableSelectedProxyNodes() {
+  var uris = getSelectedProxyURIs();
+  if (!uris.length) return toast('请先勾选需要批量启用的入口代理');
+  await API.proxyNodes.enableBatch(uris);
+  window.selectedProxyURIs.clear();
+  await loadNodes();
+  toast('已启用 ' + uris.length + ' 个入口代理');
+}
+
+async function batchDisableSelectedProxyNodes() {
+  var uris = getSelectedProxyURIs();
+  if (!uris.length) return toast('请先勾选需要批量禁用的入口代理');
+  await API.proxyNodes.disableBatch(uris);
+  window.selectedProxyURIs.clear();
+  await loadNodes();
+  toast('已禁用 ' + uris.length + ' 个入口代理');
+}
+
+async function batchDeleteSelectedProxyNodes() {
+  var uris = getSelectedProxyURIs();
+  if (!uris.length) return toast('请先勾选需要批量删除的入口代理');
+  if (!confirm('确定要批量删除选中 ' + uris.length + ' 个入口代理吗？')) return;
+  await API.proxyNodes.deleteBatch(uris);
+  window.selectedProxyURIs.clear();
+  await loadNodes();
+  toast('已删除 ' + uris.length + ' 个入口代理');
+}
+
+async function loadProxyNodes(fallbackCandidates) {
+  var candidates = [];
+  var total = 0;
+  if (proxySortMode && cachedProxyCandidates.length) {
+    total = cachedProxyCandidates.length;
+    totalProxyPages = Math.max(1, Math.ceil(total / proxyPageSize));
+    if (curProxyPage > totalProxyPages) curProxyPage = totalProxyPages;
+    var sortedStart = (curProxyPage - 1) * proxyPageSize;
+    candidates = cachedProxyCandidates.slice(sortedStart, sortedStart + proxyPageSize);
+  } else try {
+    var result = await API.proxyNodes.list(curProxyPage, proxyPageSize);
+    candidates = result.candidates || [];
+    total = result.total || 0;
+    totalProxyPages = Math.max(1, result.total_pages || Math.ceil(total / proxyPageSize));
+    if (curProxyPage > totalProxyPages) {
+      curProxyPage = totalProxyPages;
+      return loadProxyNodes(fallbackCandidates);
+    }
+  } catch (e) {
+    var all = Array.isArray(fallbackCandidates) ? fallbackCandidates : cachedProxyCandidates;
+    total = all.length;
+    totalProxyPages = Math.max(1, Math.ceil(total / proxyPageSize));
+    if (curProxyPage > totalProxyPages) curProxyPage = totalProxyPages;
+    var start = (curProxyPage - 1) * proxyPageSize;
+    candidates = all.slice(start, start + proxyPageSize);
+  }
+  renderProxyNodes(candidates);
+  var startIndex = total ? (curProxyPage - 1) * proxyPageSize + 1 : 0;
+  var endIndex = Math.min(curProxyPage * proxyPageSize, total);
+  var info = document.getElementById('proxyNodesPaginationInfo');
+  if (info) info.textContent = total ? ('显示第 ' + startIndex + ' - ' + endIndex + ' 条，共 ' + total + ' 条') : '共 0 条';
+  var display = document.getElementById('proxyNodesPageNumDisplay');
+  if (display) display.textContent = curProxyPage + ' / ' + totalProxyPages;
+  var first = document.getElementById('btnProxyPageFirst');
+  var prev = document.getElementById('btnProxyPagePrev');
+  var next = document.getElementById('btnProxyPageNext');
+  var last = document.getElementById('btnProxyPageLast');
+  if (first) first.disabled = curProxyPage <= 1;
+  if (prev) prev.disabled = curProxyPage <= 1;
+  if (next) next.disabled = curProxyPage >= totalProxyPages;
+  if (last) last.disabled = curProxyPage >= totalProxyPages;
+}
+
+function renderProxyNodes(candidates) {
   var tbody = document.getElementById('proxyNodesBody');
   if (!tbody) return;
   var fragment = document.createDocumentFragment();
   if (!candidates.length) {
     var emptyRow = document.createElement('tr');
     var emptyCell = document.createElement('td');
-    emptyCell.colSpan = 4;
+    emptyCell.colSpan = 6;
     emptyCell.style.cssText = 'color:var(--text-dim);text-align:center;';
     emptyCell.textContent = '暂无入口代理候选';
     emptyRow.appendChild(emptyCell);
@@ -660,24 +1015,35 @@ function renderProxyNodes(candidates, activeURI) {
   }
   candidates.forEach(function (candidate) {
     var row = document.createElement('tr');
+    var selectCell = document.createElement('td');
+    selectCell.className = 'th-center';
+    var checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = 'proxy-select-cb';
+    checkbox.checked = window.selectedProxyURIs.has(candidate.raw_uri);
+    checkbox.setAttribute('aria-label', '选择入口代理 ' + (candidate.name || candidate.raw_uri));
+    checkbox.onchange = function () {
+      if (this.checked) window.selectedProxyURIs.add(candidate.raw_uri);
+      else window.selectedProxyURIs.delete(candidate.raw_uri);
+      updateProxySelectionHeader();
+    };
+    selectCell.appendChild(checkbox);
     var nameCell = document.createElement('td');
     var nameContainer = document.createElement('div');
     nameContainer.style.cssText = 'display:flex; align-items:center; flex-wrap:wrap; gap:6px; word-break:break-all;';
     var nameSpan = document.createElement('span');
     nameSpan.textContent = candidate.name || candidate.raw_uri;
     nameContainer.appendChild(nameSpan);
-    if (candidate.raw_uri === activeURI) {
-      var active = document.createElement('span');
-      active.className = 'pill on';
-      active.style.cssText = 'font-size:10px;padding:2px 8px;white-space:nowrap;flex-shrink:0;';
-      active.textContent = '启用中';
-      nameContainer.appendChild(active);
-    }
     nameCell.appendChild(nameContainer);
     var typeCell = document.createElement('td');
     typeCell.textContent = candidate.type || '-';
+    var enabledCell = document.createElement('td');
+    var enabledPill = document.createElement('span');
+    enabledPill.className = candidate.disabled ? 'pill off' : 'pill on';
+    enabledPill.textContent = candidate.disabled ? '禁用' : '启用';
+    enabledCell.appendChild(enabledPill);
     var stateCell = document.createElement('td');
-    stateCell.style.cssText = 'white-space:nowrap;';
+    stateCell.style.cssText = 'white-space:normal;overflow-wrap:anywhere;word-break:break-word;max-width:420px;';
     if (!candidate.last_test_at) {
       stateCell.textContent = '未测试';
     } else if (candidate.last_test_ok) {
@@ -686,19 +1052,33 @@ function renderProxyNodes(candidates, activeURI) {
       stateCell.textContent = '失败 · ' + (candidate.last_test_error || '未知错误');
     }
     var actionCell = document.createElement('td');
+    actionCell.style.cssText = 'white-space:nowrap;';
     actionCell.appendChild(proxyActionButton('测试', 'btn ghost', function () { testProxyNode(candidate.raw_uri); }));
-    if (candidate.raw_uri === activeURI) {
-      actionCell.appendChild(proxyActionButton('停用', 'btn ghost', disableProxyNode));
-    } else {
+    if (candidate.disabled) {
       actionCell.appendChild(proxyActionButton('启用', 'btn ghost', function () { enableProxyNode(candidate.raw_uri); }));
+    } else {
+      actionCell.appendChild(proxyActionButton('禁用', 'btn ghost', function () { disableProxyNode(candidate.raw_uri); }));
     }
     actionCell.appendChild(proxyActionButton('删除', 'btn danger', function () { deleteProxyNode(candidate.raw_uri); }));
+    row.appendChild(selectCell);
     row.appendChild(nameCell);
     row.appendChild(typeCell);
+    row.appendChild(enabledCell);
     row.appendChild(stateCell);
     row.appendChild(actionCell);
     fragment.appendChild(row);
   });
   tbody.textContent = '';
   tbody.appendChild(fragment);
+  updateProxySelectionHeader();
+}
+
+function updateProxySelectionHeader() {
+  var checkbox = document.getElementById('selectAllProxyNodesCheckbox');
+  if (!checkbox) return;
+  var start = (curProxyPage - 1) * proxyPageSize;
+  var page = cachedProxyCandidates.slice(start, start + proxyPageSize);
+  checkbox.checked = page.length > 0 && page.every(function (candidate) {
+    return window.selectedProxyURIs.has(candidate.raw_uri);
+  });
 }
