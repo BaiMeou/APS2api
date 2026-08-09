@@ -55,19 +55,27 @@ type VertexAIClient struct {
 type requestRouteKey struct{}
 
 type requestTokenState struct {
-	mu         sync.Mutex
-	token      string
-	proxyURI   string
-	fetchToken func(context.Context) (string, error)
-	refreshing bool
-	wait       chan struct{}
-	lastErr    error
-	refreshes  int
+	mu           sync.Mutex
+	token        string
+	proxyURI     string
+	fetchToken   func(context.Context) (string, error)
+	refreshing   bool
+	wait         chan struct{}
+	lastErr      error
+	refreshes    int
+	refreshLimit int
+	limitSet     bool
+}
+
+type tokenInvalidationResult struct {
+	refreshed bool
+	exhausted bool
 }
 
 type requestRoute struct {
-	entryURI string
-	token    *requestTokenState
+	entryURI           string
+	token              *requestTokenState
+	authCandidateBound bool
 }
 
 func routeFromContext(ctx context.Context) *requestRoute {
@@ -130,6 +138,16 @@ func (s *requestTokenState) get(ctx context.Context, pool *recaptcha.TokenPool) 
 	}
 }
 
+func (s *requestTokenState) setRefreshLimit(limit int) {
+	if limit < 0 {
+		limit = 0
+	}
+	s.mu.Lock()
+	s.refreshLimit = limit
+	s.limitSet = true
+	s.mu.Unlock()
+}
+
 func (s *requestTokenState) setProxyURI(proxyURI string) {
 	s.mu.Lock()
 	s.proxyURI = proxyURI
@@ -139,26 +157,44 @@ func (s *requestTokenState) setProxyURI(proxyURI string) {
 	s.mu.Unlock()
 }
 
-// invalidate clears the token only if the caller used the current generation.
-// A request may synchronously refresh at most once after its initial acquisition.
-func (s *requestTokenState) invalidate(token string) bool {
+func (s *requestTokenState) invalidateToken(token string) tokenInvalidationResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.token != token {
-		return true
+		return tokenInvalidationResult{}
 	}
-	if s.refreshes >= 1 {
-		return false
+	limit := s.refreshLimit
+	if !s.limitSet {
+		// Preserve the standalone state helper's historical one-refresh default;
+		// request paths always set an explicit policy during prepareRequest.
+		limit = 1
+	}
+	if s.refreshes >= limit {
+		return tokenInvalidationResult{exhausted: true}
 	}
 	s.token = ""
 	s.lastErr = nil
 	s.refreshes++
-	return true
+	return tokenInvalidationResult{refreshed: true}
+}
+
+// invalidate clears the current token. A stale lease is treated as already handled.
+func (s *requestTokenState) invalidate(token string) bool {
+	result := s.invalidateToken(token)
+	return !result.exhausted
 }
 
 func (c *VertexAIClient) prepareRequest(ctx context.Context) (context.Context, error) {
 	ctx = transport.WithRequestID(ctx, RequestIDFromContext(ctx))
 	state := &requestTokenState{fetchToken: c.fetchRequestToken} //nolint:exhaustruct
+	authCandidateBound := c.cfg.ParallelPoolEnabled() && !c.cfg.ParallelPoolRetryEnabled()
+	refreshLimit := c.cfg.MaxRetries()
+	if authCandidateBound {
+		// RunRace replaces this provisional value with the actual number of
+		// candidates selected for the request. The initial token is the first try.
+		refreshLimit = max(0, requestConcurrency(c.cfg)-1)
+	}
+	state.setRefreshLimit(refreshLimit)
 	token, err := state.get(ctx, c.pool)
 	if err != nil || token == "" {
 		if err == nil {
@@ -166,7 +202,7 @@ func (c *VertexAIClient) prepareRequest(ctx context.Context) (context.Context, e
 		}
 		return ctx, err
 	}
-	route := &requestRoute{token: state}
+	route := &requestRoute{token: state, authCandidateBound: authCandidateBound}
 	modelEntries := config.SelectEntryProxySequence(requestConcurrency(c.cfg), c.cfg)
 	return transport.WithEntryProxyPool(context.WithValue(ctx, requestRouteKey{}, route), modelEntries), nil
 }

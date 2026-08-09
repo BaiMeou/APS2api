@@ -27,14 +27,17 @@ const (
 // 认证错误对外返回 502 而非 401：这是我方 recaptcha/token 的临时问题，返 401 会让上游
 // 网关误判为“密钥失效”并自动禁用渠道，造成误杀；用 502 让网关当作可重试的服务端错误。
 type VertexError struct { //nolint:govet
-	Message          string
-	Code             int
-	Status           string
-	Kind             string
-	Details          map[string]any
-	UpstreamResponse string
-	RetryAfter       int   // 仅 ratelimit 用，0 表示未设
-	cause            error // 保留底层 context/网络错误，供 errors.Is/As 穿透
+	Message              string
+	Code                 int
+	Status               string
+	Kind                 string
+	Details              map[string]any
+	UpstreamResponse     string
+	RetryAfter           int   // 仅 ratelimit 用，0 表示未设
+	cause                error // 保留底层 context/网络错误，供 errors.Is/As 穿透
+	requestTokenInvalid  bool
+	requestTokenTerminal bool
+	requestToken         string
 }
 
 // Error 实现 error 接口。
@@ -45,6 +48,21 @@ func (e *VertexError) Unwrap() error { return e.cause }
 func (e *VertexError) WithCause(cause error) *VertexError {
 	e.cause = cause
 	return e
+}
+
+func (e *VertexError) markRequestTokenInvalid(token string) *VertexError {
+	e.requestTokenInvalid = true
+	e.requestToken = token
+	return e
+}
+
+func (e *VertexError) markRequestTokenTerminal() *VertexError {
+	e.requestTokenTerminal = true
+	return e
+}
+
+func (e *VertexError) isRequestTokenControl() bool {
+	return e != nil && (e.requestTokenInvalid || e.requestTokenTerminal)
 }
 
 // IsRetryable 判定是否可重试：408/429/5xx 可重试；认证错误（按 Kind 判，不看 code）也可重试。
@@ -136,10 +154,36 @@ func NewUnavailableError(msg string, causes ...error) *VertexError {
 	return &VertexError{Message: msg, Code: 503, Status: StatusUnavailable, Kind: "unavailable", cause: firstCause(causes)}
 }
 
+// isRecaptchaAuthError identifies upstream messages that mean the request-scoped
+// reCAPTCHA token is stale. These messages can arrive with HTTP 400, GraphQL
+// code=3, or inside a streaming results.errors object, so classification must
+// happen before generic status handling.
+func isRecaptchaAuthError(message string) bool {
+	message = strings.ToLower(message)
+	for _, marker := range []string{
+		"recaptcha token is invalid",
+		"failed to verify action",
+		"the caller does not have permission",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func isRecaptchaWarmupError(message string) bool {
+	message = strings.ToLower(message)
+	return strings.Contains(message, "failed to verify action") ||
+		strings.Contains(message, "the caller does not have permission")
+}
+
 // raiseForStatus 根据 HTTP/gRPC 状态创建对应错误。
 func raiseForStatus(code int, status, message string, details map[string]any, upstream string) *VertexError {
 	var e *VertexError
 	switch {
+	case isRecaptchaAuthError(message) || isRecaptchaAuthError(upstream):
+		e = NewAuthenticationError(message)
 	case status == StatusResourceExhausted || code == 8 || code == 429:
 		e = NewRateLimitError(message, 0)
 	case status == StatusUnauthenticated || code == 16 || code == 401:

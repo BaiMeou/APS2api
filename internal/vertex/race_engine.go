@@ -62,25 +62,23 @@ type raceResult[T any] struct {
 }
 
 // errorPriority 返回错误的优先级数值（越小优先级越高）。
-// 请求级硬错误优先，其次保留可诊断上游错误，再到网络与空响应。
+// 可重试错误优先于不可重试错误，避免一个节点的参数/安全错误掩盖
+// 另一个节点返回的临时认证、限流或上游故障。
 func errorPriority(err error) int {
 	var ve *VertexError
 	if errors.As(err, &ve) {
-		if ve.IsGlobalHardError() {
-			return 1
-		}
-		switch ve.Kind {
-		case "auth", "permission", "ratelimit", "client", "server", "unavailable":
+		if ve.IsRetryable() {
+			if ve.Kind == "ratelimit" || ve.Code == 429 {
+				return 1
+			}
 			return 2
-		case "network":
-			return 3
-		case "empty":
-			return 4
-		default:
-			return 5
 		}
+		if ve.IsGlobalHardError() {
+			return 3
+		}
+		return 4
 	}
-	return 6
+	return 5
 }
 
 // pickBestError 从多个错误中挑选优先级最高（数值最小）的一个返回。
@@ -158,6 +156,12 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 		log.Printf("[Vertex] [RunParallel] 降级为单节点运行: %s", nodes.GetNodeName(proxy))
 		return run(ctx, proxy)
 	}
+	if route := routeFromContext(ctx); route != nil && route.authCandidateBound && route.token != nil {
+		// The configured pool size is only a provisional bound. The actual
+		// candidates selected for this request define how many independent rT
+		// opportunities the old per-node behavior would have had.
+		route.token.setRefreshLimit(len(cands) - 1)
+	}
 
 	if cfg.DebugMode() {
 		log.Printf("[Vertex] [RunParallel] 开启对冲延迟竞速, %d 个节点参与", len(cands))
@@ -190,6 +194,9 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 	recordResult := func(res raceResult[T]) {
 		if res.err == nil {
 			stickyPool.Add(res.uri)
+			return
+		}
+		if ve := asVertexError(res.err); ve != nil && ve.isRequestTokenControl() {
 			return
 		}
 
@@ -419,9 +426,51 @@ func RunRace[T any](ctx context.Context, cfg config.ConfigProvider,
 							log.Printf("[Racing] 节点 %s 失败: %s", name, res.err.Error())
 						}
 
+						ve := asVertexError(res.err)
+						if ve != nil && ve.requestTokenTerminal {
+							cancel()
+							return zero, res.err
+						}
+						if ve != nil && ve.requestTokenInvalid {
+							route := routeFromContext(ctx)
+							if route == nil || route.token == nil {
+								failedErrors = append(failedErrors, res.err)
+								continue
+							}
+							invalidated := route.token.invalidateToken(ve.requestToken)
+							if invalidated.exhausted {
+								cancel()
+								return zero, NewInternalError("recaptcha token remained invalid after request recovery").markRequestTokenTerminal()
+							}
+							if invalidated.refreshed {
+								remaining := make([]nodes.Node, 0, len(cands)-1)
+								for _, candidate := range cands {
+									if candidate.RawURI != res.uri {
+										remaining = append(remaining, candidate)
+									}
+								}
+								cands = remaining
+								cancelsMu.Lock()
+								for u, cancelFn := range cancels {
+									if u != res.uri {
+										cancelFn()
+									}
+								}
+								cancelsMu.Unlock()
+								if len(cands) == 0 {
+									cancel()
+									return zero, NewInternalError("recaptcha token remained invalid after request recovery").markRequestTokenTerminal()
+								}
+								timer.Stop()
+								break InnerLoop
+							}
+							// A late error from an already replaced token has no
+							// bearing on the current token and must not retire a node.
+							continue
+						}
+
 						failedErrors = append(failedErrors, res.err)
 
-						ve := asVertexError(res.err)
 						if ve != nil && ve.IsGlobalHardError() {
 							if cfg.DebugMode() {
 								log.Printf("[Racing] 节点 %s 返回请求级错误(%s)，终止竞速: %s", name, ve.Kind, ve.Message)

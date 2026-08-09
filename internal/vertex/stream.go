@@ -138,7 +138,7 @@ retryLoop:
 	for attempt <= maxRetries {
 		log.Printf("[Vertex] [StreamChat] 开始尝试 (Attempt %d/%d), 模型=%s, 请求ID=%s, 代理=%s", attempt+baseAttempt, attemptDenom, model, reqID, nodes.GetNodeName(proxyURI))
 		if recaptchaToken == "" && route != nil && route.token != nil {
-			tok, tokenErr := route.token.get(ctx, c.pool)
+			token, tokenErr := route.token.get(ctx, c.pool)
 			if tokenErr != nil && ctx.Err() != nil {
 				lastError = NewContextError(ctx.Err())
 				break retryLoop
@@ -146,7 +146,7 @@ retryLoop:
 			if tokenErr != nil {
 				lastError = NewAuthenticationError("Could not fetch recaptcha token: "+tokenErr.Error(), tokenErr)
 			} else {
-				recaptchaToken = tok
+				recaptchaToken = token
 				isFirstAuth = true
 			}
 		}
@@ -219,24 +219,37 @@ retryLoop:
 		ve := asVertexError(attemptErr)
 		switch {
 		case ve != nil && ve.Kind == "auth":
-			isVerifyFail := strings.Contains(ve.Message, "Failed to verify action") ||
-				strings.Contains(ve.Message, "The caller does not have permission")
-			if isFirstAuth && isVerifyFail {
-				// 首次认证重试：token 不清空，同一 token 再打一次（匿名端点首帧预期 verify-fail）。
+			if isFirstAuth && isRecaptchaWarmupError(ve.Message) {
+				// The anonymous endpoint may reject the first evaluation while
+				// accepting the same rT immediately afterwards.
 				isFirstAuth = false
 				if err := sleepCtx(ctx, 500*time.Millisecond); err != nil {
 					break retryLoop
 				}
 				continue
 			}
-			if route != nil && route.token != nil {
-				if !route.token.invalidate(recaptchaToken) {
-					lastError = ve
+			// In multi-node mode with per-node retry disabled, the first candidate
+			// reporting a stale shared token hands control to RunRace. That layer
+			// retires this candidate, cancels the remaining old-token work, and
+			// starts the next race round with one shared refreshed token.
+			if route != nil && route.token != nil && isRecaptchaAuthError(ve.Message) {
+				lastError = ve
+				if contentYielded {
 					break retryLoop
 				}
+				if route.authCandidateBound {
+					ve.markRequestTokenInvalid(recaptchaToken)
+					break retryLoop
+				}
+				result := route.token.invalidateToken(recaptchaToken)
+				if result.exhausted {
+					lastError = NewInternalError("recaptcha token remained invalid after request recovery").markRequestTokenTerminal()
+					break retryLoop
+				}
+				recaptchaToken = ""
+				isFirstAuth = true
+				continue
 			}
-			recaptchaToken = ""
-			isFirstAuth = true
 			lastError = ve
 			if contentYielded || attempt >= maxRetries {
 				break retryLoop
@@ -472,8 +485,7 @@ func (c *VertexAIClient) executeStreamingAttempt(ctx context.Context, sess *tran
 }
 
 func classifyUpstreamHTTPError(statusCode int, body string) *VertexError {
-	if strings.Contains(body, "Failed to verify action") ||
-		strings.Contains(body, "The caller does not have permission") {
+	if isRecaptchaAuthError(body) {
 		return NewAuthenticationError("Authentication/Recaptcha failed: " + body)
 	}
 	if json.Valid([]byte(body)) {
@@ -640,16 +652,6 @@ func processStreamingObject(obj map[string]any, emit func(map[string]any) bool, 
 
 		// results 内的错误处理。
 		if errs, ok := result["errors"].([]any); ok && len(errs) > 0 {
-			errMsg := ""
-			if first, ok := errs[0].(map[string]any); ok {
-				errMsg = toStr(first["message"])
-			} else {
-				errMsg = toStr(errs[0])
-			}
-			if strings.Contains(errMsg, "Failed to verify action") ||
-				strings.Contains(errMsg, "The caller does not have permission") {
-				return false, NewAuthenticationError(errMsg)
-			}
 			if parsed := parseErrorResponse(map[string]any{"errors": errs}); parsed != nil {
 				return false, parsed
 			}
