@@ -96,6 +96,7 @@ func (g *GeminiHandler) handleGeminiGenerate(w http.ResponseWriter, r *http.Requ
 	if reqObj, ok2 := body["generateContentRequest"].(map[string]any); ok2 {
 		body = reqObj
 	}
+	transform.ApplyImageConfig(body, body, actualModel)
 	transform.ApplyImageDefaults(body, actualModel, g.cfg.DefaultImageSize(), g.cfg.DefaultResponseModalities())
 	log.Printf("[Server] [GeminiGenerate] 收到请求: 模型=%s, 真模型=%s", model, actualModel)
 
@@ -109,6 +110,7 @@ func (g *GeminiHandler) handleGeminiGenerate(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, ve.Code, vertexErrorToGemini(ve))
 		return
 	}
+	transform.EnsureFunctionCallIDs(resp)
 	cleanGeminiFinishReason(resp)
 	rewriteGeminiIDs(resp, generateVPSuffix())
 	writeJSON(w, http.StatusOK, resp)
@@ -127,6 +129,7 @@ func (g *GeminiHandler) handleGeminiStreamGenerate(w http.ResponseWriter, r *htt
 	if reqObj, ok2 := body["generateContentRequest"].(map[string]any); ok2 {
 		body = reqObj
 	}
+	transform.ApplyImageConfig(body, body, actualModel)
 	transform.ApplyImageDefaults(body, actualModel, g.cfg.DefaultImageSize(), g.cfg.DefaultResponseModalities())
 	log.Printf("[Server] [GeminiStreamGenerate] 收到请求: 模型=%s, 真模型=%s, 假流式=%v", model, actualModel, useFake)
 
@@ -141,6 +144,7 @@ func (g *GeminiHandler) handleGeminiStreamGenerate(w http.ResponseWriter, r *htt
 	hasFinish := false
 	streamErrWritten := false
 	suffix := generateVPSuffix()
+	toolCallIDAssigner := transform.NewFunctionCallIDAssigner()
 	g.vc.StreamChat(r.Context(), actualModel, body, func(ch vertex.StreamChunk) bool {
 		if ch.Err != nil {
 			if !sw.hasWritten() {
@@ -162,6 +166,7 @@ func (g *GeminiHandler) handleGeminiStreamGenerate(w http.ResponseWriter, r *htt
 			streamErrWritten = true
 			return false
 		}
+		toolCallIDAssigner.Ensure(ch.Data)
 		gotChunk = true
 		if fr := cleanGeminiFinishReason(ch.Data); fr != "" {
 			hasFinish = true
@@ -217,6 +222,36 @@ func (g *GeminiHandler) geminiFakeStream(ctx context.Context, w http.ResponseWri
 		_ = sw.write(g.geminiSSE(map[string]any{"error": map[string]any{
 			"code": ve.Code, "message": vertex.FriendlyErrorMessage(ve), "status": geminiStatusOf(ve),
 		}}))
+		return
+	}
+	transform.EnsureFunctionCallIDs(resp)
+
+	// Fake streaming must preserve functionCall parts. Returning text only
+	// silently drops tool calls (and their IDs) for models using this mode.
+	if candidates, ok := resp["candidates"].([]any); ok && len(candidates) > 0 {
+		suffix := generateVPSuffix()
+		for candidateIndex, rawCandidate := range candidates {
+			candidate, ok := rawCandidate.(map[string]any)
+			if !ok {
+				continue
+			}
+			content, _ := candidate["content"].(map[string]any)
+			parts, _ := content["parts"].([]any)
+			if len(parts) == 0 {
+				continue
+			}
+			for partIndex, part := range parts {
+				cand := map[string]any{"index": candidateIndex, "content": map[string]any{"role": "model", "parts": []any{part}}}
+				if partIndex == len(parts)-1 {
+					cand["finishReason"] = "STOP"
+				}
+				chunk := map[string]any{"candidates": []any{cand}}
+				rewriteGeminiIDs(chunk, suffix)
+				if !sw.write(g.geminiSSE(chunk)) {
+					return
+				}
+			}
+		}
 		return
 	}
 
@@ -400,7 +435,7 @@ func rewriteGeminiIDs(val any, suffix string) {
 	switch v := val.(type) {
 	case map[string]any:
 		for k, mv := range v {
-			if s, ok := mv.(string); ok && strings.HasPrefix(s, "gemini-tool-call-") {
+			if s, ok := mv.(string); ok && isGeminiToolCallID(s) {
 				v[k] = s + suffix
 			} else {
 				rewriteGeminiIDs(mv, suffix)
@@ -411,4 +446,8 @@ func rewriteGeminiIDs(val any, suffix string) {
 			rewriteGeminiIDs(item, suffix)
 		}
 	}
+}
+
+func isGeminiToolCallID(id string) bool {
+	return strings.HasPrefix(id, "gemini-tool-call-") || strings.HasPrefix(id, "tool_call_")
 }
