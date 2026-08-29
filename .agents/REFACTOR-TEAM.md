@@ -72,10 +72,10 @@ git pull --rebase origin cursor/refactor-perf-throughput-47b8
 
 ## 状态
 
-- 阶段：实现进行中
-- 实现可审：**否**（监督在类型检查 + 相关测试绿、且代码已 push 到工作分支之后，才能改成「实现可审」）
+- 阶段：实现可审（工人 VM 已停；Opus/Fable 额度仍拦审查波）
+- 实现可审：**是**
 - 审查可交主人：**否**（审查波才写）
-- 审查波：未开始（须：实现收口 + 监督写下「实现可审」+ 代码真落地）
+- 审查波：未开始（等 Fable 5 Extra High 额度）
 
 ## 验证
 
@@ -101,3 +101,4 @@ git pull --rebase origin cursor/refactor-perf-throughput-47b8
 - 2026-08-29 17:21 UTC 协助重构：`bc-736d6d8a-92cd-54fe-b7e2-9761b20e2bdd`。不覆盖重构席。跟 HEAD=`95e86c7`，接下每候选 deepCopy，不重做已落地项。
 - 2026-08-29 17:21 UTC 测试/回归：跟吞吐落地 `9382a80`/`95e86c7`。补 InFlight 触底、sticky clone/restore、jsonx 池隔离、sseLine 并发、可见输出 image/code。`go test ./...` 绿；`go test -race` jsonx/transform/nodes/spool/api/vertex 绿。HEAD=`97e7cc4`。未包办重构；未动 recaptcha 五路/每候选 deepCopy。实现可审仍否。继续跟 HEAD。
 - 2026-08-29 17:26 UTC 协助重构：`bc-736d6d8a-92cd-54fe-b7e2-9761b20e2bdd` 落地 `7418577`。竞速 payload 请求级拷一次并共享；BuildVertexVariables 不改输入（-vp id 用 COW strip）；SelectForParallel 读锁快照、写锁只打 LastSelectedAt。未动 recaptcha 五路。`go test ./...` 绿；`go test -race` nodes/transform/vertex/spool/jsonx/api 绿。未到「实现可审」。
+- 2026-08-29 17:28 UTC dispatcher 收口核对：HEAD=`1906819`，本机 `go test ./...` 全绿。工人 VM 均已停。不 resume。Opus/Fable 仍额度 ERROR。写「实现可审」。审查波未开。
