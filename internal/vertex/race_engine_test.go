@@ -390,3 +390,139 @@ func TestStreamParallelReportsEmptyResponse(t *testing.T) {
 		t.Fatalf("所有候选空流应返回 empty 错误, got %+v", gotErr)
 	}
 }
+
+func TestRunRaceRelaysImmediatelyWhenLaunchedCandidatesFail(t *testing.T) {
+	raceTestNodes(t)
+	cfg := config.StaticProvider(config.AppConfig{ //nolint:exhaustruct
+		ParallelPoolEnabled:      true,
+		ParallelPoolSize:         3,
+		ParallelNodeTopK:         80,
+		StickyNodePriority:       false,
+		ParallelPoolDelayDynamic: false,
+		ParallelPoolDelayMs:      400,
+	})
+	started := make(chan time.Time, 3)
+	var n atomic.Int32
+	val, err := RunRace(context.Background(), cfg, func(_ context.Context, _ string) (string, error) {
+		started <- time.Now()
+		if n.Add(1) == 1 {
+			return "", NewUnavailableError("first down")
+		}
+		return "ok", nil
+	})
+	if err != nil || val != "ok" {
+		t.Fatalf("接力后应胜出, val=%v err=%v", val, err)
+	}
+	first := <-started
+	second := <-started
+	if gap := second.Sub(first); gap > 150*time.Millisecond {
+		t.Fatalf("首候选失败后应立即接力，不应等满 hedge: %v", gap)
+	}
+}
+
+func TestRunRaceWinningCheckCollectsThenPrefersImmediateWin(t *testing.T) {
+	raceTestNodes(t)
+	cfg := config.StaticProvider(config.AppConfig{ //nolint:exhaustruct
+		ParallelPoolEnabled:      true,
+		ParallelPoolSize:         3,
+		ParallelNodeTopK:         80,
+		StickyNodePriority:       false,
+		ParallelPoolDelayDynamic: false,
+		ParallelPoolDelayMs:      20,
+	})
+	run := func(_ context.Context, uri string) (string, error) {
+		if strings.Contains(uri, "node3") {
+			time.Sleep(40 * time.Millisecond)
+			return "STOP", nil
+		}
+		return "MAX_TOKENS", nil
+	}
+	finalizerCalled := atomic.Bool{}
+	val, err := RunRace(context.Background(), cfg, run,
+		WithWinningCheck(func(s string) bool { return s == "STOP" }),
+		WithCollectedFinalizer(func([]raceResult[string]) (string, error) {
+			finalizerCalled.Store(true)
+			return "finalizer", nil
+		}),
+	)
+	if err != nil || val != "STOP" {
+		t.Fatalf("真实 STOP 应立即胜出, val=%v err=%v", val, err)
+	}
+	if finalizerCalled.Load() {
+		t.Fatal("有立即胜出结果时不应走 collected finalizer")
+	}
+}
+
+func TestRunRaceCollectedReturnsFirstWithoutFinalizer(t *testing.T) {
+	raceTestNodes(t)
+	cfg := config.StaticProvider(config.AppConfig{ //nolint:exhaustruct
+		ParallelPoolEnabled:      true,
+		ParallelPoolSize:         3,
+		ParallelNodeTopK:         80,
+		StickyNodePriority:       false,
+		ParallelPoolDelayDynamic: false,
+		ParallelPoolDelayMs:      10,
+	})
+	val, err := RunRace(context.Background(), cfg, func(_ context.Context, uri string) (string, error) {
+		return "kept-" + uri, nil
+	}, WithWinningCheck(func(string) bool { return false }))
+	if err != nil {
+		t.Fatalf("非胜出成功结果应收敛, err=%v", err)
+	}
+	if !strings.HasPrefix(val, "kept-") {
+		t.Fatalf("无 finalizer 应返回首个收集结果, got %q", val)
+	}
+}
+
+func TestRunRaceCollectedFinalizerSelectsBest(t *testing.T) {
+	raceTestNodes(t)
+	cfg := config.StaticProvider(config.AppConfig{ //nolint:exhaustruct
+		ParallelPoolEnabled:      true,
+		ParallelPoolSize:         3,
+		ParallelNodeTopK:         80,
+		StickyNodePriority:       false,
+		ParallelPoolDelayDynamic: false,
+		ParallelPoolDelayMs:      10,
+	})
+	val, err := RunRace(context.Background(), cfg, func(_ context.Context, uri string) (string, error) {
+		return uri, nil
+	},
+		WithWinningCheck(func(string) bool { return false }),
+		WithCollectedFinalizer(func(results []raceResult[string]) (string, error) {
+			if len(results) == 0 {
+				return "", fmt.Errorf("empty collected")
+			}
+			best := results[0].val
+			for _, r := range results[1:] {
+				if r.val > best {
+					best = r.val
+				}
+			}
+			return best, nil
+		}),
+	)
+	if err != nil {
+		t.Fatalf("finalizer 应收敛, err=%v", err)
+	}
+	if val == "" {
+		t.Fatal("finalizer 应返回最佳收集结果")
+	}
+}
+
+func TestRunRaceAllRetryableErrorsPickRateLimit(t *testing.T) {
+	raceTestNodes(t)
+	_, err := RunRace(context.Background(), raceTestConfig(0), func(_ context.Context, uri string) (string, error) {
+		switch {
+		case strings.Contains(uri, "node1"):
+			return "", NewPermissionDeniedError("perm")
+		case strings.Contains(uri, "node2"):
+			return "", NewRateLimitError("quota", 0)
+		default:
+			return "", NewUnavailableError("down")
+		}
+	})
+	var ve *VertexError
+	if !errors.As(err, &ve) || ve.Kind != "ratelimit" {
+		t.Fatalf("全失败且无请求级硬错误时应优先 429, got %v", err)
+	}
+}
