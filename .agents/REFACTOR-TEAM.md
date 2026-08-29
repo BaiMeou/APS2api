@@ -99,3 +99,4 @@ git pull --rebase origin cursor/refactor-perf-throughput-47b8
 - 2026-08-29 17:16 UTC 测试/回归更替：`bc-352ee92b-08cc-5722-b32b-baaa9f7cb95a`。测试 VM 更替，不 resume 旧任务。HEAD=`3c35e2d`。不改监督/重构执行两行。继续跟 HEAD。
 - 2026-08-29 17:19 UTC 重构执行：吞吐改动已落地 `9382a80`。jsonx 复用 encoder；OAI 流改查 chunk 不扫 SSE 串；GetNodeName/GetAverageLatency 改 RLock；InFlight 原子增减（仍写 healthMap，对齐测试席回归）；sticky 改 sync.Map；scan 去掉多余 bufio。`go test ./...` 绿；`go test -race` jsonx/transform/nodes/api/vertex 绿。未动 recaptcha 五路竞速（有意）/每候选 deepCopy。未到「实现可审」。
 - 2026-08-29 17:21 UTC 协助重构：`bc-736d6d8a-92cd-54fe-b7e2-9761b20e2bdd`。不覆盖重构席。跟 HEAD=`95e86c7`，接下每候选 deepCopy，不重做已落地项。
+- 2026-08-29 17:21 UTC 测试/回归：跟吞吐落地 `9382a80`/`95e86c7`。补 InFlight 触底、sticky clone/restore、jsonx 池隔离、sseLine 并发、可见输出 image/code。`go test ./...` 绿；`go test -race` jsonx/transform/nodes/spool/api/vertex 绿。HEAD=`97e7cc4`。未包办重构；未动 recaptcha 五路/每候选 deepCopy。实现可审仍否。继续跟 HEAD。
