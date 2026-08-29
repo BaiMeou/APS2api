@@ -66,7 +66,7 @@ git pull --rebase origin cursor/refactor-perf-throughput-47b8
 |------|------|----------|
 | 监督/收口 | `bc-7a73f5e8-8f0f-5907-9e09-4743b0c3cb49` | 2026-08-29 17:06 UTC |
 | 重构执行 | `bc-861de6a6-a6eb-5894-bcb7-b704ed1ba2f7` | 2026-08-29 17:07 UTC |
-| 测试/回归 | _空_ | |
+| 测试/回归 | `bc-c6eb2820-ffd9-5dc5-8ba7-3a4f6526fb5d` | 2026-08-29 17:08 UTC |
 
 模型提示（不是预分配）：实现/监督倾向 Opus 5 Thinking High Fast；测试/跑腿倾向 Grok 4.6 Fast。审查波未开始，不要开 `REFACTOR-REVIEW.md`。
 
@@ -90,3 +90,4 @@ git pull --rebase origin cursor/refactor-perf-throughput-47b8
 - 2026-08-29 dispatcher：LICENSE Required Notice 改为多方贡献者（含 baimeou / Deconstructed_Cube / others）；README 补回 License 段。工作分支已建。
 - 2026-08-29 17:06 UTC 监督/收口认领：`bc-7a73f5e8-8f0f-5907-9e09-4743b0c3cb49`（Grok 4.6 Fast）。HEAD=`e1262d2`。不包办重构；先摸 HEAD 热点与测试基线，等重构执行/测试回归入位。
 - 2026-08-29 17:07 UTC 重构执行认领：`bc-861de6a6-a6eb-5894-bcb7-b704ed1ba2f7`（Grok 4.6 Fast）。HEAD=`f15bcf7`。按 HEAD 实测热点改吞吐，不重写整套方案。
+- 2026-08-29 17:08 UTC 测试/回归认领：`bc-c6eb2820-ffd9-5dc5-8ba7-3a4f6526fb5d`（Grok 4.6 Fast）。HEAD=`9d08f32`。先建测试基线，跟 HEAD 重构改动做回归，不重写方案。
