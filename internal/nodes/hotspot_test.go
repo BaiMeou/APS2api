@@ -7,6 +7,28 @@ import (
 	"testing"
 )
 
+func TestGetAverageLatencyUsesHealthySamples(t *testing.T) {
+	resetState()
+	defer resetState()
+	if got := GetAverageLatency(); got != 500 {
+		t.Fatalf("无样本默认 500, got %v", got)
+	}
+	MergeNodes([]Node{
+		{RawURI: "http://fast", Name: "fast"},
+		{RawURI: "http://slow", Name: "slow"},
+		{RawURI: "http://off", Name: "off", Disabled: true},
+		{RawURI: "http://cool", Name: "cool"},
+	})
+	RecordTest("http://fast", true, 100, "")
+	RecordTest("http://slow", true, 300, "")
+	RecordTest("http://off", true, 10, "")
+	RecordTest("http://cool", true, 20, "")
+	RecordRateLimit("http://cool", 60)
+	if got := GetAverageLatency(); got != 200 {
+		t.Fatalf("应只平均未冷却的健康样本 (100+300)/2=200, got %v", got)
+	}
+}
+
 func TestGetNodeNameKnownAndUnknown(t *testing.T) {
 	resetState()
 	defer resetState()
