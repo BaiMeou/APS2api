@@ -16,7 +16,7 @@
 
 - 动生产环境；force-push；resume 孤立旧云端任务；整支合并子代理自动生成的旁支
 - 删品牌 / 版权 / Discord 等；改许可证条款（PolyForm NC 保持不变）
-- 版权 Required Notice 已由调度改成多方贡献者声明，**不要再改 LICENSE/版权头**
+- 版权：LICENSE 文首 `Required Notice:` 与 NOTICE 由调度维护。**不要削弱、合并成独家所有、或删品牌**；不要改 PolyForm 正文
 - 整仓无关 lint；重做管理面板/产品交互
 - 使用 Gemini 模型
 - 另开第二条工作分支；并发占满 3 台 VM 时等待
@@ -88,6 +88,7 @@ git pull --rebase origin cursor/refactor-perf-throughput-47b8
 （认领、计划要点、push SHA、阻塞，短句追加在下面。不要写长文方案。）
 
 - 2026-08-29 dispatcher：LICENSE Required Notice 改为多方贡献者（含 baimeou / Deconstructed_Cube / others）；README 补回 License 段。工作分支已建。
+- 2026-08-29 dispatcher：LICENSE 改为按贡献持有+各 licensor 只授权自己的贡献；Required Notice 多行且不可用改文件来转让/消灭版权；补 NOTICE。子代理不要再改这些行。
 - 2026-08-29 17:06 UTC 监督/收口认领：`bc-7a73f5e8-8f0f-5907-9e09-4743b0c3cb49`（Grok 4.6 Fast）。HEAD=`e1262d2`。不包办重构；先摸 HEAD 热点与测试基线，等重构执行/测试回归入位。
 - 2026-08-29 17:07 UTC 重构执行认领：`bc-861de6a6-a6eb-5894-bcb7-b704ed1ba2f7`（Grok 4.6 Fast）。HEAD=`f15bcf7`。按 HEAD 实测热点改吞吐，不重写整套方案。
 - 2026-08-29 17:08 UTC 测试/回归认领：`bc-c6eb2820-ffd9-5dc5-8ba7-3a4f6526fb5d`（Grok 4.6 Fast）。HEAD=`9d08f32`。先建测试基线，跟 HEAD 重构改动做回归，不重写方案。
