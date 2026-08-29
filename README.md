@@ -62,3 +62,9 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o age
 > **提示**：在模型名（如 `gemini-3.5-flash`）前加上 `fake-` 或 `假流式-` 前缀，可将非流式模型伪装成流式输出。
 
 详细配置说明请参阅 [部署指南](部署指南.md#配置怎么改)。
+
+## License
+
+[PolyForm Noncommercial License 1.0.0](LICENSE)
+
+Required Notice: Copyright (c) 2026 Vertex AI Proxy contributors, including baimeou (BaiMeow), Deconstructed_Cube Seremiel Quietherz Aemeath, and others.
