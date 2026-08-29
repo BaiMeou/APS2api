@@ -42,7 +42,7 @@ type NodeHealth struct { //nolint:govet
 }
 
 var (
-	mu                 sync.Mutex                                 //nolint:gochecknoglobals
+	mu                 sync.RWMutex                               //nolint:gochecknoglobals
 	nodeList           []Node                                     //nolint:gochecknoglobals
 	healthMap          = make(map[string]*NodeHealth)             //nolint:gochecknoglobals
 	nodeSources        = make(map[string]map[NodeSource]struct{}) //nolint:gochecknoglobals
@@ -586,16 +586,27 @@ func SortNodesByLatencyDesc() {
 	mu.Unlock()
 }
 
-func GetNodeName(uri string) string {
-	mu.Lock()
-	defer mu.Unlock()
-	ensureLoaded()
+func nodeNameLocked(uri string) string {
 	for _, n := range nodeList {
 		if n.RawURI == uri {
 			return n.Name
 		}
 	}
 	return "Unknown"
+}
+
+func GetNodeName(uri string) string {
+	mu.RLock()
+	if loaded {
+		name := nodeNameLocked(uri)
+		mu.RUnlock()
+		return name
+	}
+	mu.RUnlock()
+	mu.Lock()
+	defer mu.Unlock()
+	ensureLoaded()
+	return nodeNameLocked(uri)
 }
 
 func EnableNode(uri string) bool {
@@ -794,8 +805,8 @@ func SelectForParallel(k int, topK int, debugMode bool, stickyBonusEnabled bool)
 	ensureLoaded()
 	now := time.Now().Unix()
 
-	var tier1 []tierCandidate
-	var tier2 []tierCandidate
+	tier1 := make([]tierCandidate, 0, len(nodeList))
+	tier2 := make([]tierCandidate, 0, 8)
 	cooldownCount := 0
 
 	for _, n := range nodeList {
@@ -810,7 +821,7 @@ func SelectForParallel(k int, topK int, debugMode bool, stickyBonusEnabled bool)
 		tier := getNodeTier(n, h)
 		inFlight := int32(0)
 		if h != nil {
-			inFlight = h.InFlight
+			inFlight = atomic.LoadInt32(&h.InFlight)
 		}
 		sticky := stickyBonusEnabled && globalStickyPool.IsSticky(n.RawURI)
 		switch tier {
@@ -868,7 +879,7 @@ func SelectForParallel(k int, topK int, debugMode bool, stickyBonusEnabled bool)
 		return a.inFlight == b.inFlight && a.sticky == b.sticky
 	}
 
-	var selected []Node
+	selected := make([]Node, 0, k)
 	i := 0
 	for i < len(tier1) && len(selected) < k {
 		j := i
@@ -914,22 +925,34 @@ func SelectForParallel(k int, topK int, debugMode bool, stickyBonusEnabled bool)
 	return selected
 }
 
+func healthInFlight(uri string) *int32 {
+	mu.RLock()
+	h := healthMap[uri]
+	mu.RUnlock()
+	if h == nil {
+		return nil
+	}
+	return &h.InFlight
+}
+
 func IncInFlight(uri string) {
-	mu.Lock()
-	defer mu.Unlock()
-	ensureLoaded()
-	if h := healthMap[uri]; h != nil {
-		h.InFlight++
+	if ptr := healthInFlight(uri); ptr != nil {
+		atomic.AddInt32(ptr, 1)
 	}
 }
 
 func DecInFlight(uri string) {
-	mu.Lock()
-	defer mu.Unlock()
-	ensureLoaded()
-	if h := healthMap[uri]; h != nil {
-		if h.InFlight > 0 {
-			h.InFlight--
+	ptr := healthInFlight(uri)
+	if ptr == nil {
+		return
+	}
+	for {
+		cur := atomic.LoadInt32(ptr)
+		if cur <= 0 {
+			return
+		}
+		if atomic.CompareAndSwapInt32(ptr, cur, cur-1) {
+			return
 		}
 	}
 }

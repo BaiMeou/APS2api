@@ -167,15 +167,15 @@ func (c *ChatHandler) streamChatCompletions(ctx context.Context, w http.Response
 			streamErrWritten = true
 			return false
 		}
+		if transform.StreamChunkHasVisibleOutput(ch.Data) {
+			gotContent = true
+		}
+		if transform.StreamChunkHasRealFinish(ch.Data) {
+			hasFinish = true
+		}
 		events := c.respConv.StreamToSSE(ch.Data, model, requestID, isFirst, toolCallTracker)
 		isFirst = false
 		for _, ev := range events {
-			if strings.Contains(ev, `"finish_reason"`) && !strings.Contains(ev, `"finish_reason":null`) {
-				hasFinish = true
-			}
-			if strings.Contains(ev, `"content":`) || strings.Contains(ev, `"tool_calls":`) || strings.Contains(ev, `"reasoning_content":`) {
-				gotContent = true
-			}
 			if !sw.write(ev) {
 				log.Printf("[Server] [Stream] 请求ID=%s 客户端已主动断开连接", requestID)
 				return false

@@ -60,8 +60,12 @@ func (sw *sseWriter) hasWritten() bool {
 
 // write 写一条原始字符串并 flush。返回 false 表示客户端断开。
 func (sw *sseWriter) write(line string) bool {
+	return sw.writeBytes([]byte(line))
+}
+
+func (sw *sseWriter) writeBytes(line []byte) bool {
 	sw.ensureHeader()
-	if _, err := sw.w.Write([]byte(line)); err != nil {
+	if _, err := sw.w.Write(line); err != nil {
 		return false
 	}
 	if sw.flush != nil {

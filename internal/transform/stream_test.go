@@ -289,3 +289,43 @@ func TestConvertRealtimeChunk_ToolCall(t *testing.T) {
 		t.Errorf("有工具调用应 finish_reason=tool_calls: %s", last)
 	}
 }
+
+func TestStreamChunkFlagsMatchSSESemantics(t *testing.T) {
+	content := map[string]any{"candidates": []any{map[string]any{
+		"content":      map[string]any{"parts": []any{map[string]any{"text": "Hi"}}, "role": "model"},
+		"finishReason": "FINISH_REASON_UNSPECIFIED",
+	}}}
+	if !StreamChunkHasVisibleOutput(content) {
+		t.Fatal("文本增量应算可见输出")
+	}
+	if StreamChunkHasRealFinish(content) {
+		t.Fatal("UNSPECIFIED 不能算真实 finish")
+	}
+
+	stop := map[string]any{"candidates": []any{map[string]any{
+		"content":      map[string]any{"parts": []any{map[string]any{"text": ""}}, "role": "model"},
+		"finishReason": "STOP",
+	}}}
+	if StreamChunkHasVisibleOutput(stop) {
+		t.Fatal("空 STOP 不应算可见输出")
+	}
+	if !StreamChunkHasRealFinish(stop) {
+		t.Fatal("STOP 应算真实 finish")
+	}
+
+	tool := map[string]any{"candidates": []any{map[string]any{
+		"content": map[string]any{"parts": []any{
+			map[string]any{"functionCall": map[string]any{"name": "lookup", "args": map[string]any{"q": 1}}},
+		}},
+	}}}
+	if !StreamChunkHasVisibleOutput(tool) {
+		t.Fatal("functionCall 应算可见输出")
+	}
+
+	thought := map[string]any{"candidates": []any{map[string]any{
+		"content": map[string]any{"parts": []any{map[string]any{"text": "think", "thought": true}}},
+	}}}
+	if !StreamChunkHasVisibleOutput(thought) {
+		t.Fatal("thought 文本应算可见输出")
+	}
+}

@@ -2,6 +2,7 @@ package jsonx
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 )
 
@@ -45,6 +46,50 @@ func TestMarshal(t *testing.T) {
 				t.Errorf("Marshal() = %s, want %s", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestAppendMatchesMarshal(t *testing.T) {
+	v := map[string]any{"html": "<a>&", "n": float64(1)}
+	want, err := Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Append([]byte("pre:"), v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "pre:"+string(want) {
+		t.Fatalf("Append=%q want prefix+Marshal=%q", got, want)
+	}
+}
+
+func TestMarshalConcurrent(t *testing.T) {
+	v := map[string]any{"x": "a<b>&c", "n": float64(2)}
+	want, err := Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 32
+	errCh := make(chan error, n)
+	for i := 0; i < n; i++ {
+		go func() {
+			got, err := Marshal(v)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if !bytes.Equal(got, want) {
+				errCh <- fmt.Errorf("got %s want %s", got, want)
+				return
+			}
+			errCh <- nil
+		}()
+	}
+	for i := 0; i < n; i++ {
+		if err := <-errCh; err != nil {
+			t.Fatal(err)
+		}
 	}
 }
 

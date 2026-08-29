@@ -26,16 +26,16 @@ func randomPageViewID() int64 {
 }
 
 func randomTrackingID() string {
-	digits := make([]byte, 16)
-	for i := range digits {
-		n, err := rand.Int(rand.Reader, big.NewInt(10))
-		if err == nil {
-			digits[i] = '0' + byte(n.Int64())
-		} else {
-			digits[i] = '0'
-		}
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "d0000000000000000"
 	}
-	return "d" + string(digits)
+	var out [17]byte
+	out[0] = 'd'
+	for i, b := range raw {
+		out[i+1] = '0' + (b % 10)
+	}
+	return string(out[:])
 }
 
 func randomUUID() string {

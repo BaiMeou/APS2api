@@ -1,7 +1,6 @@
 package vertex
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -472,7 +471,6 @@ var scanBufPool = sync.Pool{ //nolint:gochecknoglobals
 }
 
 func scanStream(body io.Reader, onObject func(map[string]any) (bool, error)) error {
-	reader := bufio.NewReader(body)
 	readBufPtr := scanBufPool.Get().(*[]byte)
 	defer scanBufPool.Put(readBufPtr)
 	readBuf := *readBufPtr
@@ -487,7 +485,7 @@ func scanStream(body io.Reader, onObject func(map[string]any) (bool, error)) err
 	const maxBufferSize = 4 * 1024 * 1024
 
 	for {
-		n, readErr := reader.Read(readBuf)
+		n, readErr := body.Read(readBuf)
 		if n > 0 {
 			buffer = append(buffer, readBuf[:n]...)
 
