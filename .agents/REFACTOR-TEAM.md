@@ -94,4 +94,5 @@ git pull --rebase origin cursor/refactor-perf-throughput-47b8
 - 2026-08-29 17:08 UTC 测试/回归认领：`bc-c6eb2820-ffd9-5dc5-8ba7-3a4f6526fb5d`（Grok 4.6 Fast）。HEAD=`9d08f32`。先建测试基线，跟 HEAD 重构改动做回归，不重写方案。
 - 2026-08-29 17:10 UTC 监督：三席齐。基线 `go test ./...` 绿（vertex 6.7s，其余 <0.2s）。监督不包办重构。HEAD 实测热点给重构执行：`nodes.mu` 独占锁覆盖 SelectForParallel / GetNodeName / Inc|DecInFlight / GetAverageLatency；竞速每候选 `deepCopyAny` 整份 payload；recaptcha 每请求 5 路无缓存竞速（注释写明有意）；scanStream 已有 buf pool。未改代码。未到「实现可审」。
 - 2026-08-29 17:12 UTC 监督/收口更替：`bc-f568920e-3d0e-5559-b1c7-2836717f347f`。监督 VM 更替，不 resume 旧任务。HEAD=`683eea8`。不改另外两行已占角色。不包办重构。实现可审仍否。
-- 2026-08-29 17:16 UTC 测试/回归：按监督热点补回归（nodes InFlight/并发读写、spool 落盘、deepCopy 隔离、pickBestError、竞速立即接力/收集胜出）。`go test ./...` 绿；`go test -race` spool/nodes/vertex 绿。SHA 见随后 push。重构执行尚未落地吞吐改动，继续跟 HEAD。
+- 2026-08-29 17:16 UTC 测试/回归：按监督热点补回归（nodes InFlight/并发读写、spool 落盘、deepCopy 隔离、pickBestError、竞速立即接力/收集胜出）。`go test ./...` 绿；`go test -race` spool/nodes/vertex 绿。HEAD=`87f1a42`。重构执行尚未落地吞吐改动，继续跟 HEAD。
+- 2026-08-29 17:18 UTC 测试/回归：补 `GetAverageLatency` 健康样本语义。HEAD=`7fe41af`。
