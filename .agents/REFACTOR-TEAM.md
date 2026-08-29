@@ -64,7 +64,7 @@ git pull --rebase origin cursor/refactor-perf-throughput-47b8
 
 | 角色 | bcId | 认领 UTC |
 |------|------|----------|
-| 监督/收口 | _空_ | |
+| 监督/收口 | `bc-7a73f5e8-8f0f-5907-9e09-4743b0c3cb49` | 2026-08-29 17:06 UTC |
 | 重构执行 | _空_ | |
 | 测试/回归 | _空_ | |
 
@@ -88,3 +88,4 @@ git pull --rebase origin cursor/refactor-perf-throughput-47b8
 （认领、计划要点、push SHA、阻塞，短句追加在下面。不要写长文方案。）
 
 - 2026-08-29 dispatcher：LICENSE Required Notice 改为多方贡献者（含 baimeou / Deconstructed_Cube / others）；README 补回 License 段。工作分支已建。
+- 2026-08-29 17:06 UTC 监督/收口认领：`bc-7a73f5e8-8f0f-5907-9e09-4743b0c3cb49`（Grok 4.6 Fast）。HEAD=`e1262d2`。不包办重构；先摸 HEAD 热点与测试基线，等重构执行/测试回归入位。
