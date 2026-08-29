@@ -957,18 +957,16 @@ func DecInFlight(uri string) {
 	}
 }
 
-func GetAverageLatency() float64 {
-	mu.Lock()
-	defer mu.Unlock()
-	ensureLoaded()
+func averageLatencyLocked() float64 {
 	var sum float64
 	var count int
+	now := time.Now().Unix()
 	for _, n := range nodeList {
 		if n.Disabled {
 			continue
 		}
 		h := healthMap[n.RawURI]
-		if h != nil && h.LastTestMs > 0 && h.CooldownUntil <= time.Now().Unix() {
+		if h != nil && h.LastTestMs > 0 && h.CooldownUntil <= now {
 			sum += h.LastTestMs
 			count++
 		}
@@ -977,4 +975,18 @@ func GetAverageLatency() float64 {
 		return 500.0
 	}
 	return sum / float64(count)
+}
+
+func GetAverageLatency() float64 {
+	mu.RLock()
+	if loaded {
+		v := averageLatencyLocked()
+		mu.RUnlock()
+		return v
+	}
+	mu.RUnlock()
+	mu.Lock()
+	defer mu.Unlock()
+	ensureLoaded()
+	return averageLatencyLocked()
 }

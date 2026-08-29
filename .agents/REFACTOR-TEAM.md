@@ -97,3 +97,4 @@ git pull --rebase origin cursor/refactor-perf-throughput-47b8
 - 2026-08-29 17:16 UTC 测试/回归：按监督热点补回归（nodes InFlight/并发读写、spool 落盘、deepCopy 隔离、pickBestError、竞速立即接力/收集胜出）。`go test ./...` 绿；`go test -race` spool/nodes/vertex 绿。HEAD=`87f1a42`。重构执行尚未落地吞吐改动，继续跟 HEAD。
 - 2026-08-29 17:18 UTC 测试/回归：补 `GetAverageLatency` 健康样本语义。HEAD=`7fe41af`。
 - 2026-08-29 17:16 UTC 测试/回归更替：`bc-352ee92b-08cc-5722-b32b-baaa9f7cb95a`。测试 VM 更替，不 resume 旧任务。HEAD=`3c35e2d`。不改监督/重构执行两行。继续跟 HEAD。
+- 2026-08-29 17:19 UTC 重构执行：吞吐改动已落地 `9382a80`。jsonx 复用 encoder；OAI 流改查 chunk 不扫 SSE 串；GetNodeName/GetAverageLatency 改 RLock；InFlight 原子增减（仍写 healthMap，对齐测试席回归）；sticky 改 sync.Map；scan 去掉多余 bufio。`go test ./...` 绿；`go test -race` jsonx/transform/nodes/api/vertex 绿。未动 recaptcha 五路竞速（有意）/每候选 deepCopy。未到「实现可审」。
