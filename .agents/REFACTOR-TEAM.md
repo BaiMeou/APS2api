@@ -64,7 +64,7 @@ git pull --rebase origin cursor/refactor-perf-throughput-47b8
 
 | 角色 | bcId | 认领 UTC |
 |------|------|----------|
-| 监督/收口 | `bc-7a73f5e8-8f0f-5907-9e09-4743b0c3cb49` | 2026-08-29 17:06 UTC |
+| 监督/收口 | `bc-f568920e-3d0e-5559-b1c7-2836717f347f` | 2026-08-29 17:12 UTC |
 | 重构执行 | `bc-861de6a6-a6eb-5894-bcb7-b704ed1ba2f7` | 2026-08-29 17:07 UTC |
 | 测试/回归 | `bc-c6eb2820-ffd9-5dc5-8ba7-3a4f6526fb5d` | 2026-08-29 17:08 UTC |
 
@@ -93,3 +93,4 @@ git pull --rebase origin cursor/refactor-perf-throughput-47b8
 - 2026-08-29 17:07 UTC 重构执行认领：`bc-861de6a6-a6eb-5894-bcb7-b704ed1ba2f7`（Grok 4.6 Fast）。HEAD=`f15bcf7`。按 HEAD 实测热点改吞吐，不重写整套方案。
 - 2026-08-29 17:08 UTC 测试/回归认领：`bc-c6eb2820-ffd9-5dc5-8ba7-3a4f6526fb5d`（Grok 4.6 Fast）。HEAD=`9d08f32`。先建测试基线，跟 HEAD 重构改动做回归，不重写方案。
 - 2026-08-29 17:10 UTC 监督：三席齐。基线 `go test ./...` 绿（vertex 6.7s，其余 <0.2s）。监督不包办重构。HEAD 实测热点给重构执行：`nodes.mu` 独占锁覆盖 SelectForParallel / GetNodeName / Inc|DecInFlight / GetAverageLatency；竞速每候选 `deepCopyAny` 整份 payload；recaptcha 每请求 5 路无缓存竞速（注释写明有意）；scanStream 已有 buf pool。未改代码。未到「实现可审」。
+- 2026-08-29 17:12 UTC 监督/收口更替：`bc-f568920e-3d0e-5559-b1c7-2836717f347f`。监督 VM 更替，不 resume 旧任务。HEAD=`683eea8`。不改另外两行已占角色。不包办重构。实现可审仍否。
