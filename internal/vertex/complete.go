@@ -20,9 +20,10 @@ func (c *VertexAIClient) CompleteChat(ctx context.Context, model string, geminiP
 }
 
 func (c *VertexAIClient) completeChatWithRoute(ctx context.Context, model string, geminiPayload map[string]any) (map[string]any, error) {
+	// 请求级深拷一次；候选共享只读快照。BuildVertexVariables 不再改写输入。
+	sharedPayload := clonePayload(geminiPayload)
 	run := func(ctx context.Context, proxyURI string) (map[string]any, error) {
-		copiedPayload := deepCopyAny(geminiPayload).(map[string]any)
-		return c.runSingleCandidate(ctx, model, copiedPayload, proxyURI)
+		return c.runSingleCandidate(ctx, model, sharedPayload, proxyURI)
 	}
 	return RunRace(ctx, c.cfg, run,
 		WithWinningCheck(func(resp map[string]any) bool {

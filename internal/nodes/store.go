@@ -794,21 +794,15 @@ func getNodeTier(n Node, h *NodeHealth) int {
 }
 
 type tierCandidate struct {
-	node     Node
-	inFlight int32
-	sticky   bool
+	node         Node
+	inFlight     int32
+	sticky       bool
+	lastSelected int64
 }
 
-func SelectForParallel(k int, topK int, debugMode bool, stickyBonusEnabled bool) []Node {
-	mu.Lock()
-	defer mu.Unlock()
-	ensureLoaded()
-	now := time.Now().Unix()
-
-	tier1 := make([]tierCandidate, 0, len(nodeList))
-	tier2 := make([]tierCandidate, 0, 8)
-	cooldownCount := 0
-
+func snapshotSelectTiers(now int64, stickyBonusEnabled bool) (tier1, tier2 []tierCandidate, cooldownCount int) {
+	tier1 = make([]tierCandidate, 0, len(nodeList))
+	tier2 = make([]tierCandidate, 0, 8)
 	for _, n := range nodeList {
 		if n.Disabled {
 			continue
@@ -820,17 +814,40 @@ func SelectForParallel(k int, topK int, debugMode bool, stickyBonusEnabled bool)
 		}
 		tier := getNodeTier(n, h)
 		inFlight := int32(0)
+		lastSelected := int64(0)
 		if h != nil {
 			inFlight = atomic.LoadInt32(&h.InFlight)
+			lastSelected = h.LastSelectedAt
 		}
 		sticky := stickyBonusEnabled && globalStickyPool.IsSticky(n.RawURI)
+		cand := tierCandidate{node: n, inFlight: inFlight, sticky: sticky, lastSelected: lastSelected}
 		switch tier {
 		case 1:
-			tier1 = append(tier1, tierCandidate{node: n, inFlight: inFlight, sticky: sticky})
+			tier1 = append(tier1, cand)
 		case 2:
-			tier2 = append(tier2, tierCandidate{node: n, inFlight: inFlight, sticky: sticky})
+			tier2 = append(tier2, cand)
 		}
 	}
+	return tier1, tier2, cooldownCount
+}
+
+func SelectForParallel(k int, topK int, debugMode bool, stickyBonusEnabled bool) []Node {
+	now := time.Now().Unix()
+	mu.RLock()
+	if loaded {
+		tier1, tier2, cooldownCount := snapshotSelectTiers(now, stickyBonusEnabled)
+		mu.RUnlock()
+		return finishSelectForParallel(k, topK, debugMode, now, tier1, tier2, cooldownCount)
+	}
+	mu.RUnlock()
+	mu.Lock()
+	ensureLoaded()
+	tier1, tier2, cooldownCount := snapshotSelectTiers(now, stickyBonusEnabled)
+	mu.Unlock()
+	return finishSelectForParallel(k, topK, debugMode, now, tier1, tier2, cooldownCount)
+}
+
+func finishSelectForParallel(k, topK int, debugMode bool, now int64, tier1, tier2 []tierCandidate, cooldownCount int) []Node {
 
 	sortTier := func(candidates []tierCandidate) {
 		sort.Slice(candidates, func(i, j int) bool {
@@ -840,18 +857,8 @@ func SelectForParallel(k int, topK int, debugMode bool, stickyBonusEnabled bool)
 			if candidates[i].sticky != candidates[j].sticky {
 				return candidates[i].sticky
 			}
-			hi := healthMap[candidates[i].node.RawURI]
-			hj := healthMap[candidates[j].node.RawURI]
-			ti := int64(0)
-			if hi != nil {
-				ti = hi.LastSelectedAt
-			}
-			tj := int64(0)
-			if hj != nil {
-				tj = hj.LastSelectedAt
-			}
-			if ti != tj {
-				return ti < tj
+			if candidates[i].lastSelected != candidates[j].lastSelected {
+				return candidates[i].lastSelected < candidates[j].lastSelected
 			}
 			return candidates[i].node.RawURI < candidates[j].node.RawURI
 		})
@@ -912,11 +919,15 @@ func SelectForParallel(k int, topK int, debugMode bool, stickyBonusEnabled bool)
 		}
 	}
 
-	for _, s := range selected {
-		if h := healthMap[s.RawURI]; h != nil {
-			h.LastSelectedAt = now
-			h.RecentUseCount++
+	if len(selected) > 0 {
+		mu.Lock()
+		for _, s := range selected {
+			if h := healthMap[s.RawURI]; h != nil {
+				h.LastSelectedAt = now
+				h.RecentUseCount++
+			}
 		}
+		mu.Unlock()
 	}
 
 	if debugMode {

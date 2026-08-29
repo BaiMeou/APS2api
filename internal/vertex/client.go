@@ -367,6 +367,17 @@ func shallowCopy(m map[string]any) map[string]any {
 	return out
 }
 
+func clonePayload(src map[string]any) map[string]any {
+	if src == nil {
+		return map[string]any{}
+	}
+	copied, _ := deepCopyAny(src).(map[string]any)
+	if copied == nil {
+		return map[string]any{}
+	}
+	return copied
+}
+
 func deepCopyAny(v any) any {
 	switch x := v.(type) {
 	case map[string]any:

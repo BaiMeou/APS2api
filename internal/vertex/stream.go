@@ -51,14 +51,13 @@ type StreamChunk struct {
 // 重试退避被打断、上游流连接中断，不再空转。
 func (c *VertexAIClient) StreamChat(ctx context.Context, model string, geminiPayload map[string]any, yield func(StreamChunk) bool) {
 	routedCtx := c.prepareRequest(ctx)
+	// 请求级深拷一次，与竞速候选共享。BuildVertexVariables 不改写这份快照。
+	sharedPayload := clonePayload(geminiPayload)
 	op := func(ctx context.Context, proxyURI string) <-chan StreamChunk {
 		ch := make(chan StreamChunk, 64)
-		// 深度拷贝 geminiPayload，防止并发竞速（StreamParallel / RunRace）时
-		// 多个节点协程同时修改或读取同一个 map（引发 concurrent map read and map write 恐慌）
-		copiedPayload := deepCopyAny(geminiPayload).(map[string]any)
 		go func() {
 			defer close(ch)
-			c.executeStreamingWithRetries(ctx, model, copiedPayload, proxyURI, func(chunk StreamChunk) bool {
+			c.executeStreamingWithRetries(ctx, model, sharedPayload, proxyURI, func(chunk StreamChunk) bool {
 				select {
 				case ch <- chunk:
 					return true
