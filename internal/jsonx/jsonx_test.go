@@ -93,6 +93,52 @@ func TestMarshalConcurrent(t *testing.T) {
 	}
 }
 
+func TestMarshalResultIsolatedFromLaterEncode(t *testing.T) {
+	first, err := Marshal(map[string]any{"k": "first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Marshal(map[string]any{"k": "second-value-longer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(first) != `{"k":"first"}` {
+		t.Fatalf("池复用后先前 Marshal 结果被改写: %s", first)
+	}
+	if string(second) != `{"k":"second-value-longer"}` {
+		t.Fatalf("Marshal=%s", second)
+	}
+}
+
+func TestAppendConcurrent(t *testing.T) {
+	v := map[string]any{"html": "a<b>&c", "n": float64(3)}
+	want, err := Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const n = 32
+	errCh := make(chan error, n)
+	for i := 0; i < n; i++ {
+		go func() {
+			got, err := Append([]byte("pre:"), v)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if string(got) != "pre:"+string(want) {
+				errCh <- fmt.Errorf("Append=%q want prefix+Marshal=%q", got, want)
+				return
+			}
+			errCh <- nil
+		}()
+	}
+	for i := 0; i < n; i++ {
+		if err := <-errCh; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestTruthy(t *testing.T) {
 	tests := []struct { //nolint:govet
 		name string

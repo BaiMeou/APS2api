@@ -70,6 +70,121 @@ func TestSelectForParallelPrefersLowerInFlight(t *testing.T) {
 	}
 }
 
+func TestDecInFlightDoesNotGoNegative(t *testing.T) {
+	resetState()
+	defer resetState()
+	MergeNodes([]Node{{RawURI: "http://n", Name: "n"}})
+	RecordTest("http://n", true, 10, "")
+
+	DecInFlight("http://n")
+	DecInFlight("http://n")
+	h := LoadHealth()["http://n"]
+	if h == nil || atomic.LoadInt32(&h.InFlight) != 0 {
+		t.Fatalf("超额 Dec 后 InFlight 应为 0, got %+v", h)
+	}
+	IncInFlight("http://n")
+	if atomic.LoadInt32(&h.InFlight) != 1 {
+		t.Fatalf("触底后 Inc 应为 1, got %+v", h)
+	}
+
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			DecInFlight("http://n")
+		}()
+	}
+	wg.Wait()
+	if atomic.LoadInt32(&h.InFlight) != 0 {
+		t.Fatalf("并发超额 Dec 后 InFlight 应为 0, got %d", h.InFlight)
+	}
+}
+
+func TestIncDecInFlightUnknownURINoOp(t *testing.T) {
+	resetState()
+	defer resetState()
+	IncInFlight("http://missing")
+	DecInFlight("http://missing")
+}
+
+func TestGetAverageLatencyConcurrentWithRecordTest(t *testing.T) {
+	resetState()
+	defer resetState()
+	MergeNodes([]Node{{RawURI: "http://n", Name: "n"}})
+	RecordTest("http://n", true, 50, "")
+
+	var wg sync.WaitGroup
+	for range 8 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 40 {
+				if got := GetAverageLatency(); got != 50 {
+					t.Errorf("平均延迟应为 50, got %v", got)
+					return
+				}
+				RecordTest("http://n", true, 50, "")
+			}
+		}()
+	}
+	wg.Wait()
+	if got := GetAverageLatency(); got != 50 {
+		t.Fatalf("并发读写后平均延迟应为 50, got %v", got)
+	}
+}
+
+func TestStickyPoolAddEvictCloneRestore(t *testing.T) {
+	p := NewStickyNodePool()
+	p.Add("http://a")
+	p.Add("http://b")
+	if !p.IsSticky("http://a") || p.AvailableCount() != 2 {
+		t.Fatalf("Add 后应 sticky, count=%d list=%v", p.AvailableCount(), p.List())
+	}
+	p.Evict("http://a")
+	if p.IsSticky("http://a") || !p.IsSticky("http://b") {
+		t.Fatalf("Evict 只应去掉 a, list=%v", p.List())
+	}
+	if got := p.List(); len(got) != 1 || got[0] != "http://b" {
+		t.Fatalf("List=%v, want [http://b]", got)
+	}
+
+	resetState()
+	defer resetState()
+	globalStickyPool.Add("http://x")
+	globalStickyPool.Add("http://y")
+	snap := cloneStickyPoolUnsafe()
+	globalStickyPool.Evict("http://x")
+	if globalStickyPool.IsSticky("http://x") {
+		t.Fatal("Evict 后 x 不应仍 sticky")
+	}
+	restoreStickyPoolUnsafe(snap)
+	if !globalStickyPool.IsSticky("http://x") || !globalStickyPool.IsSticky("http://y") {
+		t.Fatalf("restore 应还原 sticky 集合, list=%v", globalStickyPool.List())
+	}
+}
+
+func TestStickyPoolConcurrentAddEvict(t *testing.T) {
+	p := NewStickyNodePool()
+	var wg sync.WaitGroup
+	for i := range 32 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			uri := fmt.Sprintf("http://s-%d", i)
+			p.Add(uri)
+			_ = p.IsSticky(uri)
+			_ = p.List()
+			_ = p.AvailableCount()
+			p.Evict(uri)
+		}(i)
+	}
+	wg.Wait()
+	if p.AvailableCount() != 0 {
+		t.Fatalf("成对 Add/Evict 后应为空, list=%v", p.List())
+	}
+}
+
 func TestInFlightIncDecBalances(t *testing.T) {
 	resetState()
 	defer resetState()
