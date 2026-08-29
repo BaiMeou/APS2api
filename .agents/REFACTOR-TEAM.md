@@ -66,7 +66,7 @@ git pull --rebase origin cursor/refactor-perf-throughput-47b8
 |------|------|----------|
 | 监督/收口 | `bc-f568920e-3d0e-5559-b1c7-2836717f347f` | 2026-08-29 17:12 UTC |
 | 重构执行 | `bc-861de6a6-a6eb-5894-bcb7-b704ed1ba2f7` | 2026-08-29 17:07 UTC |
-| 测试/回归 | `bc-c6eb2820-ffd9-5dc5-8ba7-3a4f6526fb5d` | 2026-08-29 17:08 UTC |
+| 测试/回归 | `bc-352ee92b-08cc-5722-b32b-baaa9f7cb95a` | 2026-08-29 17:16 UTC |
 
 模型提示（不是预分配）：实现/监督倾向 Opus 5 Thinking High Fast；测试/跑腿倾向 Grok 4.6 Fast。审查波未开始，不要开 `REFACTOR-REVIEW.md`。
 
@@ -96,3 +96,4 @@ git pull --rebase origin cursor/refactor-perf-throughput-47b8
 - 2026-08-29 17:12 UTC 监督/收口更替：`bc-f568920e-3d0e-5559-b1c7-2836717f347f`。监督 VM 更替，不 resume 旧任务。HEAD=`683eea8`。不改另外两行已占角色。不包办重构。实现可审仍否。
 - 2026-08-29 17:16 UTC 测试/回归：按监督热点补回归（nodes InFlight/并发读写、spool 落盘、deepCopy 隔离、pickBestError、竞速立即接力/收集胜出）。`go test ./...` 绿；`go test -race` spool/nodes/vertex 绿。HEAD=`87f1a42`。重构执行尚未落地吞吐改动，继续跟 HEAD。
 - 2026-08-29 17:18 UTC 测试/回归：补 `GetAverageLatency` 健康样本语义。HEAD=`7fe41af`。
+- 2026-08-29 17:16 UTC 测试/回归更替：`bc-352ee92b-08cc-5722-b32b-baaa9f7cb95a`。测试 VM 更替，不 resume 旧任务。HEAD=`3c35e2d`。不改监督/重构执行两行。继续跟 HEAD。
