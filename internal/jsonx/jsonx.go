@@ -9,23 +9,58 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"sync"
 )
 
-// Marshal 序列化为 JSON，不做 HTML 转义、不转义非 ASCII。
-func Marshal(v any) ([]byte, error) {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(v); err != nil {
-		return nil, fmt.Errorf("error: %w", err)
+type marshalBuf struct {
+	buf bytes.Buffer
+	enc *json.Encoder
+}
 
+func newMarshalBuf() *marshalBuf {
+	m := &marshalBuf{}
+	m.enc = json.NewEncoder(&m.buf)
+	m.enc.SetEscapeHTML(false)
+	return m
+}
+
+var marshalPool = sync.Pool{New: func() any { return newMarshalBuf() }} //nolint:gochecknoglobals
+
+func encode(v any) (*marshalBuf, []byte, error) {
+	m := marshalPool.Get().(*marshalBuf)
+	m.buf.Reset()
+	if err := m.enc.Encode(v); err != nil {
+		marshalPool.Put(m)
+		return nil, nil, fmt.Errorf("error: %w", err)
 	}
-	// json.Encoder.Encode 会在末尾追加一个换行符，去掉以与 json.Marshal 输出一致。
-	b := buf.Bytes()
+	b := m.buf.Bytes()
 	if n := len(b); n > 0 && b[n-1] == '\n' {
 		b = b[:n-1]
 	}
-	return b, nil
+	return m, b, nil
+}
+
+// Marshal 序列化为 JSON，不做 HTML 转义、不转义非 ASCII。
+func Marshal(v any) ([]byte, error) {
+	m, b, err := encode(v)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]byte, len(b))
+	copy(out, b)
+	marshalPool.Put(m)
+	return out, nil
+}
+
+// Append 把 v 序列化后追加到 dst，语义与 Marshal 相同。
+func Append(dst []byte, v any) ([]byte, error) {
+	m, b, err := encode(v)
+	if err != nil {
+		return dst, err
+	}
+	dst = append(dst, b...)
+	marshalPool.Put(m)
+	return dst, nil
 }
 
 // Truthy 复刻动态语言常见的真值语义，用于判断解析出的 JSON 值是否"为真"

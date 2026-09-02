@@ -166,8 +166,8 @@ func hasRemotePrefix(url string) bool {
 }
 
 // BuildVertexVariables 由 geminiPayload 构建发往上游的 variables。
+// 不改写传入的 geminiPayload，便于竞速候选共享同一份只读快照。
 func BuildVertexVariables(model string, geminiPayload map[string]any, cfg config.ConfigProvider) map[string]any {
-	stripGeminiIDs(geminiPayload)
 	vars := map[string]any{}
 	vars["model"] = parseModelName(model)
 
@@ -184,6 +184,7 @@ func BuildVertexVariables(model string, geminiPayload map[string]any, cfg config
 	handleSystemInstruction(vars)
 
 	if c, ok := vars["contents"]; ok {
+		c = copyOnWriteStripGeminiIDs(c)
 		trailingFix := trailingModelFixActive(model, cfg)
 		c = normalizeContents(c)
 		c = handleInlineDataCase(c)
@@ -198,6 +199,7 @@ func BuildVertexVariables(model string, geminiPayload map[string]any, cfg config
 	}
 
 	if rawTools, ok := vars["tools"]; ok {
+		rawTools = copyOnWriteStripGeminiIDs(rawTools)
 		normalized := normalizeToolsFormat(rawTools)
 		if len(normalized) > 0 {
 			vars["tools"] = normalized
@@ -207,6 +209,7 @@ func BuildVertexVariables(model string, geminiPayload map[string]any, cfg config
 		}
 	}
 	if tc, ok := vars["toolConfig"]; ok {
+		tc = copyOnWriteStripGeminiIDs(tc)
 		vars["toolConfig"] = convertToolsFormat(tc)
 	}
 
@@ -638,16 +641,26 @@ func modelTurnHasFunctionCall(content map[string]any) bool {
 	return false
 }
 
+func strippedGeminiID(s string) (string, bool) {
+	if !strings.HasPrefix(s, "gemini-tool-call-") && !strings.HasPrefix(s, "tool_call_") {
+		return s, false
+	}
+	if len(s) > 11 && strings.Contains(s, "-vp") {
+		idx := strings.LastIndex(s, "-vp")
+		if idx > 0 && len(s)-idx == 11 {
+			return s[:idx], true
+		}
+	}
+	return s, false
+}
+
 func stripGeminiIDs(val any) {
 	switch v := val.(type) {
 	case map[string]any:
 		for k, mv := range v {
-			if s, ok := mv.(string); ok && (strings.HasPrefix(s, "gemini-tool-call-") || strings.HasPrefix(s, "tool_call_")) {
-				if len(s) > 11 && strings.Contains(s, "-vp") {
-					idx := strings.LastIndex(s, "-vp")
-					if idx > 0 && len(s)-idx == 11 {
-						v[k] = s[:idx]
-					}
+			if s, ok := mv.(string); ok {
+				if ns, changed := strippedGeminiID(s); changed {
+					v[k] = ns
 				}
 			} else {
 				stripGeminiIDs(mv)
@@ -657,5 +670,61 @@ func stripGeminiIDs(val any) {
 		for _, item := range v {
 			stripGeminiIDs(item)
 		}
+	}
+}
+
+// copyOnWriteStripGeminiIDs 剥离 -vp 锚点；无改动时返回原引用，避免竞速候选互改同一份 payload。
+func copyOnWriteStripGeminiIDs(val any) any {
+	out, _ := copyOnWriteStripGeminiIDsChanged(val)
+	return out
+}
+
+func copyOnWriteStripGeminiIDsChanged(val any) (any, bool) {
+	switch v := val.(type) {
+	case map[string]any:
+		var out map[string]any
+		changed := false
+		for k, mv := range v {
+			if s, ok := mv.(string); ok {
+				if ns, ok := strippedGeminiID(s); ok {
+					if out == nil {
+						out = copyMap(v)
+					}
+					out[k] = ns
+					changed = true
+				}
+				continue
+			}
+			if nv, childChanged := copyOnWriteStripGeminiIDsChanged(mv); childChanged {
+				if out == nil {
+					out = copyMap(v)
+				}
+				out[k] = nv
+				changed = true
+			}
+		}
+		if changed {
+			return out, true
+		}
+		return v, false
+	case []any:
+		var out []any
+		changed := false
+		for i, item := range v {
+			if nv, childChanged := copyOnWriteStripGeminiIDsChanged(item); childChanged {
+				if out == nil {
+					out = make([]any, len(v))
+					copy(out, v)
+				}
+				out[i] = nv
+				changed = true
+			}
+		}
+		if changed {
+			return out, true
+		}
+		return v, false
+	default:
+		return val, false
 	}
 }

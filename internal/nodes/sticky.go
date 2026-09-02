@@ -2,9 +2,8 @@ package nodes
 
 import "sync"
 
-type StickyNodePool struct { //nolint:govet
-	mu   sync.Mutex
-	pool map[string]bool
+type StickyNodePool struct {
+	pool sync.Map
 }
 
 var globalStickyPool = NewStickyNodePool() //nolint:gochecknoglobals
@@ -14,34 +13,29 @@ func GetStickyPool() *StickyNodePool {
 }
 
 func NewStickyNodePool() *StickyNodePool {
-	return &StickyNodePool{ //nolint:exhaustruct
-		pool: make(map[string]bool),
-	}
+	return &StickyNodePool{}
 }
 
 func (p *StickyNodePool) Add(uri string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.pool[uri] = true
+	p.pool.Store(uri, struct{}{})
 }
 
 func (p *StickyNodePool) Evict(uri string) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	delete(p.pool, uri)
+	p.pool.Delete(uri)
 }
 
 func (p *StickyNodePool) IsSticky(uri string) bool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	_, exists := p.pool[uri]
+	_, exists := p.pool.Load(uri)
 	return exists
 }
 
 func (p *StickyNodePool) AvailableCount() int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return len(p.pool)
+	n := 0
+	p.pool.Range(func(any, any) bool {
+		n++
+		return true
+	})
+	return n
 }
 
 func (p *StickyNodePool) StaleCount() int {
@@ -49,11 +43,10 @@ func (p *StickyNodePool) StaleCount() int {
 }
 
 func (p *StickyNodePool) List() []string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	uris := make([]string, 0, len(p.pool))
-	for uri := range p.pool {
-		uris = append(uris, uri)
-	}
+	uris := make([]string, 0)
+	p.pool.Range(func(k, _ any) bool {
+		uris = append(uris, k.(string))
+		return true
+	})
 	return uris
 }

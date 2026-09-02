@@ -62,3 +62,7 @@ CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o age
 > **提示**：在模型名（如 `gemini-3.5-flash`）前加上 `fake-` 或 `假流式-` 前缀，可将非流式模型伪装成流式输出。
 
 详细配置说明请参阅 [部署指南](部署指南.md#配置怎么改)。
+
+## License
+
+本软件按 [PolyForm Noncommercial License 1.0.0](LICENSE) 提供。版权由各作者就其自己的贡献分别持有并授权，不因修改 LICENSE 而转让或消灭。法律文本以 LICENSE 文首每一行 `Required Notice:` 及该文件正文为准；[NOTICE](NOTICE) 只作说明，与 LICENSE 冲突时以 LICENSE 为准。

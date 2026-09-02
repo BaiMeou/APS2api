@@ -91,19 +91,24 @@ func cloneHealthMapUnsafe() map[string]*NodeHealth {
 }
 
 func cloneStickyPoolUnsafe() map[string]bool {
-	globalStickyPool.mu.Lock()
-	defer globalStickyPool.mu.Unlock()
-	cloned := make(map[string]bool, len(globalStickyPool.pool))
-	for rawURI, sticky := range globalStickyPool.pool {
-		cloned[rawURI] = sticky
-	}
+	cloned := make(map[string]bool)
+	globalStickyPool.pool.Range(func(k, _ any) bool {
+		cloned[k.(string)] = true
+		return true
+	})
 	return cloned
 }
 
 func restoreStickyPoolUnsafe(snapshot map[string]bool) {
-	globalStickyPool.mu.Lock()
-	defer globalStickyPool.mu.Unlock()
-	globalStickyPool.pool = snapshot
+	globalStickyPool.pool.Range(func(k, _ any) bool {
+		globalStickyPool.pool.Delete(k)
+		return true
+	})
+	for uri, sticky := range snapshot {
+		if sticky {
+			globalStickyPool.pool.Store(uri, struct{}{})
+		}
+	}
 }
 
 func saveNodeStateUnsafe() error {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -127,21 +128,83 @@ func reqID() string {
 	return hex.EncodeToString(buf[:])
 }
 
+var sseLineBufPool = sync.Pool{New: func() any { //nolint:gochecknoglobals
+	b := make([]byte, 0, 256)
+	return &b
+}}
+
 // sseLine 把对象序列化成一条 SSE 数据行。
 func sseLine(obj map[string]any) string {
-	data, err := jsonx.Marshal(obj)
+	bufPtr := sseLineBufPool.Get().(*[]byte)
+	b := (*bufPtr)[:0]
+	b = append(b, "data: "...)
+	var err error
+	b, err = jsonx.Append(b, obj)
 	if err != nil {
+		*bufPtr = b
+		sseLineBufPool.Put(bufPtr)
 		return "data: {}\n\n"
 	}
-	return "data: " + string(data) + "\n\n"
+	b = append(b, "\n\n"...)
+	s := string(b)
+	*bufPtr = b
+	sseLineBufPool.Put(bufPtr)
+	return s
+}
+
+// StreamChunkHasRealFinish 报告 Gemini 增量是否带真实结束原因（非 UNSPECIFIED）。
+func StreamChunkHasRealFinish(chunk map[string]any) bool {
+	cands, _ := chunk["candidates"].([]any)
+	for _, raw := range cands {
+		candidate, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		finish, _ := candidate["finishReason"].(string)
+		if finish != "" && finish != FinishReasonUnspecified {
+			return true
+		}
+	}
+	return false
+}
+
+// StreamChunkHasVisibleOutput 报告该增量是否会变成 OAI 的 content/tool_calls/reasoning。
+func StreamChunkHasVisibleOutput(chunk map[string]any) bool {
+	cands, _ := chunk["candidates"].([]any)
+	for _, raw := range cands {
+		candidate, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, pRaw := range candidateParts(candidate) {
+			part, ok := pRaw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if isFunctionCallWithName(part) || hasInlineImage(part) {
+				return true
+			}
+			if toString(part["text"]) != "" {
+				return true
+			}
+			if ec, ok := part["executableCode"].(map[string]any); ok && toString(ec["code"]) != "" {
+				return true
+			}
+			if cer, ok := part["codeExecutionResult"].(map[string]any); ok && toString(cer["output"]) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // ConvertRealtimeChunk 把单个 Gemini 增量 dict 转为 OAI SSE 事件字符串列表。
 func ConvertRealtimeChunk(chunk map[string]any, model, requestID string, isFirst bool, trackers ...*StreamToolCallTracker) []string {
 	created := time.Now().Unix()
+	chunkID := "chatcmpl-" + requestID
 	base := func() map[string]any {
 		return map[string]any{
-			"id":      "chatcmpl-" + requestID,
+			"id":      chunkID,
 			"object":  "chat.completion.chunk",
 			"created": created,
 			"model":   model,

@@ -3,6 +3,7 @@ package transform
 import (
 	"encoding/json"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/bsfdsagfadg/vertex/internal/config"
@@ -941,5 +942,57 @@ func TestStripGeminiIDs(t *testing.T) {
 	fc2 := m3["parts"].([]any)[0].(map[string]any)["functionCall"].(map[string]any)
 	if fc2["id"] != "tool_call_2" {
 		t.Errorf("tool_call id stripping 失败: %v", fc2["id"])
+	}
+}
+
+func TestBuildVertexVariablesDoesNotMutateInput(t *testing.T) {
+	payload := map[string]any{
+		"contents": []any{
+			map[string]any{"role": "user", "parts": []any{map[string]any{"text": "hi"}}},
+			map[string]any{
+				"role": "model",
+				"parts": []any{map[string]any{
+					"functionCall": map[string]any{"name": "lookup", "id": "gemini-tool-call-1-vp12345678"},
+				}},
+			},
+		},
+	}
+	cfg := config.StaticProvider(config.DefaultConfig())
+	vars := BuildVertexVariables("gemini-2.5-flash", payload, cfg)
+
+	if vars == nil {
+		t.Fatal("vars 不应为 nil")
+	}
+	orig := payload["contents"].([]any)[1].(map[string]any)["parts"].([]any)[0].(map[string]any)["functionCall"].(map[string]any)
+	if orig["id"] != "gemini-tool-call-1-vp12345678" {
+		t.Fatalf("不应改写输入 payload, id=%v", orig["id"])
+	}
+}
+
+func TestBuildVertexVariablesConcurrentSharedPayload(t *testing.T) {
+	payload := map[string]any{
+		"contents": []any{
+			map[string]any{"role": "user", "parts": []any{map[string]any{"text": "hi"}}},
+			map[string]any{
+				"role": "model",
+				"parts": []any{map[string]any{
+					"functionCall": map[string]any{"name": "lookup", "id": "tool_call_2-vp12345678"},
+				}},
+			},
+		},
+	}
+	cfg := config.StaticProvider(config.DefaultConfig())
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = BuildVertexVariables("gemini-2.5-flash", payload, cfg)
+		}()
+	}
+	wg.Wait()
+	orig := payload["contents"].([]any)[1].(map[string]any)["parts"].([]any)[0].(map[string]any)["functionCall"].(map[string]any)
+	if orig["id"] != "tool_call_2-vp12345678" {
+		t.Fatalf("并发构建后输入被改写, id=%v", orig["id"])
 	}
 }

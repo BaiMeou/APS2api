@@ -1,0 +1,28 @@
+This NOTICE explains how the PolyForm Noncommercial License 1.0.0 in LICENSE is offered for this software. It does not amend that license form.
+
+If this NOTICE conflicts with LICENSE, LICENSE controls. Downstream copies must still keep every `Required Notice:` line from LICENSE (see the Notices section of that form).
+
+## What is licensed
+
+This repository is a collective work. Each author owns copyright only in that author's own contributions. There is no single owner of "the project" and no assignment by editing LICENSE.
+
+To the extent later code is based on earlier code in this repository, that later code is a derivative work: you need a license from each applicable copyright holder. Each holder listed below, and each other contributor shown in source history, offers the same PolyForm Noncommercial License 1.0.0 terms as licensor for that holder's own contributions only.
+
+## Known authors (aliases, not extra owners)
+
+These are the same natural person under different git names, not additional copyright holders:
+
+- baimeou, BaiMeow, and 白喵 (GitHub: BaiMeou)
+- Deconstructed_Cube Seremiel Quietherz Aemeath and bsfdsagfadg (GitHub: DeconstructedCube / bsfdsagfadg)
+
+Scluzlep and iDriue appear as distinct git names; each retains copyright in commits under that name. If they are the same person, that does not multiply or reduce the copyright in those contributions.
+
+Other git authors include 17239 and sakuradiss. Anyone omitted here is still covered by the catch-all Required Notice in LICENSE and by source history.
+
+## Contributions after this NOTICE
+
+Inbound equals outbound: a contribution is offered under the same PolyForm Noncommercial License 1.0.0 terms, and the contributor keeps copyright in that contribution. There is no contributor license agreement that assigns copyright to anyone else.
+
+## 说明
+
+上文与 LICENSE 文首 `Required Notice:` 行为准。中文与英文冲突时，以 LICENSE 为准。

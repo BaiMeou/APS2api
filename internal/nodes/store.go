@@ -42,7 +42,7 @@ type NodeHealth struct { //nolint:govet
 }
 
 var (
-	mu                 sync.Mutex                                 //nolint:gochecknoglobals
+	mu                 sync.RWMutex                               //nolint:gochecknoglobals
 	nodeList           []Node                                     //nolint:gochecknoglobals
 	healthMap          = make(map[string]*NodeHealth)             //nolint:gochecknoglobals
 	nodeSources        = make(map[string]map[NodeSource]struct{}) //nolint:gochecknoglobals
@@ -586,16 +586,27 @@ func SortNodesByLatencyDesc() {
 	mu.Unlock()
 }
 
-func GetNodeName(uri string) string {
-	mu.Lock()
-	defer mu.Unlock()
-	ensureLoaded()
+func nodeNameLocked(uri string) string {
 	for _, n := range nodeList {
 		if n.RawURI == uri {
 			return n.Name
 		}
 	}
 	return "Unknown"
+}
+
+func GetNodeName(uri string) string {
+	mu.RLock()
+	if loaded {
+		name := nodeNameLocked(uri)
+		mu.RUnlock()
+		return name
+	}
+	mu.RUnlock()
+	mu.Lock()
+	defer mu.Unlock()
+	ensureLoaded()
+	return nodeNameLocked(uri)
 }
 
 func EnableNode(uri string) bool {
@@ -783,21 +794,15 @@ func getNodeTier(n Node, h *NodeHealth) int {
 }
 
 type tierCandidate struct {
-	node     Node
-	inFlight int32
-	sticky   bool
+	node         Node
+	inFlight     int32
+	sticky       bool
+	lastSelected int64
 }
 
-func SelectForParallel(k int, topK int, debugMode bool, stickyBonusEnabled bool) []Node {
-	mu.Lock()
-	defer mu.Unlock()
-	ensureLoaded()
-	now := time.Now().Unix()
-
-	var tier1 []tierCandidate
-	var tier2 []tierCandidate
-	cooldownCount := 0
-
+func snapshotSelectTiers(now int64, stickyBonusEnabled bool) (tier1, tier2 []tierCandidate, cooldownCount int) {
+	tier1 = make([]tierCandidate, 0, len(nodeList))
+	tier2 = make([]tierCandidate, 0, 8)
 	for _, n := range nodeList {
 		if n.Disabled {
 			continue
@@ -809,17 +814,40 @@ func SelectForParallel(k int, topK int, debugMode bool, stickyBonusEnabled bool)
 		}
 		tier := getNodeTier(n, h)
 		inFlight := int32(0)
+		lastSelected := int64(0)
 		if h != nil {
-			inFlight = h.InFlight
+			inFlight = atomic.LoadInt32(&h.InFlight)
+			lastSelected = h.LastSelectedAt
 		}
 		sticky := stickyBonusEnabled && globalStickyPool.IsSticky(n.RawURI)
+		cand := tierCandidate{node: n, inFlight: inFlight, sticky: sticky, lastSelected: lastSelected}
 		switch tier {
 		case 1:
-			tier1 = append(tier1, tierCandidate{node: n, inFlight: inFlight, sticky: sticky})
+			tier1 = append(tier1, cand)
 		case 2:
-			tier2 = append(tier2, tierCandidate{node: n, inFlight: inFlight, sticky: sticky})
+			tier2 = append(tier2, cand)
 		}
 	}
+	return tier1, tier2, cooldownCount
+}
+
+func SelectForParallel(k int, topK int, debugMode bool, stickyBonusEnabled bool) []Node {
+	now := time.Now().Unix()
+	mu.RLock()
+	if loaded {
+		tier1, tier2, cooldownCount := snapshotSelectTiers(now, stickyBonusEnabled)
+		mu.RUnlock()
+		return finishSelectForParallel(k, topK, debugMode, now, tier1, tier2, cooldownCount)
+	}
+	mu.RUnlock()
+	mu.Lock()
+	ensureLoaded()
+	tier1, tier2, cooldownCount := snapshotSelectTiers(now, stickyBonusEnabled)
+	mu.Unlock()
+	return finishSelectForParallel(k, topK, debugMode, now, tier1, tier2, cooldownCount)
+}
+
+func finishSelectForParallel(k, topK int, debugMode bool, now int64, tier1, tier2 []tierCandidate, cooldownCount int) []Node {
 
 	sortTier := func(candidates []tierCandidate) {
 		sort.Slice(candidates, func(i, j int) bool {
@@ -829,18 +857,8 @@ func SelectForParallel(k int, topK int, debugMode bool, stickyBonusEnabled bool)
 			if candidates[i].sticky != candidates[j].sticky {
 				return candidates[i].sticky
 			}
-			hi := healthMap[candidates[i].node.RawURI]
-			hj := healthMap[candidates[j].node.RawURI]
-			ti := int64(0)
-			if hi != nil {
-				ti = hi.LastSelectedAt
-			}
-			tj := int64(0)
-			if hj != nil {
-				tj = hj.LastSelectedAt
-			}
-			if ti != tj {
-				return ti < tj
+			if candidates[i].lastSelected != candidates[j].lastSelected {
+				return candidates[i].lastSelected < candidates[j].lastSelected
 			}
 			return candidates[i].node.RawURI < candidates[j].node.RawURI
 		})
@@ -868,7 +886,7 @@ func SelectForParallel(k int, topK int, debugMode bool, stickyBonusEnabled bool)
 		return a.inFlight == b.inFlight && a.sticky == b.sticky
 	}
 
-	var selected []Node
+	selected := make([]Node, 0, k)
 	i := 0
 	for i < len(tier1) && len(selected) < k {
 		j := i
@@ -901,11 +919,15 @@ func SelectForParallel(k int, topK int, debugMode bool, stickyBonusEnabled bool)
 		}
 	}
 
-	for _, s := range selected {
-		if h := healthMap[s.RawURI]; h != nil {
-			h.LastSelectedAt = now
-			h.RecentUseCount++
+	if len(selected) > 0 {
+		mu.Lock()
+		for _, s := range selected {
+			if h := healthMap[s.RawURI]; h != nil {
+				h.LastSelectedAt = now
+				h.RecentUseCount++
+			}
 		}
+		mu.Unlock()
 	}
 
 	if debugMode {
@@ -914,38 +936,48 @@ func SelectForParallel(k int, topK int, debugMode bool, stickyBonusEnabled bool)
 	return selected
 }
 
+func healthInFlight(uri string) *int32 {
+	mu.RLock()
+	h := healthMap[uri]
+	mu.RUnlock()
+	if h == nil {
+		return nil
+	}
+	return &h.InFlight
+}
+
 func IncInFlight(uri string) {
-	mu.Lock()
-	defer mu.Unlock()
-	ensureLoaded()
-	if h := healthMap[uri]; h != nil {
-		h.InFlight++
+	if ptr := healthInFlight(uri); ptr != nil {
+		atomic.AddInt32(ptr, 1)
 	}
 }
 
 func DecInFlight(uri string) {
-	mu.Lock()
-	defer mu.Unlock()
-	ensureLoaded()
-	if h := healthMap[uri]; h != nil {
-		if h.InFlight > 0 {
-			h.InFlight--
+	ptr := healthInFlight(uri)
+	if ptr == nil {
+		return
+	}
+	for {
+		cur := atomic.LoadInt32(ptr)
+		if cur <= 0 {
+			return
+		}
+		if atomic.CompareAndSwapInt32(ptr, cur, cur-1) {
+			return
 		}
 	}
 }
 
-func GetAverageLatency() float64 {
-	mu.Lock()
-	defer mu.Unlock()
-	ensureLoaded()
+func averageLatencyLocked() float64 {
 	var sum float64
 	var count int
+	now := time.Now().Unix()
 	for _, n := range nodeList {
 		if n.Disabled {
 			continue
 		}
 		h := healthMap[n.RawURI]
-		if h != nil && h.LastTestMs > 0 && h.CooldownUntil <= time.Now().Unix() {
+		if h != nil && h.LastTestMs > 0 && h.CooldownUntil <= now {
 			sum += h.LastTestMs
 			count++
 		}
@@ -954,4 +986,18 @@ func GetAverageLatency() float64 {
 		return 500.0
 	}
 	return sum / float64(count)
+}
+
+func GetAverageLatency() float64 {
+	mu.RLock()
+	if loaded {
+		v := averageLatencyLocked()
+		mu.RUnlock()
+		return v
+	}
+	mu.RUnlock()
+	mu.Lock()
+	defer mu.Unlock()
+	ensureLoaded()
+	return averageLatencyLocked()
 }

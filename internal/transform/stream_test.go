@@ -2,7 +2,9 @@ package transform
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -287,5 +289,102 @@ func TestConvertRealtimeChunk_ToolCall(t *testing.T) {
 	last := events[len(events)-1]
 	if !strings.Contains(last, `"finish_reason":"tool_calls"`) {
 		t.Errorf("有工具调用应 finish_reason=tool_calls: %s", last)
+	}
+}
+
+func TestStreamChunkFlagsMatchSSESemantics(t *testing.T) {
+	content := map[string]any{"candidates": []any{map[string]any{
+		"content":      map[string]any{"parts": []any{map[string]any{"text": "Hi"}}, "role": "model"},
+		"finishReason": "FINISH_REASON_UNSPECIFIED",
+	}}}
+	if !StreamChunkHasVisibleOutput(content) {
+		t.Fatal("文本增量应算可见输出")
+	}
+	if StreamChunkHasRealFinish(content) {
+		t.Fatal("UNSPECIFIED 不能算真实 finish")
+	}
+
+	stop := map[string]any{"candidates": []any{map[string]any{
+		"content":      map[string]any{"parts": []any{map[string]any{"text": ""}}, "role": "model"},
+		"finishReason": "STOP",
+	}}}
+	if StreamChunkHasVisibleOutput(stop) {
+		t.Fatal("空 STOP 不应算可见输出")
+	}
+	if !StreamChunkHasRealFinish(stop) {
+		t.Fatal("STOP 应算真实 finish")
+	}
+
+	tool := map[string]any{"candidates": []any{map[string]any{
+		"content": map[string]any{"parts": []any{
+			map[string]any{"functionCall": map[string]any{"name": "lookup", "args": map[string]any{"q": 1}}},
+		}},
+	}}}
+	if !StreamChunkHasVisibleOutput(tool) {
+		t.Fatal("functionCall 应算可见输出")
+	}
+
+	thought := map[string]any{"candidates": []any{map[string]any{
+		"content": map[string]any{"parts": []any{map[string]any{"text": "think", "thought": true}}},
+	}}}
+	if !StreamChunkHasVisibleOutput(thought) {
+		t.Fatal("thought 文本应算可见输出")
+	}
+}
+
+func TestStreamChunkHasVisibleOutputImageAndCode(t *testing.T) {
+	img := map[string]any{"candidates": []any{map[string]any{
+		"content": map[string]any{"parts": []any{
+			map[string]any{"inlineData": map[string]any{"mimeType": "image/png", "data": "abc"}},
+		}},
+	}}}
+	if !StreamChunkHasVisibleOutput(img) {
+		t.Fatal("inline 图应算可见输出")
+	}
+	code := map[string]any{"candidates": []any{map[string]any{
+		"content": map[string]any{"parts": []any{
+			map[string]any{"executableCode": map[string]any{"code": "print(1)"}},
+		}},
+	}}}
+	if !StreamChunkHasVisibleOutput(code) {
+		t.Fatal("executableCode 应算可见输出")
+	}
+	out := map[string]any{"candidates": []any{map[string]any{
+		"content": map[string]any{"parts": []any{
+			map[string]any{"codeExecutionResult": map[string]any{"output": "1"}},
+		}},
+	}}}
+	if !StreamChunkHasVisibleOutput(out) {
+		t.Fatal("codeExecutionResult 应算可见输出")
+	}
+	empty := map[string]any{"candidates": []any{map[string]any{
+		"content": map[string]any{"parts": []any{map[string]any{"text": ""}}},
+	}}}
+	if StreamChunkHasVisibleOutput(empty) {
+		t.Fatal("空文本不应算可见输出")
+	}
+}
+
+func TestSseLineConcurrentPoolReuse(t *testing.T) {
+	var wg sync.WaitGroup
+	errc := make(chan error, 32)
+	for i := range 32 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			line := sseLine(map[string]any{"i": i, "html": "a<b>&c"})
+			if !strings.HasPrefix(line, "data: ") || !strings.HasSuffix(line, "\n\n") {
+				errc <- fmt.Errorf("format %q", line)
+				return
+			}
+			if !strings.Contains(line, `"html":"a<b>&c"`) {
+				errc <- fmt.Errorf("escape %q", line)
+			}
+		}(i)
+	}
+	wg.Wait()
+	close(errc)
+	for err := range errc {
+		t.Fatal(err)
 	}
 }
